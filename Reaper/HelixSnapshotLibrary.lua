@@ -7,9 +7,7 @@ local HelixLib = {}
 HelixLib.TARGET_LUFS  = -23.0
 HelixLib.RECORD_TIME  = 5.0
 HelixLib.HELIX_WAIT   = 0.5
-HelixLib.WAIT_FOR_AHK = 2.0
 
-HelixLib.GAIN_FILE = "C:\\temp\\gain.txt"
 HelixLib.HELIX_DEVICE_ID = 17
 
 --------------------------------------------------
@@ -92,23 +90,6 @@ function HelixLib.DeleteAllTrackItems(track)
     end
 
     reaper.UpdateArrange()
-end
-
---------------------------------------------------
--- GAIN FILE
---------------------------------------------------
-
-function HelixLib.WriteGainFile(value)
-    local file = io.open(HelixLib.GAIN_FILE, "w")
-
-    if not file then
-        return false, "Konnte gain.txt nicht schreiben!"
-    end
-
-    file:write(tostring(value))
-    file:close()
-
-    return true
 end
 
 --------------------------------------------------
@@ -232,15 +213,11 @@ function HelixLib.AnalyzeSnapshot(track, snapshot)
         return nil, lufsErr
     end
 
-    local gain = HelixLib.TARGET_LUFS - lufs
-    gain = math.floor(gain * 10 + 0.5) / 10
-
     HelixLib.DeleteAllTrackItems(track)
 
     return {
         snapshot = snapshot,
-        lufs = lufs,
-        gain = gain
+        lufs = lufs
     }
 end
 
@@ -275,18 +252,6 @@ function HelixLib.AnalyzeCurrentPreset()
         end
 
         table.insert(results, result)
-
-        local ok =
-            HelixLib.WriteGainFile(result.gain)
-
-        if not ok then
-            return nil,
-                "Konnte gain.txt nicht schreiben!"
-        end
-
-        BusyWait(HelixLib.WAIT_FOR_AHK)
-
-        HelixLib.WriteGainFile("")
     end
 
     HelixLib.DeleteAllTrackItems(track)
@@ -309,10 +274,10 @@ function HelixLib.CreateCSV(csvPath)
     file:write(
         "Preset," ..
 		"HelixPreset," ..
-        "LUFS1,Gain1," ..
-        "LUFS2,Gain2," ..
-        "LUFS3,Gain3," ..
-        "LUFS4,Gain4\n"
+        "LUFS1," ..
+        "LUFS2," ..
+        "LUFS3," ..
+        "LUFS4\n"
     )
 
     file:close()
@@ -386,7 +351,6 @@ function HelixLib.AppendCSVRow(
         local r = results[i]
 
         table.insert(values, tostring(r.lufs))
-        table.insert(values, tostring(r.gain))
     end
 
     file:write(
@@ -437,64 +401,6 @@ function HelixLib.ActivatePreset(patchNumber)
     BusyWait(HelixLib.HELIX_WAIT)
 
     return true
-end
-
---------------------------------------------------
--- WRAPPER: SINGLE PRESET
---------------------------------------------------
-
-function HelixLib.RunSinglePresetAnalysis()
-
-    reaper.ClearConsole()
-
-    reaper.ShowConsoleMsg(
-        "HELIX AUTO LEVEL START\n"
-    )
-
-    local results, err =
-        HelixLib.AnalyzeCurrentPreset()
-
-    if not results then
-
-        reaper.ShowMessageBox(
-            tostring(err),
-            "Fehler",
-            0
-        )
-
-        return
-    end
-
-    for _, r in ipairs(results) do
-
-        reaper.ShowConsoleMsg(
-            "--------------------------------\n"
-        )
-
-        reaper.ShowConsoleMsg(
-            "Snapshot " ..
-            tostring(r.snapshot) ..
-            "\n"
-        )
-
-        reaper.ShowConsoleMsg(
-            "Loudness = " ..
-            tostring(r.lufs) ..
-            "\n"
-        )
-
-        reaper.ShowConsoleMsg(
-            "Gain = " ..
-            tostring(r.gain) ..
-            "\n"
-        )
-    end
-
-    reaper.ShowMessageBox(
-        "Alle Snapshots erfolgreich eingepegelt!",
-        "Fertig",
-        0
-    )
 end
 
 --------------------------------------------------

@@ -13,9 +13,12 @@ from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+REAPER_DIR = PROJECT_DIR / "Reaper"
+
 IO_SCRIPT = SCRIPT_DIR / "hls_adjust.py"
-HELIX_SCRIPT = SCRIPT_DIR / "HelixAnalyzeSet.lua"
-DEFAULT_PROJECT = SCRIPT_DIR / "Auto_Pegelsetup.rpp"
+HELIX_SCRIPT = REAPER_DIR / "HelixAnalyzeSet.lua"
+DEFAULT_PROJECT = REAPER_DIR / "Auto_Pegelsetup.rpp"
 DEFAULT_REAPER_EXE = Path(
     "/mnt/c/Program Files/REAPER (x64)/reaper.exe"
 )
@@ -274,6 +277,37 @@ def apply_gain_csv(input_path, output_path, csv_path):
     )
 
 
+def run_reamp_conversion(input_path, output_path):
+    run_command(
+        [
+            sys.executable,
+            IO_SCRIPT,
+            "-i",
+            input_path,
+            "-o",
+            output_path,
+            "-r"
+        ]
+    )
+
+
+def synthesize_hls_path(input_path, postfix):
+    if input_path.suffix.lower() != ".hls":
+        raise ValueError(
+            "Automation mode requires an .hls input file"
+        )
+
+    return input_path.with_name(
+        input_path.stem + postfix + input_path.suffix
+    )
+
+
+def wait_for_user_confirmation(message):
+    print()
+    print(message)
+    input("Press Enter to continue...")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -292,8 +326,19 @@ def parse_args():
     parser.add_argument(
         "-o",
         "--output",
-        required=True,
         help="Output .hls file to create"
+    )
+
+    parser.add_argument(
+        "-a",
+        "--automation",
+        action="store_true",
+        help=(
+            "Run the complete workflow: create "
+            "_reamp.hls, wait for Helix import, "
+            "measure, create _adjusted.hls, and "
+            "request final Helix import"
+        )
     )
 
     parser.add_argument(
@@ -356,7 +401,46 @@ def main():
     args = parse_args()
 
     input_path = Path(args.input).resolve()
-    output_path = Path(args.output).resolve()
+
+    if args.automation:
+        if args.output:
+            raise ValueError(
+                "-o/--output must not be specified "
+                "when -a/--automation is used"
+            )
+
+        reamp_path = synthesize_hls_path(
+            input_path,
+            "_reamp"
+        )
+        output_path = synthesize_hls_path(
+            input_path,
+            "_adjusted"
+        )
+
+        print(
+            f"Creating reamp file: {reamp_path}"
+        )
+
+        run_reamp_conversion(
+            input_path,
+            reamp_path
+        )
+
+        wait_for_user_confirmation(
+            "Please import this reamp file on the Helix:\n"
+            f"{reamp_path}"
+        )
+
+    else:
+        if not args.output:
+            raise ValueError(
+                "-o/--output is required unless "
+                "-a/--automation is used"
+            )
+
+        output_path = Path(args.output).resolve()
+
     reaper_exe = Path(args.reaper_exe)
     project_path = (
         Path(args.project).resolve()
@@ -423,13 +507,15 @@ def main():
     temp_dir = Path(
         tempfile.mkdtemp(
             prefix="helix_gain_",
-            dir=SCRIPT_DIR
+            dir=PROJECT_DIR
         )
     )
 
+    success = False
+
     try:
         temp_dir = Path(temp_dir)
-        csv_path = temp_dir / "gain_correction.csv"
+        csv_path = temp_dir / "lufs_analysis.csv"
         done_path = temp_dir / "analysis.done"
 
         print(
@@ -471,8 +557,10 @@ def main():
             csv_path
         )
 
+        success = True
+
     finally:
-        if args.keep_temp:
+        if args.keep_temp or not success:
             print(f"Kept temp : {temp_dir}")
         else:
             shutil.rmtree(
@@ -483,6 +571,13 @@ def main():
     print()
     print("[OK] Gain-adjusted HLS written")
     print(f"Output: {output_path}")
+
+    if args.automation:
+        wait_for_user_confirmation(
+            "Please import this adjusted file on the Helix "
+            "to complete the adjustment procedure:\n"
+            f"{output_path}"
+        )
 
 
 if __name__ == "__main__":

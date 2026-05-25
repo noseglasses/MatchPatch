@@ -10,10 +10,13 @@ local START_PATCH = 1
 local END_PATCH   = 2
 
 local CSV_PATH =
-    script_dir .. "gain_correction.csv"
+    script_dir .. "lufs_analysis.csv"
+
+local csv_path =
+    os.getenv("HELIX_CSV_PATH") or CSV_PATH
 
 HelixLib.RunPresetRangeAnalysis(
     START_PATCH,
     END_PATCH,
-    CSV_PATH
+    csv_path
 )

@@ -22,6 +22,7 @@ OUTPUT_XLR = 6
 OUTPUT_USB_1_2 = 10
 
 SOLO_GAIN_BUMP = 3.0
+MUTED_SNAPSHOT_GAIN = -120.0
 
 
 # =================================================
@@ -242,6 +243,12 @@ def preset_index_to_helix(index):
     return f"{bank:02d}{slot}"
 
 
+def is_default_snapshot_name(name, snapshot_index):
+    expected = f"SNAPSHOT {snapshot_index + 1}"
+
+    return str(name).strip().upper() == expected
+
+
 def adjust_snapshot_gains(data, gain_data):
 
     changes = 0
@@ -363,29 +370,39 @@ def adjust_snapshot_gains(data, gain_data):
                 "solo" in snapshot_name.lower()
             )
 
-            gain_info = snapshot_gain_info[
+            is_default_snapshot = is_default_snapshot_name(
+                snapshot_name,
                 snapshot_index
-            ]
-
-            gain_delta = (
-                gain_info["gain"] + SOLO_GAIN_BUMP
-                if is_solo
-                else gain_info["gain"]
             )
 
-            new_gain = round(
-                base_gain + gain_delta,
-                2
-            )
+            if is_default_snapshot:
+                gain_delta = None
+                new_gain = MUTED_SNAPSHOT_GAIN
 
-            if new_gain < -120.0 or new_gain > 20.0:
-                raise ValueError(
-                    f"Implausible output gain "
-                    f"{new_gain} dB for "
-                    f"{helix_preset} {snapshot_name}. "
-                    "This usually means the "
-                    "measurement recorded silence."
+            else:
+                gain_info = snapshot_gain_info[
+                    snapshot_index
+                ]
+
+                gain_delta = (
+                    gain_info["gain"] + SOLO_GAIN_BUMP
+                    if is_solo
+                    else gain_info["gain"]
                 )
+
+                new_gain = round(
+                    base_gain + gain_delta,
+                    2
+                )
+
+                if new_gain < -120.0 or new_gain > 20.0:
+                    raise ValueError(
+                        f"Implausible output gain "
+                        f"{new_gain} dB for "
+                        f"{helix_preset} {snapshot_name}. "
+                        "This usually means the "
+                        "measurement recorded silence."
+                    )
 
             snapshot_controllers = snapshot.setdefault(
                 "controllers",
@@ -409,15 +426,27 @@ def adjust_snapshot_gains(data, gain_data):
 
             changes += 1
 
-            solo_marker = " (S)" if is_solo else ""
+            marker = (
+                " (MUTE)"
+                if is_default_snapshot
+                else " (S)"
+                if is_solo
+                else ""
+            )
+
+            delta_text = (
+                "muted default snapshot"
+                if is_default_snapshot
+                else f"Delta: {gain_delta:+.1f} dB"
+            )
 
             print(
                 f"[GAIN] "
                 f"{helix_preset} "
-                f"{snapshot_name}{solo_marker} | "
+                f"{snapshot_name}{marker} | "
                 f"{base_gain:.1f} dB -> "
                 f"{new_gain:.1f} dB "
-                f"(Delta: {gain_delta:+.1f} dB)"
+                f"({delta_text})"
             )
 
     return changes
