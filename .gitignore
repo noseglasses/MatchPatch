@@ -1,0 +1,8 @@
+Attic
+Backups
+Media
+Unused
+__pycache__
+*.json
+*.hls
+*.hlx

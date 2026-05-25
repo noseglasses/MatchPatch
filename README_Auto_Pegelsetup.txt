@@ -1,0 +1,1 @@
+Das file Auto_Pegelsetup_single_Preset.lua als action laden. Wenn es bereits geladen ist, sollte die Taste 0 auf dem Num-Keyboard die Analyse aller Snapshots starten. Es werden dann als Gain jeweils die korrekturwerte angezeigt, die man im Gain-Block einstellen muesste.
