@@ -121,10 +121,8 @@ def extract_preset_assignments(data):
 def assign_snapshot_level(data):
 
     """
-    Adds:
-        "level": "snapshot"
-
-    to all output blocks if not already present.
+    Assigns output level/gain to snapshots by adding
+    the matching controller entries.
     """
 
     changes = 0
@@ -152,10 +150,34 @@ def assign_snapshot_level(data):
                 if not isinstance(output_block, dict):
                     continue
 
-                if output_block.get("level") == "snapshot":
+                if "gain" not in output_block:
                     continue
 
-                output_block["level"] = "snapshot"
+                controller_root = tone.setdefault(
+                    "controller",
+                    {}
+                )
+
+                dsp_controller = controller_root.setdefault(
+                    dsp_name,
+                    {}
+                )
+
+                output_controller = dsp_controller.setdefault(
+                    output_name,
+                    {}
+                )
+
+                if "gain" in output_controller:
+                    continue
+
+                output_controller["gain"] = {
+                    "@controller": 19,
+                    "@max": 20.0,
+                    "@min": -120.0,
+                    "@snapshot_disable": False
+                }
+
                 changes += 1
 
     return changes
@@ -312,7 +334,7 @@ def adjust_snapshot_gains(data, gain_data):
 
             output_controller["gain"] = {
                 "@controller": 19,
-                "@max": 12.0,
+                "@max": 20.0,
                 "@min": -120.0,
                 "@snapshot_disable": False
             }
@@ -338,8 +360,7 @@ def adjust_snapshot_gains(data, gain_data):
             )
 
             is_solo = (
-                snapshot_name.strip().lower()
-                == "solo"
+                "solo" in snapshot_name.lower()
             )
 
             gain_info = snapshot_gain_info[
@@ -356,6 +377,15 @@ def adjust_snapshot_gains(data, gain_data):
                 base_gain + gain_delta,
                 2
             )
+
+            if new_gain < -120.0 or new_gain > 20.0:
+                raise ValueError(
+                    f"Implausible output gain "
+                    f"{new_gain} dB for "
+                    f"{helix_preset} {snapshot_name}. "
+                    "This usually means the "
+                    "measurement recorded silence."
+                )
 
             snapshot_controllers = snapshot.setdefault(
                 "controllers",
@@ -423,7 +453,7 @@ def convert_json_text(text, mode):
 
         text = re.sub(
             r'("@output"\s*:\s*)10(\s*[,}])',
-            r'\g<1>6(\2',
+            r'\g<1>6\2',
             text
         )
 

@@ -8,11 +8,12 @@ import subprocess
 import sys
 import tempfile
 import time
+import shutil
 from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-IO_SCRIPT = SCRIPT_DIR / "IO_to_reamp.py"
+IO_SCRIPT = SCRIPT_DIR / "hls_adjust.py"
 HELIX_SCRIPT = SCRIPT_DIR / "HelixAnalyzeSet.lua"
 DEFAULT_PROJECT = SCRIPT_DIR / "Auto_Pegelsetup.rpp"
 DEFAULT_REAPER_EXE = Path(
@@ -74,6 +75,95 @@ def read_preset_assignments(input_path):
     return json.loads(completed.stdout)
 
 
+def check_reaper_not_running():
+    completed = subprocess.run(
+        [
+            "/mnt/c/Windows/System32/tasklist.exe",
+            "/FI",
+            "IMAGENAME eq reaper.exe"
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Could not check whether REAPER is running: "
+            + completed.stderr.decode(
+                "utf-8",
+                errors="replace"
+            ).strip()
+        )
+
+    if b"reaper.exe" in completed.stdout.lower():
+        raise RuntimeError(
+            "REAPER is already running. "
+            "Please close any running REAPER instances "
+            "before starting gain adjustment."
+        )
+
+
+def helix_preset_to_id(value):
+    text = value.strip().upper()
+
+    if len(text) < 2:
+        raise ValueError(
+            f"Invalid Helix preset ID: {value}"
+        )
+
+    bank_text = text[:-1]
+    slot_text = text[-1]
+
+    if not bank_text.isdigit() or slot_text not in "ABCD":
+        raise ValueError(
+            f"Invalid Helix preset ID: {value}"
+        )
+
+    bank = int(bank_text)
+
+    if bank < 1:
+        raise ValueError(
+            f"Invalid Helix preset ID: {value}"
+        )
+
+    return (bank - 1) * 4 + "ABCD".index(slot_text) + 1
+
+
+def id_to_helix_preset(preset_id):
+    zero_based = preset_id - 1
+    bank = zero_based // 4 + 1
+    slot = "ABCD"[zero_based % 4]
+
+    return f"{bank:02d}{slot}"
+
+
+def parse_helix_preset_set(value):
+    preset_ids = []
+    seen = set()
+
+    for token in value.split(","):
+        token = token.strip()
+
+        if not token:
+            raise ValueError(
+                "Empty entry in -S/--preset-set"
+            )
+
+        preset_id = helix_preset_to_id(token)
+
+        if preset_id not in seen:
+            preset_ids.append(preset_id)
+            seen.add(preset_id)
+
+    if not preset_ids:
+        raise ValueError(
+            "-S/--preset-set did not contain presets"
+        )
+
+    return preset_ids
+
+
 def wait_for_done(done_path, timeout_seconds, process=None):
     start = time.monotonic()
 
@@ -128,6 +218,8 @@ def run_reaper_analysis(
     )
     env["HELIX_CSV_PATH"] = wsl_path_to_windows(csv_path)
     env["HELIX_DONE_PATH"] = wsl_path_to_windows(done_path)
+
+    check_reaper_not_running()
 
     add_windows_env_bridge(
         env,
@@ -239,6 +331,24 @@ def parse_args():
         )
     )
 
+    parser.add_argument(
+        "-S",
+        "--preset-set",
+        help=(
+            "Comma-separated Helix preset IDs "
+            "to analyze, e.g. 01B,02A,16D"
+        )
+    )
+
+    parser.add_argument(
+        "--keep-temp",
+        action="store_true",
+        help=(
+            "Keep the temporary gain CSV "
+            "and completion marker for debugging"
+        )
+    )
+
     return parser.parse_args()
 
 
@@ -258,10 +368,44 @@ def main():
         input_path
     )
 
+    available_ids = {
+        assignment["id"]
+        for assignment in assignments
+    }
+
     preset_ids = [
         assignment["id"]
         for assignment in assignments
     ]
+
+    if args.preset_set:
+        requested_ids = parse_helix_preset_set(
+            args.preset_set
+        )
+
+        missing_ids = [
+            preset_id
+            for preset_id in requested_ids
+            if preset_id not in available_ids
+        ]
+
+        if missing_ids:
+            missing = ",".join(
+                id_to_helix_preset(preset_id)
+                for preset_id in missing_ids
+            )
+
+            raise ValueError(
+                "Requested presets are not present "
+                f"or are named New Preset: {missing}"
+            )
+
+        requested = set(requested_ids)
+        preset_ids = [
+            preset_id
+            for preset_id in preset_ids
+            if preset_id in requested
+        ]
 
     if args.limit is not None:
         if args.limit < 1:
@@ -276,10 +420,14 @@ def main():
             "Input HLS contains no non-default presets"
         )
 
-    with tempfile.TemporaryDirectory(
-        prefix="helix_gain_",
-        dir=SCRIPT_DIR
-    ) as temp_dir:
+    temp_dir = Path(
+        tempfile.mkdtemp(
+            prefix="helix_gain_",
+            dir=SCRIPT_DIR
+        )
+    )
+
+    try:
         temp_dir = Path(temp_dir)
         csv_path = temp_dir / "gain_correction.csv"
         done_path = temp_dir / "analysis.done"
@@ -287,6 +435,13 @@ def main():
         print(
             "Preset set: " +
             ",".join(str(preset_id) for preset_id in preset_ids)
+        )
+        print(
+            "Helix IDs : " +
+            ",".join(
+                id_to_helix_preset(preset_id)
+                for preset_id in preset_ids
+            )
         )
         print(f"Temp CSV  : {csv_path}")
 
@@ -315,6 +470,15 @@ def main():
             output_path,
             csv_path
         )
+
+    finally:
+        if args.keep_temp:
+            print(f"Kept temp : {temp_dir}")
+        else:
+            shutil.rmtree(
+                temp_dir,
+                ignore_errors=True
+            )
 
     print()
     print("[OK] Gain-adjusted HLS written")
