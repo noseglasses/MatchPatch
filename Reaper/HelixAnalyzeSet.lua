@@ -7,7 +7,7 @@ local HelixLib =
     dofile(script_dir .. "HelixSnapshotLibrary.lua")
 
 local CSV_PATH =
-    script_dir .. "gain_correction.csv"
+    script_dir .. "lufs_analysis.csv"
 
 local csv_path =
     os.getenv("HELIX_CSV_PATH") or CSV_PATH
