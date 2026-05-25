@@ -261,20 +261,28 @@ def run_reaper_analysis(
         process.poll()
 
 
-def apply_gain_csv(input_path, output_path, csv_path):
-    run_command(
-        [
-            sys.executable,
-            IO_SCRIPT,
-            "-i",
-            input_path,
-            "-o",
-            output_path,
-            "--adjust-gain",
-            "-g",
-            csv_path
-        ]
-    )
+def apply_gain_csv(
+    input_path,
+    output_path,
+    csv_path,
+    ignore_bad_lufs=False
+):
+    command = [
+        sys.executable,
+        IO_SCRIPT,
+        "-i",
+        input_path,
+        "-o",
+        output_path,
+        "--adjust-gain",
+        "-g",
+        csv_path
+    ]
+
+    if ignore_bad_lufs:
+        command.append("--ignore-bad-lufs")
+
+    run_command(command)
 
 
 def run_reamp_conversion(input_path, output_path):
@@ -335,8 +343,8 @@ def parse_args():
         action="store_true",
         help=(
             "Run the complete workflow: create "
-            "_reamp.hls, wait for Helix import, "
-            "measure, create _adjusted.hls, and "
+            "*_reamp.hls, wait for Helix import, "
+            "measure, create *_adjusted.hls, and "
             "request final Helix import"
         )
     )
@@ -389,8 +397,17 @@ def parse_args():
         "--keep-temp",
         action="store_true",
         help=(
-            "Keep the temporary gain CSV "
+            "Keep the temporary LUFS analysis CSV "
             "and completion marker for debugging"
+        )
+    )
+
+    parser.add_argument(
+        "--ignore-bad-lufs",
+        action="store_true",
+        help=(
+            "Skip implausible LUFS-derived gain values "
+            "when writing the adjusted HLS"
         )
     )
 
@@ -554,7 +571,8 @@ def main():
         apply_gain_csv(
             input_path,
             output_path,
-            csv_path
+            csv_path,
+            args.ignore_bad_lufs
         )
 
         success = True
