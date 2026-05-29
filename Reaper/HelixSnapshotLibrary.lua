@@ -4,9 +4,10 @@ local HelixLib = {}
 -- SETTINGS
 --------------------------------------------------
 
-HelixLib.TARGET_LUFS  = -23.0
-HelixLib.RECORD_TIME  = 5.0
+HelixLib.RECORD_TIME  = 3.75
 HelixLib.HELIX_WAIT   = 0.5
+HelixLib.LUFS_SAMPLE_INTERVAL = 0.1
+HelixLib.LUFS_SHORT_TERM_WINDOW = 3.0
 
 HelixLib.HELIX_DEVICE_ID = 17
 
@@ -33,13 +34,36 @@ end
 --------------------------------------------------
 
 function HelixLib.GetMeasurementTrack()
-    local track = reaper.GetSelectedTrack(0, 0)
+    local track_count = reaper.CountTracks(0)
 
-    if not track then
-        return nil, "Bitte zuerst die Spur 'Messung' auswählen!"
+    for i = 0, track_count - 1 do
+        local track = reaper.GetTrack(0, i)
+        local _, name =
+            reaper.GetTrackName(track)
+
+        if name == "Messung" then
+            return track
+        end
     end
 
-    return track
+    return nil, "Spur 'Messung' wurde nicht gefunden!"
+end
+
+function HelixLib.ArmOnlyMeasurementTrack(track)
+    local track_count = reaper.CountTracks(0)
+
+    for i = 0, track_count - 1 do
+        local currentTrack = reaper.GetTrack(0, i)
+        local armed = currentTrack == track and 1 or 0
+
+        reaper.SetMediaTrackInfo_Value(
+            currentTrack,
+            "I_RECARM",
+            armed
+        )
+    end
+
+    reaper.SetOnlyTrackSelected(track)
 end
 
 --------------------------------------------------
@@ -137,7 +161,7 @@ function HelixLib.FindLoudnessMeter(track)
     return -1
 end
 
-function HelixLib.GetIntegratedLUFS(track)
+function HelixLib.GetShortTermLUFS(track)
     local fx_index = HelixLib.FindLoudnessMeter(track)
 
     if fx_index < 0 then
@@ -148,17 +172,55 @@ function HelixLib.GetIntegratedLUFS(track)
         reaper.TrackFX_GetFormattedParamValue(
             track,
             fx_index,
-            20,
+            19,
             ""
         )
 
     if not retval then
-        return nil, "Could not read LUFS-I"
+        return nil, "Could not read LUFS-S"
     end
 
     return tonumber(
         string.match(tostring(text), "[-%d%.]+")
     )
+end
+
+function HelixLib.GetAverageShortTermLUFS(track, seconds)
+    local start = reaper.time_precise()
+    local nextSample =
+        start + HelixLib.LUFS_SHORT_TERM_WINDOW
+    local sum = 0
+    local count = 0
+
+    while (reaper.time_precise() - start) < seconds do
+        local now = reaper.time_precise()
+
+        if now >= nextSample then
+            local lufs =
+                HelixLib.GetShortTermLUFS(track)
+
+            if lufs and lufs > -100 then
+                sum = sum + lufs
+                count = count + 1
+            end
+
+            nextSample =
+                nextSample +
+                HelixLib.LUFS_SAMPLE_INTERVAL
+        end
+
+        reaper.UpdateArrange()
+        reaper.TrackList_AdjustWindows(false)
+        reaper.UpdateTimeline()
+
+        reaper.defer(function() end)
+    end
+
+    if count == 0 then
+        return nil, "Could not collect valid LUFS-S samples"
+    end
+
+    return sum / count
 end
 
 --------------------------------------------------
@@ -173,15 +235,13 @@ function HelixLib.AnalyzeSnapshot(track, snapshot)
         return nil, err
     end
 
-    reaper.SetOnlyTrackSelected(track)
-    reaper.SetMediaTrackInfo_Value(track, "I_RECARM", 1)
+    HelixLib.ArmOnlyMeasurementTrack(track)
 
     BusyWait(HelixLib.HELIX_WAIT)
 
     HelixLib.ResetTransportToZero()
 
-    reaper.SetOnlyTrackSelected(track)
-    reaper.SetMediaTrackInfo_Value(track, "I_RECARM", 1)
+    HelixLib.ArmOnlyMeasurementTrack(track)
 
     reaper.Main_OnCommand(40289, 0)
 
@@ -192,7 +252,11 @@ function HelixLib.AnalyzeSnapshot(track, snapshot)
             "RECORD wurde NICHT gestartet!"
     end
 
-    BusyWait(HelixLib.RECORD_TIME)
+    local lufs, lufsErr =
+        HelixLib.GetAverageShortTermLUFS(
+            track,
+            HelixLib.RECORD_TIME
+        )
 
     HelixLib.StopRecording()
 
@@ -205,9 +269,6 @@ function HelixLib.AnalyzeSnapshot(track, snapshot)
                 "Kein aufgenommenes Item gefunden!"
         end
     end
-
-    local lufs, lufsErr =
-        HelixLib.GetIntegratedLUFS(track)
 
     if not lufs then
         return nil, lufsErr

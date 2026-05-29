@@ -1,4 +1,4 @@
-<REAPER_PROJECT 0.1 "7.73/win64" 1779650175 0
+<REAPER_PROJECT 0.1 "7.73/win64" 1780095172 0
   <NOTES 0 2
   >
   RIPPLE 0 0
@@ -20,7 +20,7 @@
   PANMODE 3
   PANLAWFLAGS 3
   CURSOR 0
-  ZOOM 248.832 1281 0
+  ZOOM 248.832 0 0
   VZOOMEX 6 0
   USE_REC_CFG 0
   RECMODE 1
@@ -118,7 +118,7 @@
     SHOWINMIX 1 0.6667 0.5 1 0.5 0 0 0 0
     FIXEDLANES 9 0 0 0 0
     LANEREC -1 -1 -1 0
-    SEL 0
+    SEL 1
     REC 0 0 1 0 0 0 0 0
     VU 64
     TRACKHEIGHT 0 0 0 0 0 0 0
@@ -133,23 +133,26 @@
     <ITEM
       POSITION 0
       SNAPOFFS 0
-      LENGTH 14.37664399092971
+      LENGTH 3.74791666666667
       LOOP 1
       ALLTAKES 0
       FADEIN 1 0 0 1 0 0 0
       FADEOUT 1 0 0 1 0 0 0
       MUTE 0 0
-      SEL 0
-      IGUID {3433C80D-5114-4F81-B7DD-538DB3AEBBE2}
-      IID 2
-      NAME Referenz_Gittare_Clean_PRS_CE24.wav
+      SEL 1
+      IGUID {314BBB2A-E7E4-4FE5-8E28-25A9067CD920}
+      IID 4
+      NAME Referenz_Gitarre_DI_Strandberg_Boden_Fusion_Bridge_Humbucker_short.wav
       VOLPAN 1 0 1 -1
       SOFFS 0
       PLAYRATE 1 1 0 -1 0 0.0025
       CHANMODE 0
-      GUID {5785C6AA-2C60-4A91-ACDF-E01373BA0BE0}
+      GUID {91B9903C-D9C8-4795-A8CE-9BE0BDD85871}
       <SOURCE WAVE
-        FILE "Media\Referenz_Gittare_Clean_PRS_CE24.wav"
+        FILE "Media\Referenz_Gitarre_DI_Strandberg_Boden_Fusion_Bridge_Humbucker_short.wav"
+      >
+      <EXT
+        ORIGINAL_FILENAME "K:\Documents\Aktivitaeten\Musik\REAPER Media\Auto_Pegelsetup\Reaper\Referenz_Gitarre_DI_Strandberg_Boden_Fusion_Bridge_Humbucker_short.wav"
       >
     >
   >
@@ -168,7 +171,7 @@
     SHOWINMIX 1 0.6667 0.5 1 0.5 0 0 0 0
     FIXEDLANES 9 0 0 0 0
     LANEREC -1 -1 -1 0
-    SEL 1
+    SEL 0
     REC 1 1024 1 0 0 0 0 0
     VU 64
     TRACKHEIGHT 120 0 0 0 0 0 0
@@ -186,7 +189,7 @@
       DOCKED 0
       BYPASS 0 0 0
       <JS analysis/loudness_meter ""
-        4 0 0 2 1 1 1 0 -12 -6 1 0 0 1.8 0 - - - - - - - - - - - - - - -9.114238 -85.283753 -16.784533 -86.737094 -86.737184 -14.90791 0.7 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+        4 0 0 2 1 1 1 0 -12 -6 1 0 0 1.8 0 - - - - - - - - - - - - - - -10.157313 -93.77644 -21.6179 -95.206819 -95.206819 -20.740121 0 - - - - - - - - - - - - - - - - - - - - - - - - - - - -
       >
       JS_DIMS 652 662
       FLOATPOS 0 0 0 0
