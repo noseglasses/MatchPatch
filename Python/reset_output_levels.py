@@ -2,12 +2,13 @@
 
 import argparse
 import json
-import os
 import sys
 
 from hls_adjust import (
     load_input,
     save_output,
+    require_helix_input_path,
+    require_compatible_output_path,
     preset_index_to_helix,
     get_preset_name,
     is_default_preset,
@@ -25,15 +26,6 @@ OUTPUT_BLOCKS = [
     "outputA",
     "outputB"
 ]
-
-
-def require_hls_path(filename, label):
-    ext = os.path.splitext(filename)[1].lower()
-
-    if ext != ".hls":
-        raise ValueError(
-            f"{label} must be an .hls file: {filename}"
-        )
 
 
 def is_active_output(block):
@@ -190,14 +182,14 @@ def parse_args():
         "-i",
         "--input",
         required=True,
-        help="Input .hls file"
+        help="Input .hls or .hlx file"
     )
 
     parser.add_argument(
         "-o",
         "--output",
         required=True,
-        help="Output .hls file to create"
+        help="Output .hls or .hlx file to create"
     )
 
     return parser.parse_args()
@@ -207,8 +199,12 @@ def main():
     args = parse_args()
 
     try:
-        require_hls_path(args.input, "Input")
-        require_hls_path(args.output, "Output")
+        require_helix_input_path(args.input, "Input")
+        require_compatible_output_path(
+            args.input,
+            args.output,
+            allow_json=False
+        )
 
         json_text, original_hls_text = load_input(args.input)
         data = json.loads(json_text)

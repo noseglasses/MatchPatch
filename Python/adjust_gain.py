@@ -195,6 +195,25 @@ def wait_for_done(done_path, timeout_seconds, process=None):
         time.sleep(1.0)
 
 
+def close_reaper_process(process, timeout_seconds=10.0):
+    if process.poll() is not None:
+        return
+
+    try:
+        process.wait(timeout=timeout_seconds)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    process.terminate()
+
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=timeout_seconds)
+
+
 def count_csv_rows(csv_path):
     if not csv_path.exists():
         return 0
@@ -221,6 +240,7 @@ def run_reaper_analysis(
     )
     env["HELIX_CSV_PATH"] = wsl_path_to_windows(csv_path)
     env["HELIX_DONE_PATH"] = wsl_path_to_windows(done_path)
+    env["HELIX_QUIT_WHEN_DONE"] = "1"
 
     check_reaper_not_running()
 
@@ -229,7 +249,8 @@ def run_reaper_analysis(
         [
             "HELIX_PRESET_SET",
             "HELIX_CSV_PATH",
-            "HELIX_DONE_PATH"
+            "HELIX_DONE_PATH",
+            "HELIX_QUIT_WHEN_DONE"
         ]
     )
 
@@ -258,7 +279,7 @@ def run_reaper_analysis(
             process
         )
     finally:
-        process.poll()
+        close_reaper_process(process)
 
 
 def apply_gain_csv(
@@ -299,10 +320,10 @@ def run_reamp_conversion(input_path, output_path):
     )
 
 
-def synthesize_hls_path(input_path, postfix):
-    if input_path.suffix.lower() != ".hls":
+def synthesize_helix_path(input_path, postfix):
+    if input_path.suffix.lower() not in [".hls", ".hlx"]:
         raise ValueError(
-            "Automation mode requires an .hls input file"
+            "Automation mode requires an .hls or .hlx input file"
         )
 
     return input_path.with_name(
@@ -320,7 +341,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description=(
             "Analyze non-default Helix presets "
-            "via REAPER and write a gain-adjusted HLS"
+            "via REAPER and write a gain-adjusted HLS/HLX"
         )
     )
 
@@ -328,13 +349,13 @@ def parse_args():
         "-i",
         "--input",
         required=True,
-        help="Input .hls file"
+        help="Input .hls or .hlx file"
     )
 
     parser.add_argument(
         "-o",
         "--output",
-        help="Output .hls file to create"
+        help="Output .hls or .hlx file to create"
     )
 
     parser.add_argument(
@@ -343,8 +364,8 @@ def parse_args():
         action="store_true",
         help=(
             "Run the complete workflow: create "
-            "*_reamp.hls, wait for Helix import, "
-            "measure, create *_adjusted.hls, and "
+            "*_reamp.hls/.hlx, wait for Helix import, "
+            "measure, create *_adjusted.hls/.hlx, and "
             "request final Helix import"
         )
     )
@@ -418,6 +439,35 @@ def main():
     args = parse_args()
 
     input_path = Path(args.input).resolve()
+    input_ext = input_path.suffix.lower()
+    requested_ids = None
+
+    if input_ext not in [".hls", ".hlx"]:
+        raise ValueError(
+            "Input must be an .hls or .hlx file"
+        )
+
+    if args.preset_set:
+        requested_ids = parse_helix_preset_set(
+            args.preset_set
+        )
+
+    if input_ext == ".hlx":
+        if requested_ids is None:
+            raise ValueError(
+                "When input is an .hlx preset file, "
+                "-S/--preset-set is required and must contain "
+                "exactly one Helix preset ID, e.g. -S 12A. "
+                "This tells REAPER which imported Helix preset "
+                "slot to analyze."
+            )
+
+        if len(requested_ids) != 1:
+            raise ValueError(
+                "When input is an .hlx preset file, "
+                "-S/--preset-set must contain exactly one "
+                "Helix preset ID."
+            )
 
     if args.automation:
         if args.output:
@@ -426,11 +476,11 @@ def main():
                 "when -a/--automation is used"
             )
 
-        reamp_path = synthesize_hls_path(
+        reamp_path = synthesize_helix_path(
             input_path,
             "_reamp"
         )
-        output_path = synthesize_hls_path(
+        output_path = synthesize_helix_path(
             input_path,
             "_adjusted"
         )
@@ -458,6 +508,16 @@ def main():
 
         output_path = Path(args.output).resolve()
 
+        if input_ext == ".hlx" and output_path.suffix.lower() != ".hlx":
+            raise ValueError(
+                "Output must be an .hlx file when input is .hlx"
+            )
+
+        if input_ext == ".hls" and output_path.suffix.lower() != ".hls":
+            raise ValueError(
+                "Output must be an .hls file when input is .hls"
+            )
+
     reaper_exe = Path(args.reaper_exe)
     project_path = (
         Path(args.project).resolve()
@@ -474,15 +534,16 @@ def main():
         for assignment in assignments
     }
 
-    preset_ids = [
-        assignment["id"]
-        for assignment in assignments
-    ]
+    if input_ext == ".hlx":
+        preset_ids = requested_ids
 
-    if args.preset_set:
-        requested_ids = parse_helix_preset_set(
-            args.preset_set
-        )
+    else:
+        preset_ids = [
+            assignment["id"]
+            for assignment in assignments
+        ]
+
+    if input_ext == ".hls" and requested_ids is not None:
 
         missing_ids = [
             preset_id
@@ -518,7 +579,7 @@ def main():
 
     if not preset_ids:
         raise ValueError(
-            "Input HLS contains no non-default presets"
+            "Input file contains no non-default presets"
         )
 
     temp_dir = Path(
@@ -587,7 +648,7 @@ def main():
             )
 
     print()
-    print("[OK] Gain-adjusted HLS written")
+    print("[OK] Gain-adjusted Helix file written")
     print(f"Output: {output_path}")
 
     if args.automation:

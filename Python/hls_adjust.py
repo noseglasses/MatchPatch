@@ -54,6 +54,9 @@ def get_filetype(filename):
     if ext == ".hls":
         return "hls"
 
+    if ext == ".hlx":
+        return "hlx"
+
     if ext == ".json":
         return "json"
 
@@ -146,6 +149,110 @@ def get_preset_name(preset):
         or preset.get("@name")
         or ""
     )
+
+
+def require_helix_input_path(filename, label):
+    filetype = get_filetype(filename)
+
+    if filetype not in ["hls", "hlx"]:
+        raise ValueError(
+            f"{label} must be an .hls or .hlx file: {filename}"
+        )
+
+    return filetype
+
+
+def require_compatible_output_path(
+    input_filename,
+    output_filename,
+    label="Output",
+    allow_json=True
+):
+    input_filetype = get_filetype(input_filename)
+    output_filetype = get_filetype(output_filename)
+
+    if input_filetype == "hlx":
+        if output_filetype != "hlx":
+            raise ValueError(
+                f"{label} must be an .hlx file when input is .hlx: "
+                f"{output_filename}"
+            )
+
+        return output_filetype
+
+    allowed = ["hls"]
+
+    if allow_json:
+        allowed.append("json")
+
+    if output_filetype not in allowed:
+        allowed_text = " or ".join(f".{item}" for item in allowed)
+        raise ValueError(
+            f"{label} must be {allowed_text} when input is "
+            f".{input_filetype}: {output_filename}"
+        )
+
+    return output_filetype
+
+
+def wrap_preset_data(data):
+    if not isinstance(data, dict):
+        raise ValueError(
+            ".hlx preset content must be a JSON object"
+        )
+
+    if isinstance(data.get("data"), dict):
+        preset = data["data"]
+
+        if "tone" not in preset:
+            raise ValueError(
+                ".hlx preset data does not contain a tone section"
+            )
+
+        return {
+            "presets": [
+                preset
+            ]
+        }
+
+    if "presets" in data:
+        raise ValueError(
+            ".hlx input must contain one preset, not a setlist"
+        )
+
+    if "tone" not in data:
+        raise ValueError(
+            ".hlx preset content does not contain a tone section"
+        )
+
+    return {
+        "presets": [
+            data
+        ]
+    }
+
+
+def unwrap_preset_data(data):
+    presets = data.get("presets")
+
+    if not isinstance(presets, list) or len(presets) != 1:
+        raise ValueError(
+            ".hlx output requires exactly one preset"
+        )
+
+    return presets[0]
+
+
+def rebuild_hlx_data(original_hlx_data, preset):
+    if (
+        isinstance(original_hlx_data, dict)
+        and isinstance(original_hlx_data.get("data"), dict)
+    ):
+        rebuilt = dict(original_hlx_data)
+        rebuilt["data"] = preset
+        return rebuilt
+
+    return preset
 
 
 def is_default_preset(preset):
@@ -491,6 +598,18 @@ def load_lufs_analysis_file(filename):
     return gain_deltas
 
 
+def normalize_single_preset_gain_deltas(gain_deltas):
+    if len(gain_deltas) != 1:
+        raise ValueError(
+            "Adjusting gain for an .hlx preset requires a LUFS "
+            "analysis CSV with exactly one preset row"
+        )
+
+    return {
+        "01A": next(iter(gain_deltas.values()))
+    }
+
+
 # =================================================
 # ADJUST SNAPSHOT GAINS
 # =================================================
@@ -612,6 +731,7 @@ def adjust_snapshot_gains(
 
             is_clean = (
                 "clean" in snapshot_name.lower()
+                or snapshot_name.endswith("/")
             )
 
             gain_delta = snapshot_gain_deltas[
@@ -938,6 +1058,20 @@ def load_input(filename):
 
         json_text = f.read()
 
+    if filetype == "hlx":
+        original_hlx_data = json.loads(json_text)
+        data = wrap_preset_data(
+            original_hlx_data
+        )
+
+        return (
+            json.dumps(
+                data,
+                indent=1
+            ),
+            original_hlx_data
+        )
+
     return json_text, None
 
 
@@ -964,6 +1098,28 @@ def save_output(
         ) as f:
 
             f.write(modified_json_text)
+
+        return
+
+    if filetype == "hlx":
+        data = json.loads(modified_json_text)
+        preset = unwrap_preset_data(data)
+        hlx_data = rebuild_hlx_data(
+            original_hls_text,
+            preset
+        )
+
+        with open(
+            output_filename,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            json.dump(
+                hlx_data,
+                f,
+                indent=1
+            )
 
         return
 
@@ -1022,7 +1178,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Line 6 Helix "
-            "HLS/JSON Utility"
+            "HLS/HLX/JSON Utility"
         )
     )
 
@@ -1030,13 +1186,13 @@ def main():
         "-i",
         "--input",
         required=True,
-        help="Input file (.hls or .json)"
+        help="Input file (.hls, .hlx, or .json)"
     )
 
     parser.add_argument(
         "-o",
         "--output",
-        help="Output file (.hls or .json)"
+        help="Output file (.hls, .hlx, or .json)"
     )
 
     parser.add_argument(
@@ -1102,6 +1258,7 @@ def main():
     args = parser.parse_args()
 
     try:
+        input_filetype = get_filetype(args.input)
 
         json_text, original_hls_text = (
             load_input(args.input)
@@ -1131,6 +1288,11 @@ def main():
                 "Output file is required "
                 "unless --list-presets is used"
             )
+
+        require_compatible_output_path(
+            args.input,
+            args.output
+        )
 
         mode = (
             "reamp"
@@ -1168,6 +1330,11 @@ def main():
             gain_deltas = load_lufs_analysis_file(
                 args.lufs_analysis_file
             )
+
+            if input_filetype == "hlx":
+                gain_deltas = normalize_single_preset_gain_deltas(
+                    gain_deltas
+                )
 
         (
             modified_json_text,
