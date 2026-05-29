@@ -446,7 +446,7 @@ def parse_args():
         type=float,
         default=-16.0,
         help=(
-            "Target integrated LUFS value used for gain "
+            "Target average short-term LUFS value used for gain "
             "adjustment (default: -16)"
         )
     )

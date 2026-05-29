@@ -1215,7 +1215,7 @@ def main():
         type=float,
         default=TARGET_LUFS,
         help=(
-            "Target integrated LUFS value used for gain "
+            "Target average short-term LUFS value used for gain "
             f"adjustment (default: {TARGET_LUFS:g})"
         )
     )

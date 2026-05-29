@@ -121,7 +121,7 @@ Important options:
 - `--timeout`: maximum seconds to wait for REAPER analysis.
 - `--keep-temp`: keep the temporary CSV and done marker.
 - `--ignore-bad-lufs`: skip implausible LUFS-derived gain values.
-- `--target-lufs`: target integrated LUFS value for gain adjustment.
+- `--target-lufs`: target average short-term LUFS value for gain adjustment.
 - `--reaper-exe`: path to `reaper.exe`.
 - `--project`: REAPER project to open.
 
