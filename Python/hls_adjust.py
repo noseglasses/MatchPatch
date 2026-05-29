@@ -40,7 +40,6 @@ OUTPUT_NAMES = {
 TARGET_LUFS = -23.0
 SOLO_GAIN_BUMP = 3.0
 CLEAN_GAIN_BUMP = 2.0
-MUTED_SNAPSHOT_GAIN = -120.0
 CONTROLLER_ASSIGNMENT_LIMIT = 64
 
 
@@ -508,12 +507,6 @@ def preset_index_to_helix(index):
     return f"{bank:02d}{slot}"
 
 
-def is_default_snapshot_name(name, snapshot_index):
-    expected = f"SNAPSHOT {snapshot_index + 1}"
-
-    return str(name).strip().upper() == expected
-
-
 def adjust_snapshot_gains(
     data,
     gain_deltas,
@@ -621,50 +614,40 @@ def adjust_snapshot_gains(
                 "clean" in snapshot_name.lower()
             )
 
-            is_default_snapshot = is_default_snapshot_name(
-                snapshot_name,
+            gain_delta = snapshot_gain_deltas[
                 snapshot_index
+            ]
+
+            if is_solo:
+                gain_delta += SOLO_GAIN_BUMP
+
+            if is_clean:
+                gain_delta += CLEAN_GAIN_BUMP
+
+            new_gain = round(
+                base_gain + gain_delta,
+                2
             )
 
-            if is_default_snapshot:
-                gain_delta = None
-                new_gain = MUTED_SNAPSHOT_GAIN
-
-            else:
-                gain_delta = snapshot_gain_deltas[
-                    snapshot_index
-                ]
-
-                if is_solo:
-                    gain_delta += SOLO_GAIN_BUMP
-
-                if is_clean:
-                    gain_delta += CLEAN_GAIN_BUMP
-
-                new_gain = round(
-                    base_gain + gain_delta,
-                    2
+            if new_gain < -120.0 or new_gain > 20.0:
+                message = (
+                    f"Implausible output gain "
+                    f"{new_gain} dB for "
+                    f"{helix_preset} {snapshot_name}. "
+                    "This usually means the "
+                    "measurement recorded silence."
                 )
 
-                if new_gain < -120.0 or new_gain > 20.0:
-                    message = (
-                        f"Implausible output gain "
-                        f"{new_gain} dB for "
-                        f"{helix_preset} {snapshot_name}. "
-                        "This usually means the "
-                        "measurement recorded silence."
-                    )
+                if not ignore_bad_lufs:
+                    raise ValueError(message)
 
-                    if not ignore_bad_lufs:
-                        raise ValueError(message)
-
-                    print(
-                        f"[GAIN] {helix_preset} "
-                        f"{snapshot_name}: "
-                        f"skipping bad LUFS measurement "
-                        f"({message})"
-                    )
-                    continue
+                print(
+                    f"[GAIN] {helix_preset} "
+                    f"{snapshot_name}: "
+                    f"skipping bad LUFS measurement "
+                    f"({message})"
+                )
+                continue
 
             snapshot_controllers = snapshot.setdefault(
                 "controllers",
@@ -688,22 +671,14 @@ def adjust_snapshot_gains(
 
             changes += 1
 
-            marker = (
-                " (MUTE)"
-                if is_default_snapshot
-                else "".join(
-                    [
-                        " (S)" if is_solo else "",
-                        " (C)" if is_clean else ""
-                    ]
-                )
+            marker = "".join(
+                [
+                    " (S)" if is_solo else "",
+                    " (C)" if is_clean else ""
+                ]
             )
 
-            delta_text = (
-                "muted default snapshot"
-                if is_default_snapshot
-                else f"Delta: {gain_delta:+.1f} dB"
-            )
+            delta_text = f"Delta: {gain_delta:+.1f} dB"
 
             print(
                 f"[GAIN] "
