@@ -16,7 +16,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 REAPER_DIR = PROJECT_DIR / "Reaper"
 
-IO_SCRIPT = SCRIPT_DIR / "hls_adjust.py"
+IO_SCRIPT = SCRIPT_DIR / "preset_handling.py"
 HELIX_SCRIPT = REAPER_DIR / "HelixAnalyzeSet.lua"
 DEFAULT_PROJECT = REAPER_DIR / "Auto_Pegelsetup.rpp"
 DEFAULT_REAPER_EXE = Path(
@@ -286,7 +286,8 @@ def apply_gain_csv(
     input_path,
     output_path,
     csv_path,
-    ignore_bad_lufs=False
+    ignore_bad_lufs=False,
+    target_lufs=None
 ):
     command = [
         sys.executable,
@@ -302,6 +303,14 @@ def apply_gain_csv(
 
     if ignore_bad_lufs:
         command.append("--ignore-bad-lufs")
+
+    if target_lufs is not None:
+        command.extend(
+            [
+                "--target-lufs",
+                target_lufs
+            ]
+        )
 
     run_command(command)
 
@@ -429,6 +438,16 @@ def parse_args():
         help=(
             "Skip implausible LUFS-derived gain values "
             "when writing the adjusted HLS"
+        )
+    )
+
+    parser.add_argument(
+        "--target-lufs",
+        type=float,
+        default=-16.0,
+        help=(
+            "Target integrated LUFS value used for gain "
+            "adjustment (default: -16)"
         )
     )
 
@@ -633,7 +652,8 @@ def main():
             input_path,
             output_path,
             csv_path,
-            args.ignore_bad_lufs
+            args.ignore_bad_lufs,
+            args.target_lufs
         )
 
         success = True
