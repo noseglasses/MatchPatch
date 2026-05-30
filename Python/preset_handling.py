@@ -41,6 +41,11 @@ TARGET_LUFS = -16.0
 SOLO_GAIN_BUMP = 3.0
 CLEAN_GAIN_BUMP = 2.0
 CONTROLLER_ASSIGNMENT_LIMIT = 64
+LUFS_ERROR_SENTINEL = "ERROR"
+CREST_FACTOR_REFERENCE_DB = 12.0
+CREST_FACTOR_CORRECTION_RATIO = 0.4
+MAX_CREST_FACTOR_CORRECTION_DB = 3.0
+GAIN_ADJUSTMENT_DEADBAND_DB = 0.25
 
 
 # =================================================
@@ -109,18 +114,9 @@ def extract_preset_assignments(data):
 
     for preset_index, preset in enumerate(presets):
 
-        meta = preset.get("meta", {})
+        preset_name = str(get_preset_name(preset)).strip()
 
-        preset_name = (
-            meta.get("name")
-            or preset.get("name")
-            or preset.get("@name")
-            or ""
-        )
-
-        preset_name = str(preset_name).strip()
-
-        if preset_name == "New Preset":
+        if is_default_preset(preset):
             continue
 
         assignments.append(
@@ -255,8 +251,27 @@ def rebuild_hlx_data(original_hlx_data, preset):
     return preset
 
 
+def preset_has_blocks(preset):
+    tone = preset.get("tone", {})
+
+    if not isinstance(tone, dict):
+        return False
+
+    for dsp_name in ["dsp0", "dsp1"]:
+        dsp = tone.get(dsp_name)
+
+        if not isinstance(dsp, dict):
+            continue
+
+        for block_name in dsp:
+            if str(block_name).startswith("block"):
+                return True
+
+    return False
+
+
 def is_default_preset(preset):
-    return str(get_preset_name(preset)).strip() == "New Preset"
+    return not preset_has_blocks(preset)
 
 
 def count_controller_assignments(preset):
@@ -525,7 +540,7 @@ def add_selected_output_gain_assignment(preset):
     return 1
 
 
-def assign_snapshot_level(data):
+def assign_snapshot_level(data, gain_deltas=None):
 
     """
     Assigns output level/gain to snapshots by adding
@@ -539,8 +554,15 @@ def assign_snapshot_level(data):
 
     presets = data.get("presets", [])
 
-    for preset in presets:
+    for preset_index, preset in enumerate(presets):
         if is_default_preset(preset):
+            continue
+
+        if (
+            gain_deltas is not None
+            and preset_index_to_helix(preset_index)
+            not in gain_deltas
+        ):
             continue
 
         changes += add_selected_output_gain_assignment(
@@ -553,6 +575,20 @@ def assign_snapshot_level(data):
 # =================================================
 # LOAD LUFS ANALYSIS FILE
 # =================================================
+
+def get_crest_factor_correction(crest_factor_db):
+    return min(
+        max(
+            (
+                CREST_FACTOR_REFERENCE_DB
+                - crest_factor_db
+            )
+            * CREST_FACTOR_CORRECTION_RATIO,
+            0.0
+        ),
+        MAX_CREST_FACTOR_CORRECTION_DB
+    )
+
 
 def load_lufs_analysis_file(filename, target_lufs=TARGET_LUFS):
 
@@ -570,24 +606,53 @@ def load_lufs_analysis_file(filename, target_lufs=TARGET_LUFS):
 
             helix_preset = row["HelixPreset"].strip()
 
+            if any(
+                str(row.get(key) or "").strip().upper()
+                == LUFS_ERROR_SENTINEL
+                for i in range(1, 5)
+                for key in [
+                    f"LUFS{i}",
+                    f"CrestFactor{i}"
+                ]
+            ):
+                print(
+                    f"[WARNING] {helix_preset}: "
+                    "REAPER analysis failed; "
+                    "skipping gain adjustment for this preset"
+                )
+                continue
+
             snapshot_gain_deltas = {}
 
             for i in range(1, 5):
                 lufs_key = f"LUFS{i}"
+                crest_factor_key = f"CrestFactor{i}"
 
                 gain_delta = None
 
-                if row.get(lufs_key):
+                if row.get(lufs_key) and row.get(crest_factor_key):
                     lufs_value = float(
                         row[lufs_key]
                     )
+                    crest_factor_db = float(
+                        row[crest_factor_key]
+                    )
 
                     lufs_delta = target_lufs - lufs_value
-                    gain_delta = round(lufs_delta, 1)
+                    crest_factor_correction = (
+                        get_crest_factor_correction(
+                            crest_factor_db
+                        )
+                    )
+                    gain_delta = round(
+                        lufs_delta - crest_factor_correction,
+                        1
+                    )
 
                 else:
                     raise ValueError(
-                        f"Missing {lufs_key} "
+                        f"Missing {lufs_key} or "
+                        f"{crest_factor_key} "
                         f"for {helix_preset}"
                     )
 
@@ -599,11 +664,14 @@ def load_lufs_analysis_file(filename, target_lufs=TARGET_LUFS):
 
 
 def normalize_single_preset_gain_deltas(gain_deltas):
-    if len(gain_deltas) != 1:
+    if len(gain_deltas) > 1:
         raise ValueError(
             "Adjusting gain for an .hlx preset requires a LUFS "
-            "analysis CSV with exactly one preset row"
+            "analysis CSV with at most one usable preset row"
         )
+
+    if not gain_deltas:
+        return {}
 
     return {
         "01A": next(iter(gain_deltas.values()))
@@ -624,6 +692,38 @@ def preset_index_to_helix(index):
     slot = ["A", "B", "C", "D"][index % 4]
 
     return f"{bank:02d}{slot}"
+
+
+def get_snapshot_output_gain(
+    snapshot,
+    dsp_name,
+    output_name,
+    base_gain
+):
+    controllers = snapshot.get("controllers")
+
+    if not isinstance(controllers, dict):
+        return base_gain
+
+    dsp_snapshot = controllers.get(dsp_name)
+
+    if not isinstance(dsp_snapshot, dict):
+        return base_gain
+
+    output_snapshot = dsp_snapshot.get(output_name)
+
+    if not isinstance(output_snapshot, dict):
+        return base_gain
+
+    gain = output_snapshot.get("gain")
+
+    if isinstance(gain, dict):
+        gain = gain.get("@value")
+
+    if gain is None:
+        return base_gain
+
+    return float(gain)
 
 
 def adjust_snapshot_gains(
@@ -744,8 +844,34 @@ def adjust_snapshot_gains(
             if is_clean:
                 gain_delta += CLEAN_GAIN_BUMP
 
+            current_gain = get_snapshot_output_gain(
+                snapshot,
+                dsp_name,
+                output_name,
+                base_gain
+            )
+
+            marker = "".join(
+                [
+                    " (S)" if is_solo else "",
+                    " (C)" if is_clean else ""
+                ]
+            )
+
+            delta_text = f"Delta: {gain_delta:+.1f} dB"
+
+            if abs(gain_delta) <= GAIN_ADJUSTMENT_DEADBAND_DB:
+                print(
+                    f"[GAIN] "
+                    f"{helix_preset} "
+                    f"{snapshot_name}{marker} | "
+                    f"stable at {current_gain:.1f} dB "
+                    f"({delta_text})"
+                )
+                continue
+
             new_gain = round(
-                base_gain + gain_delta,
+                current_gain + gain_delta,
                 2
             )
 
@@ -791,20 +917,11 @@ def adjust_snapshot_gains(
 
             changes += 1
 
-            marker = "".join(
-                [
-                    " (S)" if is_solo else "",
-                    " (C)" if is_clean else ""
-                ]
-            )
-
-            delta_text = f"Delta: {gain_delta:+.1f} dB"
-
             print(
                 f"[GAIN] "
                 f"{helix_preset} "
                 f"{snapshot_name}{marker} | "
-                f"{base_gain:.1f} dB -> "
+                f"{current_gain:.1f} dB -> "
                 f"{new_gain:.1f} dB "
                 f"({delta_text})"
             )
@@ -959,7 +1076,10 @@ def process_json_structure(
             gain_deltas
         )
 
-        snapshot_changes = assign_snapshot_level(data)
+        snapshot_changes = assign_snapshot_level(
+            data,
+            gain_deltas
+        )
 
     gain_changes = 0
 

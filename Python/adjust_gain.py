@@ -578,7 +578,7 @@ def main():
 
             raise ValueError(
                 "Requested presets are not present "
-                f"or are named New Preset: {missing}"
+                f"or contain no blocks: {missing}"
             )
 
         requested = set(requested_ids)
@@ -598,7 +598,7 @@ def main():
 
     if not preset_ids:
         raise ValueError(
-            "Input file contains no non-default presets"
+            "Input file contains no presets with blocks"
         )
 
     temp_dir = Path(

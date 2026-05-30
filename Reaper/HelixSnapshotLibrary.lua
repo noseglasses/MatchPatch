@@ -8,6 +8,9 @@ HelixLib.RECORD_TIME  = 3.75
 HelixLib.HELIX_WAIT   = 0.5
 HelixLib.LUFS_SAMPLE_INTERVAL = 0.1
 HelixLib.LUFS_SHORT_TERM_WINDOW = 3.0
+HelixLib.METER_PARAM_PEAK = 15
+HelixLib.METER_PARAM_RMS_I = 17
+HelixLib.METER_PARAM_LUFS_S = 19
 
 HelixLib.HELIX_DEVICE_ID = 17
 
@@ -161,7 +164,7 @@ function HelixLib.FindLoudnessMeter(track)
     return -1
 end
 
-function HelixLib.GetShortTermLUFS(track)
+function HelixLib.GetMeterValue(track, parameter, label)
     local fx_index = HelixLib.FindLoudnessMeter(track)
 
     if fx_index < 0 then
@@ -172,17 +175,51 @@ function HelixLib.GetShortTermLUFS(track)
         reaper.TrackFX_GetFormattedParamValue(
             track,
             fx_index,
-            19,
+            parameter,
             ""
         )
 
     if not retval then
-        return nil, "Could not read LUFS-S"
+        return nil, "Could not read " .. label
     end
 
     return tonumber(
         string.match(tostring(text), "[-%d%.]+")
     )
+end
+
+function HelixLib.GetShortTermLUFS(track)
+    return HelixLib.GetMeterValue(
+        track,
+        HelixLib.METER_PARAM_LUFS_S,
+        "LUFS-S"
+    )
+end
+
+function HelixLib.GetCrestFactor(track)
+    local peak, peakErr =
+        HelixLib.GetMeterValue(
+            track,
+            HelixLib.METER_PARAM_PEAK,
+            "peak"
+        )
+
+    if not peak or peak <= -150 then
+        return nil, peakErr or "Could not collect valid peak value"
+    end
+
+    local rms, rmsErr =
+        HelixLib.GetMeterValue(
+            track,
+            HelixLib.METER_PARAM_RMS_I,
+            "RMS-I"
+        )
+
+    if not rms or rms <= -100 then
+        return nil, rmsErr or "Could not collect valid RMS-I value"
+    end
+
+    return peak - rms
 end
 
 function HelixLib.GetAverageShortTermLUFS(track, seconds)
@@ -258,6 +295,13 @@ function HelixLib.AnalyzeSnapshot(track, snapshot)
             HelixLib.RECORD_TIME
         )
 
+    local crestFactor, crestFactorErr
+
+    if lufs then
+        crestFactor, crestFactorErr =
+            HelixLib.GetCrestFactor(track)
+    end
+
     HelixLib.StopRecording()
 
     local wait_start = reaper.time_precise()
@@ -274,11 +318,16 @@ function HelixLib.AnalyzeSnapshot(track, snapshot)
         return nil, lufsErr
     end
 
+    if not crestFactor then
+        return nil, crestFactorErr
+    end
+
     HelixLib.DeleteAllTrackItems(track)
 
     return {
         snapshot = snapshot,
-        lufs = lufs
+        lufs = lufs,
+        crest_factor = crestFactor
     }
 end
 
@@ -338,7 +387,11 @@ function HelixLib.CreateCSV(csvPath)
         "LUFS1," ..
         "LUFS2," ..
         "LUFS3," ..
-        "LUFS4\n"
+        "LUFS4," ..
+        "CrestFactor1," ..
+        "CrestFactor2," ..
+        "CrestFactor3," ..
+        "CrestFactor4\n"
     )
 
     file:close()
@@ -414,6 +467,13 @@ function HelixLib.AppendCSVRow(
         table.insert(values, tostring(r.lufs))
     end
 
+    for i = 1, 4 do
+
+        local r = results[i]
+
+        table.insert(values, tostring(r.crest_factor))
+    end
+
     file:write(
         table.concat(values, ",") .. "\n"
     )
@@ -421,6 +481,26 @@ function HelixLib.AppendCSVRow(
     file:close()
 
     return true
+end
+
+function HelixLib.AppendCSVErrorRow(
+    csvPath,
+    patchNumber
+)
+    local results = {}
+
+    for i = 1, 4 do
+        results[i] = {
+            lufs = "ERROR",
+            crest_factor = "ERROR"
+        }
+    end
+
+    return HelixLib.AppendCSVRow(
+        csvPath,
+        patchNumber,
+        results
+    )
 end
 
 --------------------------------------------------
@@ -580,6 +660,11 @@ local function RunPresetListAnalysis(
                 "\n"
             )
 
+            HelixLib.AppendCSVErrorRow(
+                csvPath,
+                presetToProcess
+            )
+
             return
         end
 
@@ -596,6 +681,11 @@ local function RunPresetListAnalysis(
                 "Fehler: " ..
                 tostring(err) ..
                 "\n"
+            )
+
+            HelixLib.AppendCSVErrorRow(
+                csvPath,
+                presetToProcess
             )
 
             return
@@ -623,6 +713,8 @@ local function RunPresetListAnalysis(
             reaper.ShowConsoleMsg(
                 "CSV FEHLER\n"
             )
+
+            return
         end
 
         --------------------------------------------------
