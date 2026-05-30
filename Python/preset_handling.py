@@ -37,7 +37,7 @@ OUTPUT_NAMES = {
     13: "USB 7/8"
 }
 
-TARGET_LUFS = -23.0
+TARGET_LUFS = -16.0
 SOLO_GAIN_BUMP = 3.0
 CLEAN_GAIN_BUMP = 2.0
 CONTROLLER_ASSIGNMENT_LIMIT = 64
@@ -554,7 +554,7 @@ def assign_snapshot_level(data):
 # LOAD LUFS ANALYSIS FILE
 # =================================================
 
-def load_lufs_analysis_file(filename):
+def load_lufs_analysis_file(filename, target_lufs=TARGET_LUFS):
 
     gain_deltas = {}
 
@@ -582,7 +582,7 @@ def load_lufs_analysis_file(filename):
                         row[lufs_key]
                     )
 
-                    lufs_delta = TARGET_LUFS - lufs_value
+                    lufs_delta = target_lufs - lufs_value
                     gain_delta = round(lufs_delta, 1)
 
                 else:
@@ -1210,6 +1210,16 @@ def main():
         )
     )
 
+    parser.add_argument(
+        "--target-lufs",
+        type=float,
+        default=TARGET_LUFS,
+        help=(
+            "Target integrated LUFS value used for gain "
+            f"adjustment (default: {TARGET_LUFS:g})"
+        )
+    )
+
     mode_group = (
         parser.add_mutually_exclusive_group(
             required=True
@@ -1328,7 +1338,8 @@ def main():
                 )
 
             gain_deltas = load_lufs_analysis_file(
-                args.lufs_analysis_file
+                args.lufs_analysis_file,
+                args.target_lufs
             )
 
             if input_filetype == "hlx":

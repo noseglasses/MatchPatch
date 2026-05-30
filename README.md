@@ -33,14 +33,14 @@ python3 Python/<script>.py --help
 Create a reamp version of a setlist:
 
 ```bash
-python3 Python/hls_adjust.py -i setlist_original.hls -o setlist_reamp.hls -r
+python3 Python/preset_handling.py -i setlist_original.hls -o setlist_reamp.hls -r
 ```
 
 Import the reamp file into the Helix, measure it with REAPER, then apply the
 generated LUFS CSV:
 
 ```bash
-python3 Python/hls_adjust.py \
+python3 Python/preset_handling.py \
   -i setlist_original.hls \
   -o setlist_adjusted.hls \
   --adjust-gain \
@@ -61,7 +61,7 @@ python3 Python/adjust_gain.py -a -i "Entre dos Tierra.hlx" -S 12A
 
 ## Python Scripts
 
-### `hls_adjust.py`
+### `preset_handling.py`
 
 General Helix file utility. It can convert inputs/outputs for reamping/stage
 use, list presets, and apply LUFS-derived gain corrections.
@@ -69,7 +69,7 @@ use, list presets, and apply LUFS-derived gain corrections.
 Usage:
 
 ```bash
-python3 Python/hls_adjust.py -i INPUT [-o OUTPUT] MODE [options]
+python3 Python/preset_handling.py -i INPUT [-o OUTPUT] MODE [options]
 ```
 
 Modes:
@@ -82,11 +82,12 @@ Modes:
 Examples:
 
 ```bash
-python3 Python/hls_adjust.py -i setlist_original.hls --list-presets
-python3 Python/hls_adjust.py -i setlist_original.hls -o setlist_reamp.hls -r
-python3 Python/hls_adjust.py -i setlist_reamp.hls -o setlist_stage.hls -s
-python3 Python/hls_adjust.py -i song.hlx -o song_reamp.hlx -r
-python3 Python/hls_adjust.py -i song.hlx -o song_adjusted.hlx --adjust-gain -g lufs_analysis.csv
+python3 Python/preset_handling.py -i setlist_original.hls --list-presets
+python3 Python/preset_handling.py -i setlist_original.hls -o setlist_reamp.hls -r
+python3 Python/preset_handling.py -i setlist_reamp.hls -o setlist_stage.hls -s
+python3 Python/preset_handling.py -i song.hlx -o song_reamp.hlx -r
+python3 Python/preset_handling.py -i song.hlx -o song_adjusted.hlx --adjust-gain -g lufs_analysis.csv
+python3 Python/preset_handling.py -i song.hlx -o song_adjusted.hlx --adjust-gain -g lufs_analysis.csv --target-lufs -18
 ```
 
 Notes:
@@ -120,6 +121,7 @@ Important options:
 - `--timeout`: maximum seconds to wait for REAPER analysis.
 - `--keep-temp`: keep the temporary CSV and done marker.
 - `--ignore-bad-lufs`: skip implausible LUFS-derived gain values.
+- `--target-lufs`: target integrated LUFS value for gain adjustment.
 - `--reaper-exe`: path to `reaper.exe`.
 - `--project`: REAPER project to open.
 
@@ -129,6 +131,7 @@ Examples:
 python3 Python/adjust_gain.py -a -i setlist_original.hls
 python3 Python/adjust_gain.py -a -i setlist_original.hls -S 01A,01B,02A
 python3 Python/adjust_gain.py -a -i setlist_original.hls -n 8 --keep-temp
+python3 Python/adjust_gain.py -a -i setlist_original.hls --target-lufs -18
 python3 Python/adjust_gain.py -a -i "Entre dos Tierra.hlx" -S 12A
 python3 Python/adjust_gain.py -i setlist_original.hls -o setlist_adjusted.hls -S 01A --timeout 300
 ```
