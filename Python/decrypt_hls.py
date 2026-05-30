@@ -18,23 +18,30 @@ def require_extension(path, expected_ext, label):
         )
 
 
+def get_extension(path):
+    return os.path.splitext(path)[1].lower()
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Decrypt/unpack a Helix .hls file to JSON"
+        description=(
+            "Decrypt/unpack a Helix .hls file to JSON, "
+            "or validate/copy a .hlx preset to .hlx"
+        )
     )
 
     parser.add_argument(
         "-i",
         "--input",
         required=True,
-        help="Input .hls file"
+        help="Input .hls or .hlx file"
     )
 
     parser.add_argument(
         "-o",
         "--output",
         required=True,
-        help="Output .json file"
+        help="Output .json file for .hls input, or .hlx for .hlx input"
     )
 
     return parser.parse_args()
@@ -42,6 +49,19 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    input_ext = get_extension(args.input)
+
+    if input_ext == ".hlx":
+        require_extension(args.output, ".hlx", "Output")
+
+        with open(args.input, "r", encoding="utf-8") as f:
+            preset = json.load(f)
+
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(preset, f, indent=1)
+
+        return
 
     require_extension(args.input, ".hls", "Input")
     require_extension(args.output, ".json", "Output")

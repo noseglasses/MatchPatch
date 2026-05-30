@@ -450,11 +450,22 @@ local function RunPresetListAnalysis(
                 end
             end
 
-            reaper.ShowMessageBox(
-                "Preset-Analyse abgeschlossen!",
-                "Fertig",
-                0
-            )
+            local quitWhenDone =
+                os.getenv("HELIX_QUIT_WHEN_DONE")
+
+            if quitWhenDone == "1" then
+                reaper.defer(
+                    function()
+                        reaper.Main_OnCommand(40004, 0)
+                    end
+                )
+            else
+                reaper.ShowMessageBox(
+                    "Preset-Analyse abgeschlossen!",
+                    "Fertig",
+                    0
+                )
+            end
 
             return
         end

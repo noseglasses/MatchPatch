@@ -2,11 +2,11 @@
 
 import argparse
 import json
-import os
 import sys
 
 from hls_adjust import (
     load_input,
+    require_helix_input_path,
     preset_index_to_helix,
     get_preset_name,
     is_default_preset
@@ -17,15 +17,6 @@ CAB_BLOCK_TYPES = {
     2,
     4
 }
-
-
-def require_hls_path(filename, label):
-    ext = os.path.splitext(filename)[1].lower()
-
-    if ext != ".hls":
-        raise ValueError(
-            f"{label} must be an .hls file: {filename}"
-        )
 
 
 def is_cab_block(block):
@@ -119,7 +110,7 @@ def parse_args():
         "-i",
         "--input",
         required=True,
-        help="Input .hls file"
+        help="Input .hls or .hlx file"
     )
 
     return parser.parse_args()
@@ -129,7 +120,7 @@ def main():
     args = parse_args()
 
     try:
-        require_hls_path(args.input, "Input")
+        require_helix_input_path(args.input, "Input")
 
         json_text, _ = load_input(args.input)
         data = json.loads(json_text)
