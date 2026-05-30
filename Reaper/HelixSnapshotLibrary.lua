@@ -142,6 +142,22 @@ function HelixLib.ActivateSnapshot(snapshot)
     return true
 end
 
+function HelixLib.ReapplySnapshot(snapshot)
+    local alternateSnapshot =
+        snapshot == 1 and 2 or 1
+
+    local ok, err =
+        HelixLib.ActivateSnapshot(
+            alternateSnapshot
+        )
+
+    if not ok then
+        return false, err
+    end
+
+    return HelixLib.ActivateSnapshot(snapshot)
+end
+
 --------------------------------------------------
 -- LOUDNESS ANALYSIS
 --------------------------------------------------
@@ -266,7 +282,7 @@ end
 
 function HelixLib.AnalyzeSnapshot(track, snapshot)
 
-    local ok, err = HelixLib.ActivateSnapshot(snapshot)
+    local ok, err = HelixLib.ReapplySnapshot(snapshot)
 
     if not ok then
         return nil, err

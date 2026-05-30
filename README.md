@@ -99,8 +99,6 @@ Notes:
   `LUFS alignment gain - clamp((12 - crest factor dB) * 0.4, 0, 3)`.
 - Gain residuals up to `0.25 dB` are treated as stable to avoid repeated
   adjustments caused by normal measurement variance.
-- Snapshot names containing `clean` case-insensitively, or ending with `/`, are
-  treated as clean snapshots and receive the clean gain bump.
 - Snapshot names containing `solo` case-insensitively receive the solo gain
   bump.
 

@@ -39,7 +39,6 @@ OUTPUT_NAMES = {
 
 TARGET_LUFS = -16.0
 SOLO_GAIN_BUMP = 3.0
-CLEAN_GAIN_BUMP = 2.0
 CONTROLLER_ASSIGNMENT_LIMIT = 64
 LUFS_ERROR_SENTINEL = "ERROR"
 CREST_FACTOR_REFERENCE_DB = 12.0
@@ -726,6 +725,238 @@ def get_snapshot_output_gain(
     return float(gain)
 
 
+def ensure_snapshot_output_gain_values(
+    tone,
+    dsp_name,
+    output_name,
+    base_gain
+):
+    changes = 0
+
+    for snapshot_index in range(8):
+        snapshot = tone.get(f"snapshot{snapshot_index}")
+
+        if not isinstance(snapshot, dict):
+            continue
+
+        snapshot_controllers = snapshot.setdefault(
+            "controllers",
+            {}
+        )
+        dsp_snapshot = snapshot_controllers.setdefault(
+            dsp_name,
+            {}
+        )
+        output_snapshot = dsp_snapshot.setdefault(
+            output_name,
+            {}
+        )
+
+        if "gain" in output_snapshot:
+            continue
+
+        output_snapshot["gain"] = {
+            "@fs_enabled": False,
+            "@value": base_gain
+        }
+        changes += 1
+
+    return changes
+
+
+def sync_output_gain_to_current_snapshot(
+    tone,
+    dsp_name,
+    output_name,
+    output_block,
+    base_gain
+):
+    global_settings = tone.get("global", {})
+    current_snapshot = 0
+
+    if isinstance(global_settings, dict):
+        current_snapshot = global_settings.get(
+            "@current_snapshot",
+            0
+        )
+
+    snapshot = tone.get(f"snapshot{current_snapshot}")
+
+    if not isinstance(snapshot, dict):
+        return False
+
+    snapshot_gain = get_snapshot_output_gain(
+        snapshot,
+        dsp_name,
+        output_name,
+        base_gain
+    )
+
+    if output_block.get("gain") == snapshot_gain:
+        return False
+
+    output_block["gain"] = snapshot_gain
+    return True
+
+
+def normalize_snapshot_assigned_output_gain(
+    tone,
+    dsp_name,
+    output_name,
+    output_block
+):
+    controller_root = tone.get("controller", {})
+
+    if not isinstance(controller_root, dict):
+        return False
+
+    dsp_controller = controller_root.get(dsp_name, {})
+
+    if not isinstance(dsp_controller, dict):
+        return False
+
+    output_controller = dsp_controller.get(output_name, {})
+
+    if not isinstance(output_controller, dict):
+        return False
+
+    controller_assignment = output_controller.get("gain")
+
+    if not isinstance(controller_assignment, dict):
+        return False
+
+    if "gain" not in output_block:
+        return False
+
+    base_gain = float(output_block["gain"])
+
+    ensure_snapshot_output_gain_values(
+        tone,
+        dsp_name,
+        output_name,
+        base_gain
+    )
+
+    return sync_output_gain_to_current_snapshot(
+        tone,
+        dsp_name,
+        output_name,
+        output_block,
+        base_gain
+    )
+
+
+def get_current_snapshot_index(tone):
+    global_settings = tone.get("global", {})
+
+    if not isinstance(global_settings, dict):
+        return 0
+
+    return global_settings.get("@current_snapshot", 0)
+
+
+def normalize_snapshot_assigned_parameters(data):
+    changes = 0
+
+    for preset in data.get("presets", []):
+        tone = preset.get("tone", {})
+        controller_root = tone.get("controller", {})
+        current_snapshot = get_current_snapshot_index(tone)
+
+        if not isinstance(controller_root, dict):
+            continue
+
+        for dsp_name, dsp_controller in controller_root.items():
+            if not isinstance(dsp_controller, dict):
+                continue
+
+            dsp = tone.get(dsp_name, {})
+
+            if not isinstance(dsp, dict):
+                continue
+
+            for block_name, block_controller in (
+                dsp_controller.items()
+            ):
+                if not isinstance(block_controller, dict):
+                    continue
+
+                block = dsp.get(block_name, {})
+
+                if not isinstance(block, dict):
+                    continue
+
+                for parameter, assignment in (
+                    block_controller.items()
+                ):
+                    if not isinstance(assignment, dict):
+                        continue
+
+                    if assignment.get("@controller") != 19:
+                        continue
+
+                    if parameter not in block:
+                        continue
+
+                    base_value = block[parameter]
+
+                    for snapshot_index in range(8):
+                        snapshot = tone.get(
+                            f"snapshot{snapshot_index}"
+                        )
+
+                        if not isinstance(snapshot, dict):
+                            continue
+
+                        snapshot_controllers = (
+                            snapshot.setdefault(
+                                "controllers",
+                                {}
+                            )
+                        )
+                        dsp_snapshot = (
+                            snapshot_controllers.setdefault(
+                                dsp_name,
+                                {}
+                            )
+                        )
+                        block_snapshot = dsp_snapshot.setdefault(
+                            block_name,
+                            {}
+                        )
+
+                        if parameter not in block_snapshot:
+                            block_snapshot[parameter] = {
+                                "@fs_enabled": False,
+                                "@value": base_value
+                            }
+
+                    snapshot = tone.get(
+                        f"snapshot{current_snapshot}",
+                        {}
+                    )
+                    snapshot_value = (
+                        snapshot.get("controllers", {})
+                        .get(dsp_name, {})
+                        .get(block_name, {})
+                        .get(parameter)
+                    )
+
+                    if isinstance(snapshot_value, dict):
+                        snapshot_value = snapshot_value.get(
+                            "@value"
+                        )
+
+                    if (
+                        snapshot_value is not None
+                        and block.get(parameter) != snapshot_value
+                    ):
+                        block[parameter] = snapshot_value
+                        changes += 1
+
+    return changes
+
+
 def adjust_snapshot_gains(
     data,
     gain_deltas,
@@ -775,6 +1006,13 @@ def adjust_snapshot_gains(
 
         base_gain = float(
             output_block["gain"]
+        )
+
+        ensure_snapshot_output_gain_values(
+            tone,
+            dsp_name,
+            output_name,
+            base_gain
         )
 
         # -----------------------------------------
@@ -829,20 +1067,12 @@ def adjust_snapshot_gains(
                 "solo" in snapshot_name.lower()
             )
 
-            is_clean = (
-                "clean" in snapshot_name.lower()
-                or snapshot_name.endswith("/")
-            )
-
             gain_delta = snapshot_gain_deltas[
                 snapshot_index
             ]
 
             if is_solo:
                 gain_delta += SOLO_GAIN_BUMP
-
-            if is_clean:
-                gain_delta += CLEAN_GAIN_BUMP
 
             current_gain = get_snapshot_output_gain(
                 snapshot,
@@ -851,12 +1081,7 @@ def adjust_snapshot_gains(
                 base_gain
             )
 
-            marker = "".join(
-                [
-                    " (S)" if is_solo else "",
-                    " (C)" if is_clean else ""
-                ]
-            )
+            marker = " (S)" if is_solo else ""
 
             delta_text = f"Delta: {gain_delta:+.1f} dB"
 
@@ -924,6 +1149,19 @@ def adjust_snapshot_gains(
                 f"{current_gain:.1f} dB -> "
                 f"{new_gain:.1f} dB "
                 f"({delta_text})"
+            )
+
+        if sync_output_gain_to_current_snapshot(
+            tone,
+            dsp_name,
+            output_name,
+            output_block,
+            base_gain
+        ):
+            print(
+                f"[GAIN] {helix_preset}: "
+                "synchronized output block gain to "
+                "the current snapshot"
             )
 
     return changes
@@ -1019,6 +1257,14 @@ def convert_json_text(text, mode):
                     input_block["@input"] = INPUT_MULTI
                     input_changes += 1
 
+        normalize_snapshot_assigned_parameters(
+            {
+                "presets": [
+                    preset
+                ]
+            }
+        )
+
         for dsp_name, output_name, output_block in (
             get_final_output_blocks(preset)
         ):
@@ -1069,6 +1315,9 @@ def process_json_structure(
     data = json.loads(json_text)
 
     snapshot_changes = 0
+
+    if gain_deltas is not None:
+        normalize_snapshot_assigned_parameters(data)
 
     if assign_output_gain:
         validate_controller_assignment_capacity(
