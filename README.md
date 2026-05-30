@@ -9,7 +9,7 @@
 [![PyPI](https://img.shields.io/pypi/v/matchpatch.svg)](https://pypi.org/project/matchpatch/)
 [![Python](https://img.shields.io/pypi/pyversions/matchpatch.svg)](https://pypi.org/project/matchpatch/)
 
-**Measure once. Match every patch.**
+**Measure. Match. Play. Automatic Loudness Alignment for Presets.**
 
 MatchPatch normalizes gain across audio-processor presets and snapshots. It
 plays a reference DI through each patch, measures LUFS and crest factor, then
