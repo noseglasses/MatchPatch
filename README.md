@@ -1,9 +1,151 @@
-# Auto_Pegelsetup
+# MatchPatch
 
-Command line tools for analyzing and modifying Line 6 Helix setlist and preset
-files.
+Command line tools for measuring and normalizing audio processor presets.
 
-Most scripts work on:
+## Python Project Setup
+
+MatchPatch uses `uv` for Python installation, dependency locking, virtual
+environment creation, and package synchronization. Do not create virtual
+environments manually or install project packages with `pip`.
+
+The repository uses two `uv` dependency groups and two platform-specific
+virtual environments:
+
+| Platform | Dependency group | Managed environment |
+|---|---|---|
+| WSL/Linux development | `wsl` | `~/.local/share/matchpatch/.venv-wsl` |
+| Native Windows processor worker | `windows` | `.venv-windows` |
+
+The Windows group includes the WSL analysis dependencies plus the native MIDI
+and audio packages that will replace REAPER. Both environments use the same
+`pyproject.toml` and shared `uv.lock`.
+
+Install `uv` once on each operating system using the official installers:
+
+```bash
+# WSL
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+```powershell
+# Native Windows PowerShell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Then synchronize the WSL environment from WSL:
+
+```bash
+scripts/sync-wsl.sh
+```
+
+Synchronize the native Windows environment from the same WSL shell:
+
+```bash
+scripts/sync-windows-from-wsl.sh
+```
+
+The second command invokes the Windows `uv.exe` through WSL interoperability.
+It therefore requires `uv` to be installed and available on the Windows
+`PATH`.
+
+Add or remove platform dependencies through `uv`, then refresh the shared
+lockfile:
+
+```bash
+uv add --group wsl PACKAGE
+uv add --group windows PACKAGE
+uv lock
+```
+
+Run the package CLI in WSL:
+
+```bash
+UV_PROJECT_ENVIRONMENT="$HOME/.local/share/matchpatch/.venv-wsl" \
+  uv run --no-default-groups --group wsl \
+  matchpatch --environment
+```
+
+Run the pytest suite with terminal and HTML coverage reporting:
+
+```bash
+scripts/sync-wsl.sh
+UV_PROJECT_ENVIRONMENT="$HOME/.local/share/matchpatch/.venv-wsl" \
+  uv run --no-default-groups --group wsl \
+  pytest
+```
+
+The terminal report includes missing line numbers. The browsable HTML report is
+written to `htmlcov/index.html`.
+
+Run Ruff code-quality checks:
+
+```bash
+UV_PROJECT_ENVIRONMENT="$HOME/.local/share/matchpatch/.venv-wsl" \
+  uv run --no-default-groups --group wsl \
+  ruff check .
+```
+
+Check Ruff formatting without changing files:
+
+```bash
+UV_PROJECT_ENVIRONMENT="$HOME/.local/share/matchpatch/.venv-wsl" \
+  uv run --no-default-groups --group wsl \
+  ruff format --check .
+```
+
+Run `ty` package type checks:
+
+```bash
+UV_PROJECT_ENVIRONMENT="$HOME/.local/share/matchpatch/.venv-wsl" \
+  uv run --no-default-groups --group wsl \
+  ty check
+```
+
+Install the Git hooks after synchronizing the WSL environment:
+
+```bash
+UV_PROJECT_ENVIRONMENT="$HOME/.local/share/matchpatch/.venv-wsl" \
+  uv run --no-default-groups --group wsl \
+  pre-commit install --install-hooks
+```
+
+This installs commit and push hooks. Commits run repository hygiene checks,
+Ruff linting, Ruff formatting validation, and `ty`. Pushes additionally run the
+pytest suite. Run every hook manually with:
+
+```bash
+UV_PROJECT_ENVIRONMENT="$HOME/.local/share/matchpatch/.venv-wsl" \
+  uv run --no-default-groups --group wsl \
+  pre-commit run --all-files --hook-stage pre-push
+```
+
+GitHub Actions runs Ruff linting, Ruff formatting checks, `ty`, and pytest on
+Python 3.12, 3.13, and 3.14 across Linux, native Windows, and Ubuntu on WSL.
+
+Release tags matching the package version, such as `v0.1.0`, trigger a
+tokenless PyPI trusted-publishing workflow. Configure the GitHub `pypi`
+environment and register `.github/workflows/release.yml` as a trusted
+publisher for the `matchpatch` project on PyPI before publishing the first tag.
+
+The separate environment directories are intentional. Linux and Windows
+virtual environments cannot be shared, even though they are managed from the
+same project metadata and lockfile. The WSL environment lives on the native
+Linux filesystem because Linux virtual environments cannot be created reliably
+inside the Windows-mounted repository.
+
+The primary package command selects an audio processor profile explicitly:
+
+```bash
+matchpatch normalize --device helix -i setlist_original.hls -o setlist_adjusted.hls
+```
+
+List the installed profiles:
+
+```bash
+matchpatch --devices
+```
+
+The first supported profile is `helix`. Its legacy utility scripts work on:
 
 - `.hls`: Helix setlist files
 - `.hlx`: Helix preset files
@@ -25,8 +167,8 @@ python3 Python/<script>.py --help
 - Operations that modify every preset in a `.hls` file modify only the single
   preset in an `.hlx` file.
 - For `adjust_gain.py`, `.hlx` input requires exactly one `-S/--preset-set`
-  value, for example `-S 12A`. This tells REAPER which Helix slot contains the
-  imported preset during measurement.
+  value, for example `-S 12A`. This tells MatchPatch which Helix slot contains
+  the imported preset during measurement.
 
 ## Typical Workflow
 
@@ -36,8 +178,8 @@ Create a reamp version of a setlist:
 python3 Python/preset_handling.py -i setlist_original.hls -o setlist_reamp.hls -r
 ```
 
-Import the reamp file into the Helix, measure it with REAPER, then apply the
-generated LUFS CSV:
+Import the reamp file into the Helix, measure it with the native Windows
+MatchPatch worker, then apply the generated LUFS CSV:
 
 ```bash
 python3 Python/preset_handling.py \
@@ -94,7 +236,7 @@ Notes:
 
 - `.hlx` input can only produce `.hlx` output.
 - In `.hlx` gain adjustment, the LUFS CSV must contain exactly one preset row.
-- New REAPER measurements include `CrestFactor1` through `CrestFactor4`.
+- Measurements include `CrestFactor1` through `CrestFactor4`.
   Compressed snapshots receive a crest-factor correction:
   `LUFS alignment gain - clamp((12 - crest factor dB) * 0.4, 0, 3)`.
 - Gain residuals up to `0.25 dB` are treated as stable to avoid repeated
@@ -104,7 +246,8 @@ Notes:
 
 ### `adjust_gain.py`
 
-Runs the full gain measurement workflow with REAPER and the Helix.
+Runs the full gain measurement workflow with the native Windows Python worker
+and the Helix.
 
 Usage:
 
@@ -115,18 +258,22 @@ python3 Python/adjust_gain.py -a -i INPUT [options]
 
 Important options:
 
-- `-a`, `--automation`: create a reamp file, wait for import, run REAPER
-  analysis, then create the adjusted output.
+- `-a`, `--automation`: create a reamp file, wait for import, run native
+  Windows analysis, then create the adjusted output.
 - `-o`, `--output`: output file when not using automation.
 - `-S`, `--preset-set`: comma-separated Helix preset IDs, such as
   `01B,02A,16D`.
 - `-n`, `--limit`: only analyze the first N detected presets.
-- `--timeout`: maximum seconds to wait for REAPER analysis.
+- `--timeout`: maximum seconds to wait for native Windows analysis.
 - `--keep-temp`: keep the temporary CSV and done marker.
 - `--ignore-bad-lufs`: skip implausible LUFS-derived gain values.
 - `--target-lufs`: target average short-term LUFS value for gain adjustment.
-- `--reaper-exe`: path to `reaper.exe`.
-- `--project`: REAPER project to open.
+- `--windows-python`: WSL path to the uv-managed native Windows Python.
+- `--reference-di`: reference guitar DI WAV file.
+- `--audio-device`: unique substring or numeric ID for the Helix ASIO device.
+- `--midi-output`: unique substring for the Helix MIDI output.
+- `--input-mapping`: ASIO recording channels, default `1,2` for USB 1/2.
+- `--output-mapping`: ASIO playback channels, default `3,4` for USB 3/4.
 
 Examples:
 
@@ -144,8 +291,8 @@ Notes:
 - Automation writes `*_reamp.hls`/`*_reamp.hlx` and
   `*_adjusted.hls`/`*_adjusted.hlx`.
 - With `.hlx` input, `-S` is required and must contain exactly one preset ID.
-- The REAPER process started by this script is asked to close automatically
-  after the analysis is done.
+- The WSL script invokes `.venv-windows/Scripts/python.exe` directly. The
+  native worker owns ASIO, MIDI, playback, recording, and measurement.
 
 ### `list_cab_presets.py`
 
@@ -271,28 +418,87 @@ python3 Python/encrypt_hls.py -i setlist_original.json -o setlist_repacked.hls
 python3 Python/encrypt_hls.py -i song.hlx -o song_copy.hlx
 ```
 
-## REAPER Integration
+## Device Profiles
 
-`adjust_gain.py` launches:
+Processor-specific behavior lives under `src/matchpatch/devices/`. A supported
+profile supplies:
 
-- `Reaper/Auto_Pegelsetup.rpp`
-- `Reaper/HelixAnalyzeSet.lua`
+- A patch-file handler for setlist and preset files.
+- A steering controller for preset and snapshot selection.
+- Default USB recording and playback channels.
 
-The script passes the preset set, CSV path, and done marker through environment
-variables. When the REAPER analysis is complete, the Lua script writes the done
-marker and asks the launched REAPER instance to quit.
+The normalization orchestration and `loopback` backend do not contain
+processor-specific logic. To add another audio processor, implement a
+`DeviceProfile`, `PatchFileHandler`, and `DeviceController`, then register the
+profile in `src/matchpatch/devices/registry.py`.
 
-The default REAPER executable path is:
+The `helix` profile adapts the proven `.hls` and `.hlx` implementation from
+`Python/preset_handling.py`. Its controller sends MIDI Program Change messages
+for presets and CC `69` for snapshots.
 
-```text
-/mnt/c/Program Files/REAPER (x64)/reaper.exe
-```
+## Native Windows Measurement
 
-Override it if needed:
+REAPER is no longer required for gain measurement. MatchPatch keeps
+orchestration and preset file processing in WSL while a native Windows Python
+worker communicates with the selected processor's audio driver and steering
+transport.
+
+Synchronize both uv-managed environments:
 
 ```bash
-python3 Python/adjust_gain.py -a -i setlist_original.hls --reaper-exe "/mnt/c/Program Files/REAPER (x64)/reaper.exe"
+scripts/sync-wsl.sh
+scripts/sync-windows-from-wsl.sh
 ```
+
+List the Windows audio host APIs, audio devices, and MIDI outputs:
+
+```bash
+scripts/measure-windows-from-wsl.sh devices
+```
+
+When hardware is not connected, test the native Windows measurement worker with
+an in-process loopback backend. It simulates an empty patch by feeding the
+reference DI directly into the analyzer:
+
+```bash
+scripts/measure-windows-from-wsl.sh measure \
+  --device helix \
+  --backend loopback \
+  --preset-ids 1,2 \
+  --csv "$(wslpath -w "$PWD/loopback_analysis.csv")" \
+  --reference-di "$(wslpath -w "$PWD/Reaper/Referenz_Gitarre_DI_Strandberg_Boden_Fusion_Bridge_Humbucker_short.wav")"
+```
+
+The complete WSL orchestration can use the same backend:
+
+```bash
+matchpatch normalize \
+  --device helix \
+  -i setlist_original.hls \
+  -o setlist_loopback_adjusted.hls \
+  -S 01A \
+  --backend loopback \
+  --keep-temp
+```
+
+The measurement worker defaults to:
+
+| Purpose | Helix USB channels |
+|---|---|
+| Processed audio recording | USB 1/2 |
+| Reference DI playback | USB 3/4 |
+
+If the Helix ASIO or MIDI names are ambiguous, pass a unique device substring
+or numeric audio device ID:
+
+```bash
+matchpatch normalize --device helix -a -i setlist_original.hls \
+  --audio-device "Helix ASIO" \
+  --midi-output "Helix"
+```
+
+The historical files in `Reaper/` remain as references while the native
+measurement results are calibrated against the previous workflow.
 
 ## Safety Notes
 

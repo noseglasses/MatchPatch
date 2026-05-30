@@ -5,18 +5,14 @@ import json
 import sys
 
 from preset_handling import (
-    load_input,
-    require_helix_input_path,
-    preset_index_to_helix,
     get_preset_name,
-    is_default_preset
+    is_default_preset,
+    load_input,
+    preset_index_to_helix,
+    require_helix_input_path,
 )
 
-
-CAB_BLOCK_TYPES = {
-    2,
-    4
-}
+CAB_BLOCK_TYPES = {2, 4}
 
 
 def is_cab_block(block):
@@ -25,12 +21,8 @@ def is_cab_block(block):
 
     model = block.get("@model", "")
 
-    return (
-        block.get("@type") in CAB_BLOCK_TYPES
-        or (
-            isinstance(model, str)
-            and model.startswith("HD2_Cab")
-        )
+    return block.get("@type") in CAB_BLOCK_TYPES or (
+        isinstance(model, str) and model.startswith("HD2_Cab")
     )
 
 
@@ -38,9 +30,7 @@ def list_cab_presets(data):
     preset_count = 0
     block_count = 0
 
-    for preset_index, preset in enumerate(
-        data.get("presets", [])
-    ):
+    for preset_index, preset in enumerate(data.get("presets", [])):
         if is_default_preset(preset):
             continue
 
@@ -64,12 +54,7 @@ def list_cab_presets(data):
                     continue
 
                 cab_blocks.append(
-                    (
-                        dsp_name,
-                        block_name,
-                        block.get("@model", ""),
-                        block.get("@type")
-                    )
+                    (dsp_name, block_name, block.get("@model", ""), block.get("@type"))
                 )
 
         if not cab_blocks:
@@ -79,21 +64,12 @@ def list_cab_presets(data):
         block_count += len(cab_blocks)
 
         mappings = ", ".join(
-            f"{dsp_name}.{block_name}: "
-            f"{model} (type {block_type})"
-            for (
-                dsp_name,
-                block_name,
-                model,
-                block_type
-            ) in cab_blocks
+            f"{dsp_name}.{block_name}: {model} (type {block_type})"
+            for (dsp_name, block_name, model, block_type) in cab_blocks
         )
 
         print(
-            f"[CAB] "
-            f"{preset_index_to_helix(preset_index)} "
-            f"\"{get_preset_name(preset)}\": "
-            f"{mappings}"
+            f'[CAB] {preset_index_to_helix(preset_index)} "{get_preset_name(preset)}": {mappings}'
         )
 
     return preset_count, block_count
@@ -101,17 +77,10 @@ def list_cab_presets(data):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description=(
-            "List Helix presets that use isolated cab blocks"
-        )
+        description=("List Helix presets that use isolated cab blocks")
     )
 
-    parser.add_argument(
-        "-i",
-        "--input",
-        required=True,
-        help="Input .hls or .hlx file"
-    )
+    parser.add_argument("-i", "--input", required=True, help="Input .hls or .hlx file")
 
     return parser.parse_args()
 

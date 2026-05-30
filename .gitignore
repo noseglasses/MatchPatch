@@ -1,8 +1,15 @@
 Attic
 Backups
 Media
+Reaper/peaks
 Unused
 __pycache__
+.venv
+.venv-wsl
+.venv-windows
+.coverage
+htmlcov
+dist
 *.json
 *.hls
 *.hlx

@@ -6,22 +6,16 @@ import sys
 from collections import defaultdict
 
 from preset_handling import (
-    load_input,
-    save_output,
-    require_helix_input_path,
-    require_compatible_output_path,
-    preset_index_to_helix,
     get_preset_name,
-    is_default_preset
+    is_default_preset,
+    load_input,
+    preset_index_to_helix,
+    require_compatible_output_path,
+    require_helix_input_path,
+    save_output,
 )
 
-
-CAB_BLOCK_TYPES = {
-    2,
-    3,
-    4,
-    5
-}
+CAB_BLOCK_TYPES = {2, 3, 4, 5}
 
 DSP_HANDOFF_OUTPUT = 2
 
@@ -51,7 +45,7 @@ DEDICATED_STEREO_MODELS = {
     "HD2_FXLoopMono3": "HD2_FXLoopStereo3",
     "HD2_FXLoopMono4": "HD2_FXLoopStereo4",
     "HD2_ImpulseResponse1024Mono": "HD2_ImpulseResponse1024Stereo",
-    "HD2_ImpulseResponse2048Mono": "HD2_ImpulseResponse2048Stereo"
+    "HD2_ImpulseResponse2048Mono": "HD2_ImpulseResponse2048Stereo",
 }
 
 
@@ -61,15 +55,9 @@ def is_cab_or_ir_block(block):
 
     model = block.get("@model", "")
 
-    return (
-        block.get("@type") in CAB_BLOCK_TYPES
-        or (
-            isinstance(model, str)
-            and (
-                model.startswith("HD2_Cab")
-                or model.startswith("HD2_ImpulseResponse")
-            )
-        )
+    return block.get("@type") in CAB_BLOCK_TYPES or (
+        isinstance(model, str)
+        and (model.startswith("HD2_Cab") or model.startswith("HD2_ImpulseResponse"))
     )
 
 
@@ -106,18 +94,10 @@ def iter_blocks_by_path(dsp):
 
         path = block.get("@path", 0)
         position = block.get("@position", 0)
-        blocks_by_path[path].append(
-            (
-                position,
-                block_name,
-                block
-            )
-        )
+        blocks_by_path[path].append((position, block_name, block))
 
     for path in blocks_by_path:
-        blocks_by_path[path].sort(
-            key=lambda item: item[0]
-        )
+        blocks_by_path[path].sort(key=lambda item: item[0])
 
     return blocks_by_path
 
@@ -133,10 +113,7 @@ def get_post_cab_blocks(tone):
         dsp_has_cab = False
 
         for path, blocks in blocks_by_path.items():
-            after_cab = (
-                chain_after_cab
-                and dsp_name == "dsp1"
-            )
+            after_cab = chain_after_cab and dsp_name == "dsp1"
 
             for _, block_name, block in blocks:
                 if is_cab_or_ir_block(block):
@@ -145,39 +122,18 @@ def get_post_cab_blocks(tone):
                     continue
 
                 if after_cab:
-                    post_blocks.append(
-                        (
-                            dsp_name,
-                            path,
-                            block_name,
-                            block
-                        )
-                    )
+                    post_blocks.append((dsp_name, path, block_name, block))
 
-        if (
-            dsp_name == "dsp0"
-            and chained
-            and dsp_has_cab
-        ):
+        if dsp_name == "dsp0" and chained and dsp_has_cab:
             chain_after_cab = True
 
     return post_blocks
 
 
 def stereofy_block(block):
-    model_key = (
-        "@model"
-        if "@model" in block
-        else "model"
-        if "model" in block
-        else None
-    )
+    model_key = "@model" if "@model" in block else "model" if "model" in block else None
 
-    model = (
-        block.get(model_key, "")
-        if model_key is not None
-        else ""
-    )
+    model = block.get(model_key, "") if model_key is not None else ""
 
     if "@stereo" in block:
         if block["@stereo"] is True:
@@ -190,15 +146,9 @@ def stereofy_block(block):
 
     if stereo_model is not None:
         block[model_key] = stereo_model
-        return (
-            "changed",
-            f"{model} -> {stereo_model}"
-        )
+        return ("changed", f"{model} -> {stereo_model}")
 
-    return (
-        "unknown",
-        "no @stereo parameter and no verified stereo model mapping"
-    )
+    return ("unknown", "no @stereo parameter and no verified stereo model mapping")
 
 
 def stereofy(data):
@@ -206,9 +156,7 @@ def stereofy(data):
     already_count = 0
     unknown_count = 0
 
-    for preset_index, preset in enumerate(
-        data.get("presets", [])
-    ):
+    for preset_index, preset in enumerate(data.get("presets", [])):
         if is_default_preset(preset):
             continue
 
@@ -221,51 +169,35 @@ def stereofy(data):
         already = []
         unknown = []
 
-        for (
-            dsp_name,
-            path,
-            block_name,
-            block
-        ) in get_post_cab_blocks(tone):
+        for dsp_name, path, block_name, block in get_post_cab_blocks(tone):
             status, detail = stereofy_block(block)
             model = block.get("@model", "")
-            location = (
-                f"{dsp_name}.{block_name}"
-                f"(path {path})"
-            )
+            location = f"{dsp_name}.{block_name}(path {path})"
 
             if status == "changed":
                 changed_count += 1
-                changes.append(
-                    f"{location}: {model} ({detail})"
-                )
+                changes.append(f"{location}: {model} ({detail})")
 
             elif status == "already":
                 already_count += 1
-                already.append(
-                    f"{location}: {model}"
-                )
+                already.append(f"{location}: {model}")
 
             else:
                 unknown_count += 1
-                unknown.append(
-                    f"{location}: {model} ({detail})"
-                )
+                unknown.append(f"{location}: {model} ({detail})")
 
         if changes:
             print(
                 f"[STEREO] "
                 f"{preset_index_to_helix(preset_index)} "
-                f"\"{get_preset_name(preset)}\": "
-                + ", ".join(changes)
+                f'"{get_preset_name(preset)}": ' + ", ".join(changes)
             )
 
         if unknown:
             print(
                 f"[UNSURE] "
                 f"{preset_index_to_helix(preset_index)} "
-                f"\"{get_preset_name(preset)}\": "
-                + ", ".join(unknown)
+                f'"{get_preset_name(preset)}": ' + ", ".join(unknown)
             )
 
     return changed_count, already_count, unknown_count
@@ -279,19 +211,9 @@ def parse_args():
         )
     )
 
-    parser.add_argument(
-        "-i",
-        "--input",
-        required=True,
-        help="Input .hls or .hlx file"
-    )
+    parser.add_argument("-i", "--input", required=True, help="Input .hls or .hlx file")
 
-    parser.add_argument(
-        "-o",
-        "--output",
-        required=True,
-        help="Output .hls or .hlx file to create"
-    )
+    parser.add_argument("-o", "--output", required=True, help="Output .hls or .hlx file to create")
 
     return parser.parse_args()
 
@@ -301,27 +223,16 @@ def main():
 
     try:
         require_helix_input_path(args.input, "Input")
-        require_compatible_output_path(
-            args.input,
-            args.output,
-            allow_json=False
-        )
+        require_compatible_output_path(args.input, args.output, allow_json=False)
 
         json_text, original_hls_text = load_input(args.input)
         data = json.loads(json_text)
 
         changed, already, unknown = stereofy(data)
 
-        modified_json_text = json.dumps(
-            data,
-            indent=1
-        )
+        modified_json_text = json.dumps(data, indent=1)
 
-        save_output(
-            modified_json_text,
-            args.output,
-            original_hls_text
-        )
+        save_output(modified_json_text, args.output, original_hls_text)
 
     except Exception as e:
         print()

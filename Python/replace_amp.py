@@ -5,15 +5,14 @@ import json
 import sys
 
 from preset_handling import (
-    load_input,
-    save_output,
-    require_helix_input_path,
-    require_compatible_output_path,
-    preset_index_to_helix,
     get_preset_name,
-    is_default_preset
+    is_default_preset,
+    load_input,
+    preset_index_to_helix,
+    require_compatible_output_path,
+    require_helix_input_path,
+    save_output,
 )
-
 
 AMP_BLOCK_TYPE = 1
 AMP_CAB_BLOCK_TYPE = 3
@@ -36,9 +35,7 @@ def is_amp_cab_block(block):
 def replace_amp_cab_blocks(data):
     changes = 0
 
-    for preset_index, preset in enumerate(
-        data.get("presets", [])
-    ):
+    for preset_index, preset in enumerate(data.get("presets", [])):
         if is_default_preset(preset):
             continue
 
@@ -66,31 +63,18 @@ def replace_amp_cab_blocks(data):
                 block["@type"] = AMP_BLOCK_TYPE
                 changes += 1
 
-                preset_changes.append(
-                    (
-                        dsp_name,
-                        block_name,
-                        model,
-                        old_cab
-                    )
-                )
+                preset_changes.append((dsp_name, block_name, model, old_cab))
 
         if preset_changes:
             mappings = ", ".join(
-                f"{dsp_name}.{block_name}: "
-                f"{model}+cab({old_cab}) -> {model}"
-                for (
-                    dsp_name,
-                    block_name,
-                    model,
-                    old_cab
-                ) in preset_changes
+                f"{dsp_name}.{block_name}: {model}+cab({old_cab}) -> {model}"
+                for (dsp_name, block_name, model, old_cab) in preset_changes
             )
 
             print(
                 f"[AMP] "
                 f"{preset_index_to_helix(preset_index)} "
-                f"\"{get_preset_name(preset)}\": "
+                f'"{get_preset_name(preset)}": '
                 f"{mappings}"
             )
 
@@ -99,25 +83,12 @@ def replace_amp_cab_blocks(data):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description=(
-            "Replace Helix amp+cab blocks with "
-            "the equivalent amp-only blocks"
-        )
+        description=("Replace Helix amp+cab blocks with the equivalent amp-only blocks")
     )
 
-    parser.add_argument(
-        "-i",
-        "--input",
-        required=True,
-        help="Input .hls or .hlx file"
-    )
+    parser.add_argument("-i", "--input", required=True, help="Input .hls or .hlx file")
 
-    parser.add_argument(
-        "-o",
-        "--output",
-        required=True,
-        help="Output .hls or .hlx file to create"
-    )
+    parser.add_argument("-o", "--output", required=True, help="Output .hls or .hlx file to create")
 
     return parser.parse_args()
 
@@ -127,27 +98,16 @@ def main():
 
     try:
         require_helix_input_path(args.input, "Input")
-        require_compatible_output_path(
-            args.input,
-            args.output,
-            allow_json=False
-        )
+        require_compatible_output_path(args.input, args.output, allow_json=False)
 
         json_text, original_hls_text = load_input(args.input)
         data = json.loads(json_text)
 
         changes = replace_amp_cab_blocks(data)
 
-        modified_json_text = json.dumps(
-            data,
-            indent=1
-        )
+        modified_json_text = json.dumps(data, indent=1)
 
-        save_output(
-            modified_json_text,
-            args.output,
-            original_hls_text
-        )
+        save_output(modified_json_text, args.output, original_hls_text)
 
     except Exception as e:
         print()

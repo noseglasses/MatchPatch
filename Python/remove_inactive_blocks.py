@@ -5,28 +5,20 @@ import json
 import sys
 
 from preset_handling import (
-    load_input,
-    save_output,
-    require_helix_input_path,
-    require_compatible_output_path,
-    preset_index_to_helix,
     get_preset_name,
-    is_default_preset
+    is_default_preset,
+    load_input,
+    preset_index_to_helix,
+    require_compatible_output_path,
+    require_helix_input_path,
+    save_output,
 )
 
-
-DSP_NAMES = [
-    "dsp0",
-    "dsp1"
-]
+DSP_NAMES = ["dsp0", "dsp1"]
 
 SNAPSHOT_COUNT = 4
 
-PEDAL_CONTROLLERS = {
-    1,
-    2,
-    3
-}
+PEDAL_CONTROLLERS = {1, 2, 3}
 
 
 def iter_effect_blocks(tone):
@@ -70,12 +62,7 @@ def snapshot_block_state(tone, snapshot_index, dsp_name, block_name):
 
 def is_inactive_in_first_snapshots(tone, dsp_name, block_name):
     states = [
-        snapshot_block_state(
-            tone,
-            snapshot_index,
-            dsp_name,
-            block_name
-        )
+        snapshot_block_state(tone, snapshot_index, dsp_name, block_name)
         for snapshot_index in range(SNAPSHOT_COUNT)
     ]
 
@@ -103,11 +90,7 @@ def get_block_controller_assignments(tone, dsp_name, block_name):
 
 def get_pedal_assignments(tone, dsp_name, block_name):
     assignments = []
-    block_controller = get_block_controller_assignments(
-        tone,
-        dsp_name,
-        block_name
-    )
+    block_controller = get_block_controller_assignments(tone, dsp_name, block_name)
 
     for parameter, assignment in block_controller.items():
         if not isinstance(assignment, dict):
@@ -118,12 +101,7 @@ def get_pedal_assignments(tone, dsp_name, block_name):
         if controller not in PEDAL_CONTROLLERS:
             continue
 
-        assignments.append(
-            (
-                parameter,
-                controller
-            )
-        )
+        assignments.append((parameter, controller))
 
     return assignments
 
@@ -136,10 +114,7 @@ def remove_block_references(tone, dsp_name, block_name):
     if isinstance(controller_root, dict):
         dsp_controller = controller_root.get(dsp_name)
 
-        if (
-            isinstance(dsp_controller, dict)
-            and block_name in dsp_controller
-        ):
+        if isinstance(dsp_controller, dict) and block_name in dsp_controller:
             del dsp_controller[block_name]
             removed_references += 1
 
@@ -154,10 +129,7 @@ def remove_block_references(tone, dsp_name, block_name):
         if isinstance(snapshot_blocks, dict):
             dsp_blocks = snapshot_blocks.get(dsp_name)
 
-            if (
-                isinstance(dsp_blocks, dict)
-                and block_name in dsp_blocks
-            ):
+            if isinstance(dsp_blocks, dict) and block_name in dsp_blocks:
                 del dsp_blocks[block_name]
                 removed_references += 1
 
@@ -166,10 +138,7 @@ def remove_block_references(tone, dsp_name, block_name):
         if isinstance(snapshot_controllers, dict):
             dsp_controllers = snapshot_controllers.get(dsp_name)
 
-            if (
-                isinstance(dsp_controllers, dict)
-                and block_name in dsp_controllers
-            ):
+            if isinstance(dsp_controllers, dict) and block_name in dsp_controllers:
                 del dsp_controllers[block_name]
                 removed_references += 1
 
@@ -177,10 +146,7 @@ def remove_block_references(tone, dsp_name, block_name):
 
 
 def format_pedal_assignments(assignments):
-    return ", ".join(
-        f"{parameter}->EXP{controller}"
-        for parameter, controller in assignments
-    )
+    return ", ".join(f"{parameter}->EXP{controller}" for parameter, controller in assignments)
 
 
 def remove_inactive_blocks(data):
@@ -189,9 +155,7 @@ def remove_inactive_blocks(data):
     manual_blocks = 0
     affected_presets = 0
 
-    for preset_index, preset in enumerate(
-        data.get("presets", [])
-    ):
+    for preset_index, preset in enumerate(data.get("presets", [])):
         if is_default_preset(preset):
             continue
 
@@ -203,77 +167,40 @@ def remove_inactive_blocks(data):
         removed = []
         manual = []
 
-        for dsp_name, block_name, block in list(
-            iter_effect_blocks(tone)
-        ):
-            if not is_inactive_in_first_snapshots(
-                tone,
-                dsp_name,
-                block_name
-            ):
+        for dsp_name, block_name, block in list(iter_effect_blocks(tone)):
+            if not is_inactive_in_first_snapshots(tone, dsp_name, block_name):
                 continue
 
             model = block.get("@model", "")
             block_type = block.get("@type")
-            pedal_assignments = get_pedal_assignments(
-                tone,
-                dsp_name,
-                block_name
-            )
+            pedal_assignments = get_pedal_assignments(tone, dsp_name, block_name)
 
             if pedal_assignments:
                 manual_blocks += 1
-                manual.append(
-                    (
-                        dsp_name,
-                        block_name,
-                        model,
-                        block_type,
-                        pedal_assignments
-                    )
-                )
+                manual.append((dsp_name, block_name, model, block_type, pedal_assignments))
                 continue
 
             dsp = tone.get(dsp_name)
             del dsp[block_name]
             removed_blocks += 1
-            refs = remove_block_references(
-                tone,
-                dsp_name,
-                block_name
-            )
+            refs = remove_block_references(tone, dsp_name, block_name)
             removed_references += refs
 
-            removed.append(
-                (
-                    dsp_name,
-                    block_name,
-                    model,
-                    block_type,
-                    refs
-                )
-            )
+            removed.append((dsp_name, block_name, model, block_type, refs))
 
         if removed or manual:
             affected_presets += 1
 
         if removed:
             mappings = ", ".join(
-                f"{dsp_name}.{block_name}: "
-                f"{model} (type {block_type}, refs {refs})"
-                for (
-                    dsp_name,
-                    block_name,
-                    model,
-                    block_type,
-                    refs
-                ) in removed
+                f"{dsp_name}.{block_name}: {model} (type {block_type}, refs {refs})"
+                for (dsp_name, block_name, model, block_type, refs) in removed
             )
 
             print(
                 f"[REMOVED] "
                 f"{preset_index_to_helix(preset_index)} "
-                f"\"{get_preset_name(preset)}\": "
+                f'"{get_preset_name(preset)}": '
                 f"{mappings}"
             )
 
@@ -282,29 +209,18 @@ def remove_inactive_blocks(data):
                 f"{dsp_name}.{block_name}: "
                 f"{model} (type {block_type}, "
                 f"{format_pedal_assignments(assignments)})"
-                for (
-                    dsp_name,
-                    block_name,
-                    model,
-                    block_type,
-                    assignments
-                ) in manual
+                for (dsp_name, block_name, model, block_type, assignments) in manual
             )
 
             print(
                 f"[MANUAL] "
                 f"{preset_index_to_helix(preset_index)} "
-                f"\"{get_preset_name(preset)}\": "
+                f'"{get_preset_name(preset)}": '
                 f"inactive in snapshots 1-4 but pedal-bound; "
                 f"please inspect manually: {mappings}"
             )
 
-    return (
-        affected_presets,
-        removed_blocks,
-        removed_references,
-        manual_blocks
-    )
+    return (affected_presets, removed_blocks, removed_references, manual_blocks)
 
 
 def parse_args():
@@ -316,19 +232,9 @@ def parse_args():
         )
     )
 
-    parser.add_argument(
-        "-i",
-        "--input",
-        required=True,
-        help="Input .hls or .hlx file"
-    )
+    parser.add_argument("-i", "--input", required=True, help="Input .hls or .hlx file")
 
-    parser.add_argument(
-        "-o",
-        "--output",
-        required=True,
-        help="Output .hls or .hlx file to create"
-    )
+    parser.add_argument("-o", "--output", required=True, help="Output .hls or .hlx file to create")
 
     return parser.parse_args()
 
@@ -338,32 +244,18 @@ def main():
 
     try:
         require_helix_input_path(args.input, "Input")
-        require_compatible_output_path(
-            args.input,
-            args.output,
-            allow_json=False
-        )
+        require_compatible_output_path(args.input, args.output, allow_json=False)
 
         json_text, original_hls_text = load_input(args.input)
         data = json.loads(json_text)
 
-        (
-            affected_presets,
-            removed_blocks,
-            removed_references,
-            manual_blocks
-        ) = remove_inactive_blocks(data)
-
-        modified_json_text = json.dumps(
-            data,
-            indent=1
+        (affected_presets, removed_blocks, removed_references, manual_blocks) = (
+            remove_inactive_blocks(data)
         )
 
-        save_output(
-            modified_json_text,
-            args.output,
-            original_hls_text
-        )
+        modified_json_text = json.dumps(data, indent=1)
+
+        save_output(modified_json_text, args.output, original_hls_text)
 
     except Exception as e:
         print()
