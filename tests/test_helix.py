@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+import csv
+import json
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from hypothesis import given
+from hypothesis import strategies as st
+
+from matchpatch.devices.base import PatchAssignment, SteeringOptions
+from matchpatch.devices.helix import (
+    HelixDeviceProfile,
+    HelixMidiController,
+    HelixPatchFileHandler,
+)
+
+
+def make_handler(tmp_path: Path) -> HelixPatchFileHandler:
+    return HelixPatchFileHandler(tmp_path)
+
+
+def test_patch_file_validation_and_automation_path(tmp_path) -> None:
+    handler = make_handler(tmp_path)
+    handler.validate_input(Path("setlist.HLS"))
+    handler.validate_input(Path("preset.hlx"))
+    handler.validate_output(Path("preset.hlx"), Path("result.HLX"))
+
+    with pytest.raises(ValueError, match=r"\.hls or \.hlx"):
+        handler.validate_input(Path("setlist.json"))
+    with pytest.raises(ValueError, match=r"\.hlx"):
+        handler.validate_output(Path("preset.hlx"), Path("result.hls"))
+
+    assert handler.automation_output_path(Path("preset.hlx"), "_reamp") == Path("preset_reamp.hlx")
+
+
+def test_parse_and_format_patch_ids(tmp_path) -> None:
+    handler = make_handler(tmp_path)
+
+    assert handler.parse_patch_set(" 01a, 02B,01A ") == [1, 6]
+    assert handler.format_patch_id(6) == "02B"
+
+    for invalid in ("", "0A", "A", "01E"):
+        with pytest.raises(ValueError, match="Helix"):
+            handler.parse_patch_set(invalid)
+
+
+@given(preset_ids=st.lists(st.integers(min_value=1, max_value=128), min_size=1))
+def test_patch_ids_round_trip_and_preserve_first_occurrence(preset_ids: list[int]) -> None:
+    handler = HelixPatchFileHandler(Path("."))
+    formatted = ",".join(handler.format_patch_id(preset_id) for preset_id in preset_ids)
+
+    assert handler.parse_patch_set(formatted) == list(dict.fromkeys(preset_ids))
+
+
+def test_select_preset_ids_for_setlists_and_presets(tmp_path) -> None:
+    handler = make_handler(tmp_path)
+    assignments = [
+        PatchAssignment(1, "01A", "Clean"),
+        PatchAssignment(6, "02B", "Lead"),
+    ]
+
+    assert handler.select_preset_ids(Path("set.hls"), assignments, None) == [1, 6]
+    assert handler.select_preset_ids(Path("set.hls"), assignments, [6]) == [6]
+    assert handler.select_preset_ids(Path("one.hlx"), assignments, [10]) == [10]
+
+    with pytest.raises(ValueError, match="missing"):
+        handler.select_preset_ids(Path("set.hls"), assignments, [2])
+    with pytest.raises(ValueError, match="exactly one"):
+        handler.select_preset_ids(Path("one.hlx"), assignments, None)
+
+
+def test_list_assignments_and_reamp_delegate_to_legacy_script(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    calls = []
+    payload = [{"id": 1, "helix_preset": "01A", "name": "Clean"}]
+
+    def fake_run(*args, capture=False):
+        calls.append((args, capture))
+        return subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+
+    assert handler.list_assignments(Path("set.hls")) == [PatchAssignment(1, "01A", "Clean")]
+    handler.create_reamp_file(Path("set.hls"), Path("reamp.hls"))
+    assert calls[1][0] == ("-i", Path("set.hls"), "-o", Path("reamp.hls"), "--reamp")
+
+
+def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    calls = []
+    completed = subprocess.CompletedProcess([], 0, stdout="ok")
+    monkeypatch.setattr(
+        subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)) or completed
+    )
+
+    assert handler._run("--list-presets", capture=True) is completed
+    command, options = calls[0]
+    assert command[0][0] == sys.executable
+    assert command[0][-1] == "--list-presets"
+    assert options["stdout"] is subprocess.PIPE
+    assert options["stderr"] is subprocess.PIPE
+
+
+def test_apply_analysis_csv_translates_generic_patch_column(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    csv_path = tmp_path / "measurements.csv"
+    csv_path.write_text("Preset,DevicePatch,LUFS1\n1,01A,-15.5\n", encoding="utf-8")
+    seen = {}
+
+    def fake_run(*args, capture=False):
+        legacy = Path(args[args.index("-g") + 1])
+        with legacy.open(newline="", encoding="utf-8") as csv_file:
+            seen["rows"] = list(csv.DictReader(csv_file))
+        seen["args"] = args
+        seen["legacy"] = legacy
+        return subprocess.CompletedProcess([], 0)
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+    handler.apply_analysis_csv(Path("set.hls"), Path("adjusted.hls"), csv_path, True, -16.0)
+
+    assert seen["rows"] == [{"Preset": "1", "HelixPreset": "01A", "LUFS1": "-15.5"}]
+    assert "--ignore-bad-lufs" in seen["args"]
+    assert not seen["legacy"].exists()
+
+
+def test_apply_analysis_csv_omits_optional_flag_and_cleans_up_on_failure(
+    tmp_path, monkeypatch
+) -> None:
+    handler = make_handler(tmp_path)
+    csv_path = tmp_path / "measurements.csv"
+    csv_path.write_text("Preset,DevicePatch\n1,01A\n", encoding="utf-8")
+    seen = {}
+
+    def fail(*args, capture=False):
+        seen["args"] = args
+        seen["legacy"] = Path(args[args.index("-g") + 1])
+        raise RuntimeError("legacy failure")
+
+    monkeypatch.setattr(handler, "_run", fail)
+
+    with pytest.raises(RuntimeError, match="legacy failure"):
+        handler.apply_analysis_csv(Path("set.hls"), Path("out.hls"), csv_path, False, -16)
+
+    assert "--ignore-bad-lufs" not in seen["args"]
+    assert not seen["legacy"].exists()
+
+
+def test_midi_controller_sends_program_and_snapshot_messages(monkeypatch) -> None:
+    sent = []
+    sleeps = []
+    port = SimpleNamespace(send=sent.append, close=lambda: sent.append("closed"))
+    mido = SimpleNamespace(
+        get_output_names=lambda: ["Other", "Line 6 Helix MIDI"],
+        open_output=lambda name: port,
+        Message=lambda message_type, **kwargs: (message_type, kwargs),
+    )
+    monkeypatch.setitem(sys.modules, "mido", mido)
+    monkeypatch.setattr("matchpatch.devices.helix.time.sleep", sleeps.append)
+    options = SteeringOptions("helix", 2, 0.5, 0.05, 0.25)
+
+    with HelixMidiController(options) as controller:
+        controller.activate_preset(6)
+        controller.reapply_snapshot(1)
+        controller.reapply_snapshot(2)
+
+    assert sent[:3] == [
+        ("program_change", {"channel": 2, "program": 5}),
+        ("control_change", {"channel": 2, "control": 69, "value": 1}),
+        ("control_change", {"channel": 2, "control": 69, "value": 0}),
+    ]
+    assert sleeps == [0.5, 0.05, 0.05, 0.05, 0.05]
+    assert sent[-1] == "closed"
+
+
+def test_midi_controller_validates_port_and_ids(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "mido",
+        SimpleNamespace(get_output_names=lambda: [], Message=lambda *args, **kwargs: None),
+    )
+    options = SteeringOptions("helix", 0, 0, 0, 0)
+    controller = HelixMidiController(options)
+
+    with pytest.raises(ValueError, match="matched 0 ports"):
+        controller.__enter__()
+    with pytest.raises(RuntimeError, match="not open"):
+        controller.activate_preset(1)
+    with pytest.raises(ValueError, match="preset"):
+        controller.activate_preset(129)
+    with pytest.raises(ValueError, match="snapshot"):
+        controller.activate_snapshot(9)
+
+    assert controller.__exit__(None, None, None) is None
+
+
+def test_profile_creates_midi_controller() -> None:
+    profile = HelixDeviceProfile()
+    options = profile.default_steering_options()
+
+    assert isinstance(profile.create_controller(options), HelixMidiController)

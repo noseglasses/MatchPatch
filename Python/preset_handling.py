@@ -10,7 +10,6 @@ import re
 import sys
 import zlib
 
-
 # =================================================
 # HELIX CONSTANTS
 # =================================================
@@ -28,13 +27,13 @@ OUTPUT_NAMES = {
     2: "Path 2A",
     3: "Path 2B",
     4: "Send 1/2",
-    5: "1/4\"",
+    5: '1/4"',
     6: "XLR",
     7: "Digital",
     10: "USB 1/2",
     11: "USB 3/4",
     12: "USB 5/6",
-    13: "USB 7/8"
+    13: "USB 7/8",
 }
 
 TARGET_LUFS = -16.0
@@ -51,6 +50,7 @@ GAIN_ADJUSTMENT_DEADBAND_DB = 0.25
 # FILETYPE
 # =================================================
 
+
 def get_filetype(filename):
 
     ext = os.path.splitext(filename)[1].lower()
@@ -64,22 +64,19 @@ def get_filetype(filename):
     if ext == ".json":
         return "json"
 
-    raise ValueError(
-        f"Unsupported file extension: {ext}"
-    )
+    raise ValueError(f"Unsupported file extension: {ext}")
 
 
 # =================================================
 # HLS DECODING
 # =================================================
 
+
 def decode_hls_text(hls_text):
 
     wrapper = json.loads(hls_text)
 
-    compressed = base64.b64decode(
-        wrapper["encoded_data"]
-    )
+    compressed = base64.b64decode(wrapper["encoded_data"])
 
     raw = zlib.decompress(compressed)
 
@@ -88,12 +85,7 @@ def decode_hls_text(hls_text):
 
 def decode_hls_file(filename):
 
-    with open(
-        filename,
-        "r",
-        encoding="utf-8"
-    ) as f:
-
+    with open(filename, "r", encoding="utf-8") as f:
         hls_text = f.read()
 
     json_text = decode_hls_text(hls_text)
@@ -105,6 +97,7 @@ def decode_hls_file(filename):
 # PRESET ASSIGNMENT EXTRACTION
 # =================================================
 
+
 def extract_preset_assignments(data):
 
     assignments = []
@@ -112,7 +105,6 @@ def extract_preset_assignments(data):
     presets = data.get("presets", [])
 
     for preset_index, preset in enumerate(presets):
-
         preset_name = str(get_preset_name(preset)).strip()
 
         if is_default_preset(preset):
@@ -121,10 +113,8 @@ def extract_preset_assignments(data):
         assignments.append(
             {
                 "id": preset_index + 1,
-                "helix_preset": preset_index_to_helix(
-                    preset_index
-                ),
-                "name": preset_name
+                "helix_preset": preset_index_to_helix(preset_index),
+                "name": preset_name,
             }
         )
 
@@ -135,43 +125,31 @@ def extract_preset_assignments(data):
 # SNAPSHOT LEVEL ASSIGNMENT
 # =================================================
 
+
 def get_preset_name(preset):
     meta = preset.get("meta", {})
 
-    return (
-        meta.get("name")
-        or preset.get("name")
-        or preset.get("@name")
-        or ""
-    )
+    return meta.get("name") or preset.get("name") or preset.get("@name") or ""
 
 
 def require_helix_input_path(filename, label):
     filetype = get_filetype(filename)
 
     if filetype not in ["hls", "hlx"]:
-        raise ValueError(
-            f"{label} must be an .hls or .hlx file: {filename}"
-        )
+        raise ValueError(f"{label} must be an .hls or .hlx file: {filename}")
 
     return filetype
 
 
 def require_compatible_output_path(
-    input_filename,
-    output_filename,
-    label="Output",
-    allow_json=True
+    input_filename, output_filename, label="Output", allow_json=True
 ):
     input_filetype = get_filetype(input_filename)
     output_filetype = get_filetype(output_filename)
 
     if input_filetype == "hlx":
         if output_filetype != "hlx":
-            raise ValueError(
-                f"{label} must be an .hlx file when input is .hlx: "
-                f"{output_filename}"
-            )
+            raise ValueError(f"{label} must be an .hlx file when input is .hlx: {output_filename}")
 
         return output_filetype
 
@@ -183,8 +161,7 @@ def require_compatible_output_path(
     if output_filetype not in allowed:
         allowed_text = " or ".join(f".{item}" for item in allowed)
         raise ValueError(
-            f"{label} must be {allowed_text} when input is "
-            f".{input_filetype}: {output_filename}"
+            f"{label} must be {allowed_text} when input is .{input_filetype}: {output_filename}"
         )
 
     return output_filetype
@@ -192,57 +169,36 @@ def require_compatible_output_path(
 
 def wrap_preset_data(data):
     if not isinstance(data, dict):
-        raise ValueError(
-            ".hlx preset content must be a JSON object"
-        )
+        raise ValueError(".hlx preset content must be a JSON object")
 
     if isinstance(data.get("data"), dict):
         preset = data["data"]
 
         if "tone" not in preset:
-            raise ValueError(
-                ".hlx preset data does not contain a tone section"
-            )
+            raise ValueError(".hlx preset data does not contain a tone section")
 
-        return {
-            "presets": [
-                preset
-            ]
-        }
+        return {"presets": [preset]}
 
     if "presets" in data:
-        raise ValueError(
-            ".hlx input must contain one preset, not a setlist"
-        )
+        raise ValueError(".hlx input must contain one preset, not a setlist")
 
     if "tone" not in data:
-        raise ValueError(
-            ".hlx preset content does not contain a tone section"
-        )
+        raise ValueError(".hlx preset content does not contain a tone section")
 
-    return {
-        "presets": [
-            data
-        ]
-    }
+    return {"presets": [data]}
 
 
 def unwrap_preset_data(data):
     presets = data.get("presets")
 
     if not isinstance(presets, list) or len(presets) != 1:
-        raise ValueError(
-            ".hlx output requires exactly one preset"
-        )
+        raise ValueError(".hlx output requires exactly one preset")
 
     return presets[0]
 
 
 def rebuild_hlx_data(original_hlx_data, preset):
-    if (
-        isinstance(original_hlx_data, dict)
-        and isinstance(original_hlx_data.get("data"), dict)
-    ):
+    if isinstance(original_hlx_data, dict) and isinstance(original_hlx_data.get("data"), dict):
         rebuilt = dict(original_hlx_data)
         rebuilt["data"] = preset
         return rebuilt
@@ -289,10 +245,7 @@ def count_controller_assignments(preset):
                 continue
 
             for parameter_controller in block_controller.values():
-                if (
-                    isinstance(parameter_controller, dict)
-                    and "@controller" in parameter_controller
-                ):
+                if isinstance(parameter_controller, dict) and "@controller" in parameter_controller:
                     count += 1
 
     return count
@@ -353,14 +306,8 @@ def get_final_output_blocks(preset):
     chained = is_dsp_chained(preset)
     final_outputs = []
 
-    for dsp_name, output_name, output_block in iter_output_blocks(
-        preset
-    ):
-        if not is_active_signal_dsp(
-            preset,
-            dsp_name,
-            chained
-        ):
+    for dsp_name, output_name, output_block in iter_output_blocks(preset):
+        if not is_active_signal_dsp(preset, dsp_name, chained):
             continue
 
         current_output = output_block.get("@output", 0)
@@ -374,23 +321,13 @@ def get_final_output_blocks(preset):
         if chained and dsp_name != "dsp1":
             continue
 
-        final_outputs.append(
-            (
-                dsp_name,
-                output_name,
-                output_block
-            )
-        )
+        final_outputs.append((dsp_name, output_name, output_block))
 
     return final_outputs
 
 
 def find_gain_output(preset):
-    final_outputs = [
-        output
-        for output in get_final_output_blocks(preset)
-        if "gain" in output[2]
-    ]
+    final_outputs = [output for output in get_final_output_blocks(preset) if "gain" in output[2]]
 
     if not final_outputs:
         return None
@@ -398,10 +335,7 @@ def find_gain_output(preset):
     for selected_output in final_outputs:
         output_block = selected_output[2]
 
-        if output_block.get("@output") in [
-            OUTPUT_XLR,
-            OUTPUT_USB_1_2
-        ]:
+        if output_block.get("@output") in [OUTPUT_XLR, OUTPUT_USB_1_2]:
             return selected_output
 
     return final_outputs[0]
@@ -419,61 +353,34 @@ def get_missing_selected_output_gain_assignment(preset):
     dsp_controller = {}
 
     if isinstance(controller_root, dict):
-        dsp_controller = controller_root.get(
-            dsp_name,
-            {}
-        )
+        dsp_controller = controller_root.get(dsp_name, {})
 
     if not isinstance(dsp_controller, dict):
         dsp_controller = {}
 
-    output_controller = dsp_controller.get(
-        output_name,
-        {}
-    )
+    output_controller = dsp_controller.get(output_name, {})
 
-    if (
-        isinstance(output_controller, dict)
-        and "gain" in output_controller
-    ):
+    if isinstance(output_controller, dict) and "gain" in output_controller:
         return []
 
-    return [
-        (
-            dsp_name,
-            output_name,
-            "gain"
-        )
-    ]
+    return [(dsp_name, output_name, "gain")]
 
 
-def validate_controller_assignment_capacity(
-    data,
-    gain_deltas=None
-):
+def validate_controller_assignment_capacity(data, gain_deltas=None):
     presets = data.get("presets", [])
 
     for preset_index, preset in enumerate(presets):
         if is_default_preset(preset):
             continue
 
-        helix_preset = preset_index_to_helix(
-            preset_index
-        )
+        helix_preset = preset_index_to_helix(preset_index)
 
-        if (
-            gain_deltas is not None
-            and helix_preset not in gain_deltas
-        ):
+        if gain_deltas is not None and helix_preset not in gain_deltas:
             continue
 
-        current_count = count_controller_assignments(
-            preset
-        )
+        current_count = count_controller_assignments(preset)
 
-        missing = get_missing_selected_output_gain_assignment(
-            preset
-        )
+        missing = get_missing_selected_output_gain_assignment(preset)
 
         final_count = current_count + len(missing)
 
@@ -483,15 +390,14 @@ def validate_controller_assignment_capacity(
         preset_name = get_preset_name(preset)
 
         missing_text = ", ".join(
-            f"{dsp_name}.{output_name}.{parameter}"
-            for dsp_name, output_name, parameter in missing
+            f"{dsp_name}.{output_name}.{parameter}" for dsp_name, output_name, parameter in missing
         )
 
         raise ValueError(
             "Cannot assign output gain/level to snapshots: "
             "the Helix controller assignment limit would be "
             f"exceeded for preset {preset_index + 1} "
-            f"({helix_preset}, \"{preset_name}\"). "
+            f'({helix_preset}, "{preset_name}"). '
             f"Current controller assignments: {current_count}. "
             f"Required additional assignments: {len(missing)} "
             f"({missing_text}). "
@@ -511,20 +417,11 @@ def add_selected_output_gain_assignment(preset):
     dsp_name, output_name, _ = selected_output
     tone = preset.get("tone", {})
 
-    controller_root = tone.setdefault(
-        "controller",
-        {}
-    )
+    controller_root = tone.setdefault("controller", {})
 
-    dsp_controller = controller_root.setdefault(
-        dsp_name,
-        {}
-    )
+    dsp_controller = controller_root.setdefault(dsp_name, {})
 
-    output_controller = dsp_controller.setdefault(
-        output_name,
-        {}
-    )
+    output_controller = dsp_controller.setdefault(output_name, {})
 
     if "gain" in output_controller:
         return 0
@@ -533,14 +430,13 @@ def add_selected_output_gain_assignment(preset):
         "@controller": 19,
         "@max": 20.0,
         "@min": -120.0,
-        "@snapshot_disable": False
+        "@snapshot_disable": False,
     }
 
     return 1
 
 
 def assign_snapshot_level(data, gain_deltas=None):
-
     """
     Assigns output level/gain to snapshots by adding
     the matching controller entries.
@@ -557,16 +453,10 @@ def assign_snapshot_level(data, gain_deltas=None):
         if is_default_preset(preset):
             continue
 
-        if (
-            gain_deltas is not None
-            and preset_index_to_helix(preset_index)
-            not in gain_deltas
-        ):
+        if gain_deltas is not None and preset_index_to_helix(preset_index) not in gain_deltas:
             continue
 
-        changes += add_selected_output_gain_assignment(
-            preset
-        )
+        changes += add_selected_output_gain_assignment(preset)
 
     return changes
 
@@ -575,17 +465,11 @@ def assign_snapshot_level(data, gain_deltas=None):
 # LOAD LUFS ANALYSIS FILE
 # =================================================
 
+
 def get_crest_factor_correction(crest_factor_db):
     return min(
-        max(
-            (
-                CREST_FACTOR_REFERENCE_DB
-                - crest_factor_db
-            )
-            * CREST_FACTOR_CORRECTION_RATIO,
-            0.0
-        ),
-        MAX_CREST_FACTOR_CORRECTION_DB
+        max((CREST_FACTOR_REFERENCE_DB - crest_factor_db) * CREST_FACTOR_CORRECTION_RATIO, 0.0),
+        MAX_CREST_FACTOR_CORRECTION_DB,
     )
 
 
@@ -593,30 +477,20 @@ def load_lufs_analysis_file(filename, target_lufs=TARGET_LUFS):
 
     gain_deltas = {}
 
-    with open(
-        filename,
-        "r",
-        encoding="utf-8-sig"
-    ) as f:
-
+    with open(filename, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
 
         for row in reader:
-
             helix_preset = row["HelixPreset"].strip()
 
             if any(
-                str(row.get(key) or "").strip().upper()
-                == LUFS_ERROR_SENTINEL
+                str(row.get(key) or "").strip().upper() == LUFS_ERROR_SENTINEL
                 for i in range(1, 5)
-                for key in [
-                    f"LUFS{i}",
-                    f"CrestFactor{i}"
-                ]
+                for key in [f"LUFS{i}", f"CrestFactor{i}"]
             ):
                 print(
                     f"[WARNING] {helix_preset}: "
-                    "REAPER analysis failed; "
+                    "Helix analysis failed; "
                     "skipping gain adjustment for this preset"
                 )
                 continue
@@ -630,30 +504,15 @@ def load_lufs_analysis_file(filename, target_lufs=TARGET_LUFS):
                 gain_delta = None
 
                 if row.get(lufs_key) and row.get(crest_factor_key):
-                    lufs_value = float(
-                        row[lufs_key]
-                    )
-                    crest_factor_db = float(
-                        row[crest_factor_key]
-                    )
+                    lufs_value = float(row[lufs_key])
+                    crest_factor_db = float(row[crest_factor_key])
 
                     lufs_delta = target_lufs - lufs_value
-                    crest_factor_correction = (
-                        get_crest_factor_correction(
-                            crest_factor_db
-                        )
-                    )
-                    gain_delta = round(
-                        lufs_delta - crest_factor_correction,
-                        1
-                    )
+                    crest_factor_correction = get_crest_factor_correction(crest_factor_db)
+                    gain_delta = round(lufs_delta - crest_factor_correction, 1)
 
                 else:
-                    raise ValueError(
-                        f"Missing {lufs_key} or "
-                        f"{crest_factor_key} "
-                        f"for {helix_preset}"
-                    )
+                    raise ValueError(f"Missing {lufs_key} or {crest_factor_key} for {helix_preset}")
 
                 snapshot_gain_deltas[i - 1] = gain_delta
 
@@ -672,9 +531,7 @@ def normalize_single_preset_gain_deltas(gain_deltas):
     if not gain_deltas:
         return {}
 
-    return {
-        "01A": next(iter(gain_deltas.values()))
-    }
+    return {"01A": next(iter(gain_deltas.values()))}
 
 
 # =================================================
@@ -684,6 +541,7 @@ def normalize_single_preset_gain_deltas(gain_deltas):
 # =================================================
 # ADJUST SNAPSHOT GAINS
 # =================================================
+
 
 def preset_index_to_helix(index):
 
@@ -693,12 +551,7 @@ def preset_index_to_helix(index):
     return f"{bank:02d}{slot}"
 
 
-def get_snapshot_output_gain(
-    snapshot,
-    dsp_name,
-    output_name,
-    base_gain
-):
+def get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain):
     controllers = snapshot.get("controllers")
 
     if not isinstance(controllers, dict):
@@ -725,12 +578,7 @@ def get_snapshot_output_gain(
     return float(gain)
 
 
-def ensure_snapshot_output_gain_values(
-    tone,
-    dsp_name,
-    output_name,
-    base_gain
-):
+def ensure_snapshot_output_gain_values(tone, dsp_name, output_name, base_gain):
     changes = 0
 
     for snapshot_index in range(8):
@@ -739,58 +587,32 @@ def ensure_snapshot_output_gain_values(
         if not isinstance(snapshot, dict):
             continue
 
-        snapshot_controllers = snapshot.setdefault(
-            "controllers",
-            {}
-        )
-        dsp_snapshot = snapshot_controllers.setdefault(
-            dsp_name,
-            {}
-        )
-        output_snapshot = dsp_snapshot.setdefault(
-            output_name,
-            {}
-        )
+        snapshot_controllers = snapshot.setdefault("controllers", {})
+        dsp_snapshot = snapshot_controllers.setdefault(dsp_name, {})
+        output_snapshot = dsp_snapshot.setdefault(output_name, {})
 
         if "gain" in output_snapshot:
             continue
 
-        output_snapshot["gain"] = {
-            "@fs_enabled": False,
-            "@value": base_gain
-        }
+        output_snapshot["gain"] = {"@fs_enabled": False, "@value": base_gain}
         changes += 1
 
     return changes
 
 
-def sync_output_gain_to_current_snapshot(
-    tone,
-    dsp_name,
-    output_name,
-    output_block,
-    base_gain
-):
+def sync_output_gain_to_current_snapshot(tone, dsp_name, output_name, output_block, base_gain):
     global_settings = tone.get("global", {})
     current_snapshot = 0
 
     if isinstance(global_settings, dict):
-        current_snapshot = global_settings.get(
-            "@current_snapshot",
-            0
-        )
+        current_snapshot = global_settings.get("@current_snapshot", 0)
 
     snapshot = tone.get(f"snapshot{current_snapshot}")
 
     if not isinstance(snapshot, dict):
         return False
 
-    snapshot_gain = get_snapshot_output_gain(
-        snapshot,
-        dsp_name,
-        output_name,
-        base_gain
-    )
+    snapshot_gain = get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain)
 
     if output_block.get("gain") == snapshot_gain:
         return False
@@ -799,12 +621,7 @@ def sync_output_gain_to_current_snapshot(
     return True
 
 
-def normalize_snapshot_assigned_output_gain(
-    tone,
-    dsp_name,
-    output_name,
-    output_block
-):
+def normalize_snapshot_assigned_output_gain(tone, dsp_name, output_name, output_block):
     controller_root = tone.get("controller", {})
 
     if not isinstance(controller_root, dict):
@@ -830,19 +647,10 @@ def normalize_snapshot_assigned_output_gain(
 
     base_gain = float(output_block["gain"])
 
-    ensure_snapshot_output_gain_values(
-        tone,
-        dsp_name,
-        output_name,
-        base_gain
-    )
+    ensure_snapshot_output_gain_values(tone, dsp_name, output_name, base_gain)
 
     return sync_output_gain_to_current_snapshot(
-        tone,
-        dsp_name,
-        output_name,
-        output_block,
-        base_gain
+        tone, dsp_name, output_name, output_block, base_gain
     )
 
 
@@ -875,9 +683,7 @@ def normalize_snapshot_assigned_parameters(data):
             if not isinstance(dsp, dict):
                 continue
 
-            for block_name, block_controller in (
-                dsp_controller.items()
-            ):
+            for block_name, block_controller in dsp_controller.items():
                 if not isinstance(block_controller, dict):
                     continue
 
@@ -886,9 +692,7 @@ def normalize_snapshot_assigned_parameters(data):
                 if not isinstance(block, dict):
                     continue
 
-                for parameter, assignment in (
-                    block_controller.items()
-                ):
+                for parameter, assignment in block_controller.items():
                     if not isinstance(assignment, dict):
                         continue
 
@@ -901,40 +705,19 @@ def normalize_snapshot_assigned_parameters(data):
                     base_value = block[parameter]
 
                     for snapshot_index in range(8):
-                        snapshot = tone.get(
-                            f"snapshot{snapshot_index}"
-                        )
+                        snapshot = tone.get(f"snapshot{snapshot_index}")
 
                         if not isinstance(snapshot, dict):
                             continue
 
-                        snapshot_controllers = (
-                            snapshot.setdefault(
-                                "controllers",
-                                {}
-                            )
-                        )
-                        dsp_snapshot = (
-                            snapshot_controllers.setdefault(
-                                dsp_name,
-                                {}
-                            )
-                        )
-                        block_snapshot = dsp_snapshot.setdefault(
-                            block_name,
-                            {}
-                        )
+                        snapshot_controllers = snapshot.setdefault("controllers", {})
+                        dsp_snapshot = snapshot_controllers.setdefault(dsp_name, {})
+                        block_snapshot = dsp_snapshot.setdefault(block_name, {})
 
                         if parameter not in block_snapshot:
-                            block_snapshot[parameter] = {
-                                "@fs_enabled": False,
-                                "@value": base_value
-                            }
+                            block_snapshot[parameter] = {"@fs_enabled": False, "@value": base_value}
 
-                    snapshot = tone.get(
-                        f"snapshot{current_snapshot}",
-                        {}
-                    )
+                    snapshot = tone.get(f"snapshot{current_snapshot}", {})
                     snapshot_value = (
                         snapshot.get("controllers", {})
                         .get(dsp_name, {})
@@ -943,25 +726,16 @@ def normalize_snapshot_assigned_parameters(data):
                     )
 
                     if isinstance(snapshot_value, dict):
-                        snapshot_value = snapshot_value.get(
-                            "@value"
-                        )
+                        snapshot_value = snapshot_value.get("@value")
 
-                    if (
-                        snapshot_value is not None
-                        and block.get(parameter) != snapshot_value
-                    ):
+                    if snapshot_value is not None and block.get(parameter) != snapshot_value:
                         block[parameter] = snapshot_value
                         changes += 1
 
     return changes
 
 
-def adjust_snapshot_gains(
-    data,
-    gain_deltas,
-    ignore_bad_lufs=False
-):
+def adjust_snapshot_gains(data, gain_deltas, ignore_bad_lufs=False):
 
     changes = 0
 
@@ -971,9 +745,7 @@ def adjust_snapshot_gains(
         if is_default_preset(preset):
             continue
 
-        helix_preset = preset_index_to_helix(
-            preset_index
-        )
+        helix_preset = preset_index_to_helix(preset_index)
 
         if helix_preset not in gain_deltas:
             continue
@@ -988,59 +760,33 @@ def adjust_snapshot_gains(
         selected_output = find_gain_output(preset)
 
         if selected_output is None:
-            print(
-                f"[GAIN] {helix_preset}: "
-                f"no active output block found"
-            )
+            print(f"[GAIN] {helix_preset}: no active output block found")
             continue
 
         dsp_name, output_name, output_block = selected_output
 
-        normalize_adjusted_output_to_xlr(
-            preset_index,
-            preset,
-            dsp_name,
-            output_name,
-            output_block
-        )
+        normalize_adjusted_output_to_xlr(preset_index, preset, dsp_name, output_name, output_block)
 
-        base_gain = float(
-            output_block["gain"]
-        )
+        base_gain = float(output_block["gain"])
 
-        ensure_snapshot_output_gain_values(
-            tone,
-            dsp_name,
-            output_name,
-            base_gain
-        )
+        ensure_snapshot_output_gain_values(tone, dsp_name, output_name, base_gain)
 
         # -----------------------------------------
         # ensure snapshot controller exists
         # -----------------------------------------
 
-        controller_root = tone.setdefault(
-            "controller",
-            {}
-        )
+        controller_root = tone.setdefault("controller", {})
 
-        dsp_controller = controller_root.setdefault(
-            dsp_name,
-            {}
-        )
+        dsp_controller = controller_root.setdefault(dsp_name, {})
 
-        output_controller = dsp_controller.setdefault(
-            output_name,
-            {}
-        )
+        output_controller = dsp_controller.setdefault(output_name, {})
 
         if "gain" not in output_controller:
-
             output_controller["gain"] = {
                 "@controller": 19,
                 "@max": 20.0,
                 "@min": -120.0,
-                "@snapshot_disable": False
+                "@snapshot_disable": False,
             }
 
         # -----------------------------------------
@@ -1048,7 +794,6 @@ def adjust_snapshot_gains(
         # -----------------------------------------
 
         for snapshot_index in range(4):
-
             snapshot_key = f"snapshot{snapshot_index}"
             snapshot = tone.get(snapshot_key)
 
@@ -1058,28 +803,16 @@ def adjust_snapshot_gains(
             if snapshot_index not in snapshot_gain_deltas:
                 continue
 
-            snapshot_name = snapshot.get(
-                "@name",
-                f"Snapshot {snapshot_index + 1}"
-            )
+            snapshot_name = snapshot.get("@name", f"Snapshot {snapshot_index + 1}")
 
-            is_solo = (
-                "solo" in snapshot_name.lower()
-            )
+            is_solo = "solo" in snapshot_name.lower()
 
-            gain_delta = snapshot_gain_deltas[
-                snapshot_index
-            ]
+            gain_delta = snapshot_gain_deltas[snapshot_index]
 
             if is_solo:
                 gain_delta += SOLO_GAIN_BUMP
 
-            current_gain = get_snapshot_output_gain(
-                snapshot,
-                dsp_name,
-                output_name,
-                base_gain
-            )
+            current_gain = get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain)
 
             marker = " (S)" if is_solo else ""
 
@@ -1095,10 +828,7 @@ def adjust_snapshot_gains(
                 )
                 continue
 
-            new_gain = round(
-                current_gain + gain_delta,
-                2
-            )
+            new_gain = round(current_gain + gain_delta, 2)
 
             if new_gain < -120.0 or new_gain > 20.0:
                 message = (
@@ -1120,25 +850,13 @@ def adjust_snapshot_gains(
                 )
                 continue
 
-            snapshot_controllers = snapshot.setdefault(
-                "controllers",
-                {}
-            )
+            snapshot_controllers = snapshot.setdefault("controllers", {})
 
-            dsp_snapshot = snapshot_controllers.setdefault(
-                dsp_name,
-                {}
-            )
+            dsp_snapshot = snapshot_controllers.setdefault(dsp_name, {})
 
-            output_snapshot = dsp_snapshot.setdefault(
-                output_name,
-                {}
-            )
+            output_snapshot = dsp_snapshot.setdefault(output_name, {})
 
-            output_snapshot["gain"] = {
-                "@fs_enabled": False,
-                "@value": new_gain
-            }
+            output_snapshot["gain"] = {"@fs_enabled": False, "@value": new_gain}
 
             changes += 1
 
@@ -1152,17 +870,9 @@ def adjust_snapshot_gains(
             )
 
         if sync_output_gain_to_current_snapshot(
-            tone,
-            dsp_name,
-            output_name,
-            output_block,
-            base_gain
+            tone, dsp_name, output_name, output_block, base_gain
         ):
-            print(
-                f"[GAIN] {helix_preset}: "
-                "synchronized output block gain to "
-                "the current snapshot"
-            )
+            print(f"[GAIN] {helix_preset}: synchronized output block gain to the current snapshot")
 
     return changes
 
@@ -1170,6 +880,7 @@ def adjust_snapshot_gains(
 # =================================================
 # TEXTUAL CONVERSION
 # =================================================
+
 
 def output_label(value):
     name = OUTPUT_NAMES.get(value)
@@ -1180,31 +891,19 @@ def output_label(value):
     return f"{name} (id {value})"
 
 
-def warn_non_xlr_output_conversion(
-    preset_index,
-    preset,
-    dsp_name,
-    output_name,
-    current_output
-):
+def warn_non_xlr_output_conversion(preset_index, preset, dsp_name, output_name, current_output):
     print(
         "WARNING: "
         f"{preset_index_to_helix(preset_index)} "
-        f"\"{get_preset_name(preset)}\" "
+        f'"{get_preset_name(preset)}" '
         f"{dsp_name}.{output_name} was "
         f"{output_label(current_output)}, not XLR; "
         "converting final output to USB 1/2 for reamping.",
-        file=sys.stderr
+        file=sys.stderr,
     )
 
 
-def normalize_adjusted_output_to_xlr(
-    preset_index,
-    preset,
-    dsp_name,
-    output_name,
-    output_block
-):
+def normalize_adjusted_output_to_xlr(preset_index, preset, dsp_name, output_name, output_block):
     current_output = output_block.get("@output")
 
     if current_output == OUTPUT_XLR:
@@ -1215,7 +914,7 @@ def normalize_adjusted_output_to_xlr(
     print(
         f"[OUTPUT] "
         f"{preset_index_to_helix(preset_index)} "
-        f"\"{get_preset_name(preset)}\" "
+        f'"{get_preset_name(preset)}" '
         f"{dsp_name}.{output_name}: "
         f"{output_label(current_output)} -> "
         f"{output_label(OUTPUT_XLR)}"
@@ -1257,17 +956,9 @@ def convert_json_text(text, mode):
                     input_block["@input"] = INPUT_MULTI
                     input_changes += 1
 
-        normalize_snapshot_assigned_parameters(
-            {
-                "presets": [
-                    preset
-                ]
-            }
-        )
+        normalize_snapshot_assigned_parameters({"presets": [preset]})
 
-        for dsp_name, output_name, output_block in (
-            get_final_output_blocks(preset)
-        ):
+        for dsp_name, output_name, output_block in get_final_output_blocks(preset):
             current_output = output_block.get("@output")
 
             if mode == "reamp":
@@ -1276,11 +967,7 @@ def convert_json_text(text, mode):
 
                 if current_output != OUTPUT_XLR:
                     warn_non_xlr_output_conversion(
-                        preset_index,
-                        preset,
-                        dsp_name,
-                        output_name,
-                        current_output
+                        preset_index, preset, dsp_name, output_name, current_output
                     )
 
                 output_block["@output"] = OUTPUT_USB_1_2
@@ -1291,25 +978,16 @@ def convert_json_text(text, mode):
                     output_block["@output"] = OUTPUT_XLR
                     output_changes += 1
 
-    return (
-        json.dumps(
-            data,
-            indent=1
-        ),
-        input_changes,
-        output_changes
-    )
+    return (json.dumps(data, indent=1), input_changes, output_changes)
 
 
 # =================================================
 # PROCESS JSON STRUCTURE
 # =================================================
 
+
 def process_json_structure(
-    json_text,
-    gain_deltas=None,
-    assign_output_gain=False,
-    ignore_bad_lufs=False
+    json_text, gain_deltas=None, assign_output_gain=False, ignore_bad_lufs=False
 ):
 
     data = json.loads(json_text)
@@ -1320,82 +998,46 @@ def process_json_structure(
         normalize_snapshot_assigned_parameters(data)
 
     if assign_output_gain:
-        validate_controller_assignment_capacity(
-            data,
-            gain_deltas
-        )
+        validate_controller_assignment_capacity(data, gain_deltas)
 
-        snapshot_changes = assign_snapshot_level(
-            data,
-            gain_deltas
-        )
+        snapshot_changes = assign_snapshot_level(data, gain_deltas)
 
     gain_changes = 0
 
     if gain_deltas is not None:
+        gain_changes = adjust_snapshot_gains(data, gain_deltas, ignore_bad_lufs)
 
-        gain_changes = adjust_snapshot_gains(
-            data,
-            gain_deltas,
-            ignore_bad_lufs
-        )
+    modified_json_text = json.dumps(data, indent=1)
 
-    modified_json_text = json.dumps(
-        data,
-        indent=1
-    )
-
-    return (
-        modified_json_text,
-        snapshot_changes,
-        gain_changes
-    )
+    return (modified_json_text, snapshot_changes, gain_changes)
 
 
 # =================================================
 # BUILD HLS
 # =================================================
 
-def build_hls_text(
-    original_hls_text,
-    modified_json_text
-):
+
+def build_hls_text(original_hls_text, modified_json_text):
 
     raw = modified_json_text.encode("utf-8")
 
     compressed = zlib.compress(raw, level=9)
 
-    encoded_data = base64.b64encode(
-        compressed
-    ).decode("ascii")
+    encoded_data = base64.b64encode(compressed).decode("ascii")
 
     decompressed_size = len(raw)
 
-    crc32 = (
-        binascii.crc32(raw)
-        & 0xffffffff
-    )
+    crc32 = binascii.crc32(raw) & 0xFFFFFFFF
 
     result = original_hls_text
 
     result = re.sub(
-        r'("encoded_data"\s*:\s*")([^"]*)(")',
-        rf'\g<1>{encoded_data}\g<3>',
-        result,
-        flags=re.DOTALL
+        r'("encoded_data"\s*:\s*")([^"]*)(")', rf"\g<1>{encoded_data}\g<3>", result, flags=re.DOTALL
     )
 
-    result = re.sub(
-        r'("decompressed_size"\s*:\s*)(\d+)',
-        rf'\g<1>{decompressed_size}',
-        result
-    )
+    result = re.sub(r'("decompressed_size"\s*:\s*)(\d+)', rf"\g<1>{decompressed_size}", result)
 
-    result = re.sub(
-        r'("crc32"\s*:\s*)(\d+)',
-        rf'\g<1>{crc32}',
-        result
-    )
+    result = re.sub(r'("crc32"\s*:\s*)(\d+)', rf"\g<1>{crc32}", result)
 
     return result
 
@@ -1404,42 +1046,24 @@ def build_hls_text(
 # LOAD INPUT
 # =================================================
 
+
 def load_input(filename):
 
     filetype = get_filetype(filename)
 
     if filetype == "hls":
+        json_text, original_hls_text = decode_hls_file(filename)
 
-        json_text, original_hls_text = (
-            decode_hls_file(filename)
-        )
+        return (json_text, original_hls_text)
 
-        return (
-            json_text,
-            original_hls_text
-        )
-
-    with open(
-        filename,
-        "r",
-        encoding="utf-8"
-    ) as f:
-
+    with open(filename, "r", encoding="utf-8") as f:
         json_text = f.read()
 
     if filetype == "hlx":
         original_hlx_data = json.loads(json_text)
-        data = wrap_preset_data(
-            original_hlx_data
-        )
+        data = wrap_preset_data(original_hlx_data)
 
-        return (
-            json.dumps(
-                data,
-                indent=1
-            ),
-            original_hlx_data
-        )
+        return (json.dumps(data, indent=1), original_hlx_data)
 
     return json_text, None
 
@@ -1448,24 +1072,13 @@ def load_input(filename):
 # SAVE OUTPUT
 # =================================================
 
-def save_output(
-    modified_json_text,
-    output_filename,
-    original_hls_text=None
-):
 
-    filetype = get_filetype(
-        output_filename
-    )
+def save_output(modified_json_text, output_filename, original_hls_text=None):
+
+    filetype = get_filetype(output_filename)
 
     if filetype == "json":
-
-        with open(
-            output_filename,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
+        with open(output_filename, "w", encoding="utf-8") as f:
             f.write(modified_json_text)
 
         return
@@ -1473,68 +1086,35 @@ def save_output(
     if filetype == "hlx":
         data = json.loads(modified_json_text)
         preset = unwrap_preset_data(data)
-        hlx_data = rebuild_hlx_data(
-            original_hls_text,
-            preset
-        )
+        hlx_data = rebuild_hlx_data(original_hls_text, preset)
 
-        with open(
-            output_filename,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            json.dump(
-                hlx_data,
-                f,
-                indent=1
-            )
+        with open(output_filename, "w", encoding="utf-8") as f:
+            json.dump(hlx_data, f, indent=1)
 
         return
 
     if original_hls_text is not None:
+        rebuilt_hls = build_hls_text(original_hls_text, modified_json_text)
 
-        rebuilt_hls = build_hls_text(
-            original_hls_text,
-            modified_json_text
-        )
-
-        with open(
-            output_filename,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
+        with open(output_filename, "w", encoding="utf-8") as f:
             f.write(rebuilt_hls)
 
         return
 
-    raw = modified_json_text.encode(
-        "utf-8"
-    )
+    raw = modified_json_text.encode("utf-8")
 
     compressed = zlib.compress(raw, level=9)
 
     wrapper = {
         "compression": {
-            "crc32": (
-                binascii.crc32(raw)
-                & 0xffffffff
-            ),
+            "crc32": (binascii.crc32(raw) & 0xFFFFFFFF),
             "decompressed_size": len(raw),
-            "type": "zlib"
+            "type": "zlib",
         },
-        "encoded_data": base64.b64encode(
-            compressed
-        ).decode("ascii")
+        "encoded_data": base64.b64encode(compressed).decode("ascii"),
     }
 
-    with open(
-        output_filename,
-        "w",
-        encoding="utf-8"
-    ) as f:
-
+    with open(output_filename, "w", encoding="utf-8") as f:
         json.dump(wrapper, f)
 
 
@@ -1542,41 +1122,21 @@ def save_output(
 # MAIN
 # =================================================
 
+
 def main():
 
-    parser = argparse.ArgumentParser(
-        description=(
-            "Line 6 Helix "
-            "HLS/HLX/JSON Utility"
-        )
-    )
+    parser = argparse.ArgumentParser(description=("Line 6 Helix HLS/HLX/JSON Utility"))
 
-    parser.add_argument(
-        "-i",
-        "--input",
-        required=True,
-        help="Input file (.hls, .hlx, or .json)"
-    )
+    parser.add_argument("-i", "--input", required=True, help="Input file (.hls, .hlx, or .json)")
 
-    parser.add_argument(
-        "-o",
-        "--output",
-        help="Output file (.hls, .hlx, or .json)"
-    )
+    parser.add_argument("-o", "--output", help="Output file (.hls, .hlx, or .json)")
 
-    parser.add_argument(
-        "-g",
-        "--lufs-analysis-file",
-        help="LUFS analysis CSV file"
-    )
+    parser.add_argument("-g", "--lufs-analysis-file", help="LUFS analysis CSV file")
 
     parser.add_argument(
         "--ignore-bad-lufs",
         action="store_true",
-        help=(
-            "Skip implausible LUFS-derived gain values "
-            "instead of aborting"
-        )
+        help=("Skip implausible LUFS-derived gain values instead of aborting"),
     )
 
     parser.add_argument(
@@ -1586,52 +1146,23 @@ def main():
         help=(
             "Target average short-term LUFS value used for gain "
             f"adjustment (default: {TARGET_LUFS:g})"
-        )
+        ),
     )
 
-    mode_group = (
-        parser.add_mutually_exclusive_group(
-            required=True
-        )
-    )
+    mode_group = parser.add_mutually_exclusive_group(required=True)
 
-    mode_group.add_argument(
-        "-r",
-        "--reamp",
-        action="store_true",
-        help=(
-            "Convert "
-            "Multi/XLR -> USB"
-        )
-    )
+    mode_group.add_argument("-r", "--reamp", action="store_true", help=("Convert Multi/XLR -> USB"))
+
+    mode_group.add_argument("-s", "--stage", action="store_true", help=("Convert USB -> Multi/XLR"))
 
     mode_group.add_argument(
-        "-s",
-        "--stage",
-        action="store_true",
-        help=(
-            "Convert "
-            "USB -> Multi/XLR"
-        )
-    )
-
-    mode_group.add_argument(
-        "-a",
-        "--adjust-gain",
-        action="store_true",
-        help=(
-            "Adjust snapshot gains "
-            "using gain CSV"
-        )
+        "-a", "--adjust-gain", action="store_true", help=("Adjust snapshot gains using gain CSV")
     )
 
     mode_group.add_argument(
         "--list-presets",
         action="store_true",
-        help=(
-            "Print non-default preset "
-            "ID/name assignments as JSON"
-        )
+        help=("Print non-default preset ID/name assignments as JSON"),
     )
 
     args = parser.parse_args()
@@ -1639,102 +1170,53 @@ def main():
     try:
         input_filetype = get_filetype(args.input)
 
-        json_text, original_hls_text = (
-            load_input(args.input)
-        )
+        json_text, original_hls_text = load_input(args.input)
 
         if args.list_presets:
-
             data = json.loads(json_text)
-            assignments = extract_preset_assignments(
-                data
-            )
+            assignments = extract_preset_assignments(data)
 
-            json.dump(
-                assignments,
-                sys.stdout,
-                indent=2,
-                ensure_ascii=False
-            )
+            json.dump(assignments, sys.stdout, indent=2, ensure_ascii=False)
 
             print()
 
             return
 
         if not args.output:
+            raise ValueError("Output file is required unless --list-presets is used")
 
-            raise ValueError(
-                "Output file is required "
-                "unless --list-presets is used"
-            )
+        require_compatible_output_path(args.input, args.output)
 
-        require_compatible_output_path(
-            args.input,
-            args.output
-        )
-
-        mode = (
-            "reamp"
-            if args.reamp
-            else "stage"
-            if args.stage
-            else "adjust-gain"
-        )
+        mode = "reamp" if args.reamp else "stage" if args.stage else "adjust-gain"
 
         modified_json_text = json_text
         input_changes = 0
         output_changes = 0
 
         if args.reamp or args.stage:
-            (
-                modified_json_text,
-                input_changes,
-                output_changes
-            ) = convert_json_text(
-                json_text,
-                mode
-            )
+            (modified_json_text, input_changes, output_changes) = convert_json_text(json_text, mode)
 
         gain_deltas = None
 
         if args.adjust_gain:
-
             if not args.lufs_analysis_file:
+                raise ValueError("Adjust gain mode requires -g lufs_analysis.csv")
 
-                raise ValueError(
-                    "Adjust gain mode "
-                    "requires -g lufs_analysis.csv"
-                )
-
-            gain_deltas = load_lufs_analysis_file(
-                args.lufs_analysis_file,
-                args.target_lufs
-            )
+            gain_deltas = load_lufs_analysis_file(args.lufs_analysis_file, args.target_lufs)
 
             if input_filetype == "hlx":
-                gain_deltas = normalize_single_preset_gain_deltas(
-                    gain_deltas
-                )
+                gain_deltas = normalize_single_preset_gain_deltas(gain_deltas)
 
-        (
-            modified_json_text,
-            snapshot_changes,
-            gain_changes
-        ) = process_json_structure(
+        (modified_json_text, snapshot_changes, gain_changes) = process_json_structure(
             modified_json_text,
             gain_deltas,
             args.reamp or args.stage or args.adjust_gain,
-            args.ignore_bad_lufs
+            args.ignore_bad_lufs,
         )
 
-        save_output(
-            modified_json_text,
-            args.output,
-            original_hls_text
-        )
+        save_output(modified_json_text, args.output, original_hls_text)
 
     except Exception as e:
-
         print()
         print(f"ERROR: {e}")
         print()
@@ -1750,30 +1232,17 @@ def main():
     print(f"Output : {args.output}")
 
     if args.lufs_analysis_file:
-
         print(f"LUFSCSV: {args.lufs_analysis_file}")
 
     print()
 
-    print(
-        f"Input replacements : "
-        f"{input_changes}"
-    )
+    print(f"Input replacements : {input_changes}")
 
-    print(
-        f"Output replacements: "
-        f"{output_changes}"
-    )
+    print(f"Output replacements: {output_changes}")
 
-    print(
-        f"Snapshot assignments: "
-        f"{snapshot_changes}"
-    )
+    print(f"Snapshot assignments: {snapshot_changes}")
 
-    print(
-        f"Gain adjustments    : "
-        f"{gain_changes}"
-    )
+    print(f"Gain adjustments    : {gain_changes}")
 
     print()
 

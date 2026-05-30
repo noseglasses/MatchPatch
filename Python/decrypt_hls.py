@@ -12,10 +12,7 @@ def require_extension(path, expected_ext, label):
     ext = os.path.splitext(path)[1].lower()
 
     if ext != expected_ext:
-        raise ValueError(
-            f"{label} must have extension "
-            f"{expected_ext}, got {ext or '<none>'}"
-        )
+        raise ValueError(f"{label} must have extension {expected_ext}, got {ext or '<none>'}")
 
 
 def get_extension(path):
@@ -25,23 +22,17 @@ def get_extension(path):
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Decrypt/unpack a Helix .hls file to JSON, "
-            "or validate/copy a .hlx preset to .hlx"
+            "Decrypt/unpack a Helix .hls file to JSON, or validate/copy a .hlx preset to .hlx"
         )
     )
 
-    parser.add_argument(
-        "-i",
-        "--input",
-        required=True,
-        help="Input .hls or .hlx file"
-    )
+    parser.add_argument("-i", "--input", required=True, help="Input .hls or .hlx file")
 
     parser.add_argument(
         "-o",
         "--output",
         required=True,
-        help="Output .json file for .hls input, or .hlx for .hlx input"
+        help="Output .json file for .hls input, or .hlx for .hlx input",
     )
 
     return parser.parse_args()

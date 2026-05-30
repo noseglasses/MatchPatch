@@ -1,0 +1,69 @@
+[project]
+name = "matchpatch"
+version = "0.1.0"
+description = "Audio processor preset gain normalization and reamping tools"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = []
+
+[project.scripts]
+matchpatch = "matchpatch.cli:main"
+
+[dependency-groups]
+wsl = [
+    "hypothesis>=6.0",
+    "numpy>=2.0",
+    "pre-commit>=4.0",
+    "pyloudnorm>=0.1.1",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.11",
+    "soundfile>=0.13.1",
+    "ty>=0.0.1a21",
+]
+windows = [
+    { include-group = "wsl" },
+    "mido>=1.3.3",
+    "python-rtmidi>=1.5.8; sys_platform == 'win32'",
+    "sounddevice>=0.5.1; sys_platform == 'win32'",
+]
+
+[tool.uv]
+default-groups = []
+
+[tool.pytest.ini_options]
+addopts = [
+    "--cov=matchpatch",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["matchpatch"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["ANN", "E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"Python/**" = ["ANN"]
+"tests/**" = ["ANN"]
+
+[tool.ty.src]
+include = ["src"]
+
+[tool.ty.analysis]
+allowed-unresolved-imports = ["mido", "sounddevice"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

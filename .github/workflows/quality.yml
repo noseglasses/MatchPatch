@@ -1,0 +1,83 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+        python-version:
+          - "3.12"
+          - "3.13"
+          - "3.14"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: Synchronize environment
+        run: uv sync --locked --no-default-groups --group wsl
+
+      - name: Ruff lint
+        run: uv run --frozen --no-default-groups --group wsl ruff check .
+
+      - name: Ruff format check
+        run: uv run --frozen --no-default-groups --group wsl ruff format --check .
+
+      - name: ty
+        run: uv run --frozen --no-default-groups --group wsl ty check
+
+      - name: pytest
+        run: uv run --frozen --no-default-groups --group wsl pytest
+
+  wsl:
+    name: WSL / Python ${{ matrix.python-version }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.12"
+          - "3.13"
+          - "3.14"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Ubuntu on WSL
+        uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-24.04
+          additional-packages: curl ca-certificates
+
+      - name: Run quality checks in WSL
+        shell: wsl-bash {0}
+        run: |
+          cd "$(wslpath '${{ github.workspace }}')"
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          export UV_PYTHON="${{ matrix.python-version }}"
+          uv python install "$UV_PYTHON"
+          uv sync --locked --no-default-groups --group wsl
+          uv run --frozen --no-default-groups --group wsl ruff check .
+          uv run --frozen --no-default-groups --group wsl ruff format --check .
+          uv run --frozen --no-default-groups --group wsl ty check
+          uv run --frozen --no-default-groups --group wsl pytest

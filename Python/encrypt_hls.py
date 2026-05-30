@@ -13,10 +13,7 @@ def require_extension(path, expected_ext, label):
     ext = os.path.splitext(path)[1].lower()
 
     if ext != expected_ext:
-        raise ValueError(
-            f"{label} must have extension "
-            f"{expected_ext}, got {ext or '<none>'}"
-        )
+        raise ValueError(f"{label} must have extension {expected_ext}, got {ext or '<none>'}")
 
 
 def get_extension(path):
@@ -26,23 +23,17 @@ def get_extension(path):
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Encrypt/pack a JSON file to Helix .hls, "
-            "or validate/copy a .hlx preset to .hlx"
+            "Encrypt/pack a JSON file to Helix .hls, or validate/copy a .hlx preset to .hlx"
         )
     )
 
-    parser.add_argument(
-        "-i",
-        "--input",
-        required=True,
-        help="Input .json or .hlx file"
-    )
+    parser.add_argument("-i", "--input", required=True, help="Input .json or .hlx file")
 
     parser.add_argument(
         "-o",
         "--output",
         required=True,
-        help="Output .hls file for .json input, or .hlx for .hlx input"
+        help="Output .hls file for .json input, or .hlx for .hlx input",
     )
 
     return parser.parse_args()
@@ -75,13 +66,11 @@ def main():
 
     wrapper = {
         "compression": {
-            "crc32": binascii.crc32(raw) & 0xffffffff,
+            "crc32": binascii.crc32(raw) & 0xFFFFFFFF,
             "decompressed_size": len(raw),
-            "type": "zlib"
+            "type": "zlib",
         },
-        "encoded_data": base64.b64encode(
-            compressed
-        ).decode("ascii")
+        "encoded_data": base64.b64encode(compressed).decode("ascii"),
     }
 
     with open(args.output, "w", encoding="utf-8") as f:

@@ -1,0 +1,50 @@
+default_install_hook_types:
+  - pre-commit
+  - pre-push
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^Reaper/
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: ruff-lint
+        name: Ruff lint
+        entry: >-
+          bash -c 'export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl";
+          uv run --frozen --no-default-groups --group wsl ruff check .'
+        language: system
+        pass_filenames: false
+
+      - id: ruff-format
+        name: Ruff format check
+        entry: >-
+          bash -c 'export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl";
+          uv run --frozen --no-default-groups --group wsl ruff format --check .'
+        language: system
+        pass_filenames: false
+
+      - id: ty
+        name: ty
+        entry: >-
+          bash -c 'export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl";
+          uv run --frozen --no-default-groups --group wsl ty check'
+        language: system
+        pass_filenames: false
+
+      - id: pytest
+        name: pytest
+        entry: >-
+          bash -c 'export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl";
+          uv run --frozen --no-default-groups --group wsl pytest'
+        language: system
+        pass_filenames: false
+        stages:
+          - pre-push
