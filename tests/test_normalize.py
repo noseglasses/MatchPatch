@@ -103,6 +103,7 @@ def test_run_windows_analysis_builds_worker_command(tmp_path, monkeypatch) -> No
         sample_rate=None,
         input_mapping="1,2",
         output_mapping=None,
+        simulate_fail_presets="6,7",
         timeout=12.0,
     )
     calls = []
@@ -122,7 +123,8 @@ def test_run_windows_analysis_builds_worker_command(tmp_path, monkeypatch) -> No
         "--device",
     ]
     assert "1,6" in command
-    assert ["--audio-device", "Helix"] == command[-6:-4]
+    assert ["--audio-device", "Helix"] == command[-8:-6]
+    assert command[-2:] == ["--simulate-fail-presets", "6,7"]
     assert timeout == 12.0
 
 
@@ -147,6 +149,7 @@ def test_run_windows_analysis_translates_timeout(tmp_path, monkeypatch) -> None:
         sample_rate=None,
         input_mapping=None,
         output_mapping=None,
+        simulate_fail_presets=None,
         timeout=1,
     )
     monkeypatch.setattr(normalize, "wsl_path_to_windows", lambda path: str(path))

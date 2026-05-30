@@ -88,6 +88,7 @@ def run_windows_analysis(
         "--sample-rate": args.sample_rate,
         "--input-mapping": args.input_mapping,
         "--output-mapping": args.output_mapping,
+        "--simulate-fail-presets": args.simulate_fail_presets,
     }
 
     for option, value in optional_values.items():
@@ -113,7 +114,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--target-lufs", type=float, default=-16.0)
     parser.add_argument(
         "--backend",
-        choices=["hardware", "loopback"],
+        choices=["hardware", "loopback", "simulated"],
         default=os.getenv("MATCHPATCH_BACKEND", "hardware"),
     )
     parser.add_argument(
@@ -130,6 +131,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sample-rate", type=int)
     parser.add_argument("--input-mapping")
     parser.add_argument("--output-mapping")
+    parser.add_argument("--simulate-fail-presets")
     parser.add_argument("--timeout", type=float)
     return parser.parse_args(argv)
 
