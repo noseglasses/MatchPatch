@@ -1,8 +1,18 @@
+# Text files
 * text=auto eol=lf
 
+# Windows scripts
+*.cmd eol=crlf
+*.bat eol=crlf
+
+# Shell scripts
+*.sh eol=lf
+
+# Binary files
 *.png binary
 *.jpg binary
 *.jpeg binary
 *.gif binary
-*.ico binary
 *.wav binary
+*.hlx binary
+*.hls binary
