@@ -14,7 +14,12 @@ import soundfile as sf
 
 from matchpatch.analysis import analyze_audio
 from matchpatch.devices import get_device_profile, list_device_profiles
-from matchpatch.devices.base import DeviceController, DeviceProfile, SteeringOptions
+from matchpatch.devices.base import (
+    AudioRouting,
+    DeviceController,
+    DeviceProfile,
+    SteeringOptions,
+)
 
 if TYPE_CHECKING:
     from matchpatch.audio import AudioConfig
@@ -63,6 +68,80 @@ class LoopbackBackend:
 
     def record(self, reference_audio: np.ndarray) -> np.ndarray:
         return reference_audio.copy()
+
+
+class SimulatedHardwareBackend:
+    """Stateful processor simulation for portable integration tests."""
+
+    def __init__(
+        self,
+        routing: AudioRouting,
+        snapshot_count: int,
+        input_mapping: tuple[int, int] | None = None,
+        output_mapping: tuple[int, int] | None = None,
+        failing_preset_ids: frozenset[int] = frozenset(),
+    ) -> None:
+        self.routing = routing
+        self.snapshot_count = snapshot_count
+        self.input_mapping = input_mapping or routing.input_mapping
+        self.output_mapping = output_mapping or routing.output_mapping
+        self.failing_preset_ids = failing_preset_ids
+        self.active_preset_id: int | None = None
+        self.active_snapshot: int | None = None
+        self.steering_events: list[tuple[str, int]] = []
+        self._validate_routing()
+
+    def _validate_routing(self) -> None:
+        if self.input_mapping != self.routing.input_mapping:
+            raise ValueError(
+                f"Simulated processor input mapping must be {self.routing.input_mapping}, "
+                f"got {self.input_mapping}"
+            )
+
+        if self.output_mapping != self.routing.output_mapping:
+            raise ValueError(
+                f"Simulated processor output mapping must be {self.routing.output_mapping}, "
+                f"got {self.output_mapping}"
+            )
+
+    def activate_preset(self, preset_id: int) -> None:
+        if preset_id < 1:
+            raise ValueError(f"Invalid simulated preset ID: {preset_id}")
+
+        if preset_id in self.failing_preset_ids:
+            raise RuntimeError(f"Simulated processor failure for preset {preset_id}")
+
+        self.active_preset_id = preset_id
+        self.active_snapshot = None
+        self.steering_events.append(("preset", preset_id))
+
+    def reapply_snapshot(self, snapshot: int) -> None:
+        if self.active_preset_id is None:
+            raise RuntimeError("Simulated processor preset is not active")
+
+        if snapshot < 1 or snapshot > self.snapshot_count:
+            raise ValueError(f"Invalid simulated snapshot: {snapshot}")
+
+        reload_snapshot = 2 if snapshot == 1 and self.snapshot_count > 1 else 1
+        self.steering_events.append(("snapshot", reload_snapshot))
+        self.steering_events.append(("snapshot", snapshot))
+        self.active_snapshot = snapshot
+
+    def record(self, reference_audio: np.ndarray) -> np.ndarray:
+        if self.active_preset_id is None or self.active_snapshot is None:
+            raise RuntimeError("Simulated processor preset and snapshot must be active")
+
+        gain_db = self._gain_db(self.active_preset_id, self.active_snapshot)
+        processed = reference_audio.astype(np.float64, copy=True) * 10.0 ** (gain_db / 20.0)
+
+        if self.active_snapshot % 2 == 0:
+            processed = np.tanh(processed * 2.0) / 2.0
+
+        return processed
+
+    @staticmethod
+    def _gain_db(preset_id: int, snapshot: int) -> float:
+        return float(((preset_id - 1) % 5 - 2) * 2 + (snapshot - 1))
 
 
 def parse_int_list(value: str) -> list[int]:
@@ -245,6 +324,23 @@ def measure(args: argparse.Namespace) -> None:
         )
         return
 
+    if args.backend == "simulated":
+        measure_presets(
+            profile,
+            args.preset_ids,
+            Path(args.csv),
+            reference,
+            sample_rate,
+            SimulatedHardwareBackend(
+                defaults,
+                profile.snapshot_count,
+                args.input_mapping,
+                args.output_mapping,
+                frozenset(args.simulate_fail_presets),
+            ),
+        )
+        return
+
     from matchpatch.audio import resolve_audio_device
 
     audio_config = resolve_audio_config(args, profile)
@@ -328,9 +424,15 @@ def parse_args() -> argparse.Namespace:
     measure_parser.add_argument("--reference-di", required=True)
     measure_parser.add_argument(
         "--backend",
-        choices=["hardware", "loopback", "helix"],
+        choices=["hardware", "loopback", "simulated", "helix"],
         default="hardware",
-        help="Use processor hardware or an in-process empty-patch simulation",
+        help="Use hardware, empty-patch loopback, or a stateful processor simulation",
+    )
+    measure_parser.add_argument(
+        "--simulate-fail-presets",
+        type=parse_int_list,
+        default=[],
+        help="Comma-separated numeric preset IDs that fail in simulated mode",
     )
     add_hardware_arguments(measure_parser)
 

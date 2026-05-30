@@ -22,6 +22,7 @@ from matchpatch.devices.base import (
 from matchpatch.measure import (
     HardwareBackend,
     LoopbackBackend,
+    SimulatedHardwareBackend,
     csv_fields,
     list_devices,
     load_reference_audio,
@@ -134,6 +135,71 @@ def test_loopback_is_device_independent(tmp_path) -> None:
 
     assert row["DevicePatch"] == "patch-7"
     assert "HelixPreset" not in row
+
+
+def test_simulated_backend_tracks_state_and_modifies_audio() -> None:
+    routing = AudioRouting("processor", 48000, (1, 2), (3, 4))
+    backend = SimulatedHardwareBackend(routing, snapshot_count=4)
+    reference = np.array([[0.1, -0.2], [0.3, -0.4]])
+
+    backend.activate_preset(1)
+    backend.reapply_snapshot(1)
+    first = backend.record(reference)
+    backend.reapply_snapshot(2)
+    second = backend.record(reference)
+
+    assert backend.steering_events == [
+        ("preset", 1),
+        ("snapshot", 2),
+        ("snapshot", 1),
+        ("snapshot", 1),
+        ("snapshot", 2),
+    ]
+    assert first == pytest.approx(reference * 10.0 ** (-4.0 / 20.0))
+    assert second == pytest.approx(np.tanh(reference * 10.0 ** (-3.0 / 20.0) * 2.0) / 2.0)
+
+
+@pytest.mark.parametrize(
+    ("input_mapping", "output_mapping", "message"),
+    [
+        ((7, 8), None, "input mapping"),
+        (None, (7, 8), "output mapping"),
+    ],
+)
+def test_simulated_backend_validates_routing(input_mapping, output_mapping, message) -> None:
+    routing = AudioRouting("processor", 48000, (1, 2), (3, 4))
+
+    with pytest.raises(ValueError, match=message):
+        SimulatedHardwareBackend(routing, 4, input_mapping, output_mapping)
+
+
+def test_simulated_backend_validates_state_and_injected_failures() -> None:
+    backend = SimulatedHardwareBackend(
+        AudioRouting("processor", 48000, (1, 2), (3, 4)),
+        snapshot_count=1,
+        failing_preset_ids=frozenset({6}),
+    )
+    reference = np.ones((2, 2))
+
+    with pytest.raises(RuntimeError, match="must be active"):
+        backend.record(reference)
+    with pytest.raises(RuntimeError, match="preset is not active"):
+        backend.reapply_snapshot(1)
+    with pytest.raises(ValueError, match="preset ID"):
+        backend.activate_preset(0)
+    with pytest.raises(RuntimeError, match="failure"):
+        backend.activate_preset(6)
+
+    backend.activate_preset(1)
+    with pytest.raises(RuntimeError, match="must be active"):
+        backend.record(reference)
+    with pytest.raises(ValueError, match="snapshot"):
+        backend.reapply_snapshot(0)
+    with pytest.raises(ValueError, match="snapshot"):
+        backend.reapply_snapshot(2)
+
+    backend.reapply_snapshot(1)
+    assert backend.steering_events == [("preset", 1), ("snapshot", 1), ("snapshot", 1)]
 
 
 def test_parse_worker_lists_and_channels() -> None:
@@ -297,6 +363,7 @@ def worker_args(**overrides):
         "preset_wait": None,
         "snapshot_wait": None,
         "measurement_wait": None,
+        "simulate_fail_presets": [],
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -311,6 +378,25 @@ def test_measure_dispatches_loopback_without_audio_module(monkeypatch) -> None:
 
     assert isinstance(calls[0][-1], LoopbackBackend)
     assert calls[0][4] == 48000
+
+
+def test_measure_dispatches_stateful_simulator_without_audio_module(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr("matchpatch.measure.load_reference_audio", lambda path, rate: "reference")
+    monkeypatch.setattr("matchpatch.measure.measure_presets", lambda *args: calls.append(args))
+
+    measure(
+        worker_args(
+            backend="simulated",
+            input_mapping=(1, 2),
+            output_mapping=(3, 4),
+            simulate_fail_presets=[6],
+        )
+    )
+
+    backend = calls[0][-1]
+    assert isinstance(backend, SimulatedHardwareBackend)
+    assert backend.failing_preset_ids == frozenset({6})
 
 
 def test_measure_configures_hardware_backend(monkeypatch) -> None:
@@ -410,6 +496,8 @@ def test_worker_parse_args_supports_hardware_aliases(monkeypatch) -> None:
             "port",
             "--input-mapping",
             "1,2",
+            "--simulate-fail-presets",
+            "6,7",
         ],
     )
 
@@ -418,6 +506,7 @@ def test_worker_parse_args_supports_hardware_aliases(monkeypatch) -> None:
     assert args.preset_ids == [1, 6]
     assert args.steering_output == "port"
     assert args.input_mapping == (1, 2)
+    assert args.simulate_fail_presets == [6, 7]
 
 
 def test_worker_main_dispatches_devices_and_legacy_helix_backend(monkeypatch) -> None:
@@ -436,5 +525,10 @@ def test_worker_main_dispatches_devices_and_legacy_helix_backend(monkeypatch) ->
         lambda: SimpleNamespace(command="measure", backend="loopback"),
     )
     main()
+    monkeypatch.setattr(
+        "matchpatch.measure.parse_args",
+        lambda: SimpleNamespace(command="measure", backend="simulated"),
+    )
+    main()
 
-    assert calls == ["devices", "hardware", "loopback"]
+    assert calls == ["devices", "hardware", "loopback", "simulated"]

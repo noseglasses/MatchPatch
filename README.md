@@ -70,7 +70,7 @@ scripts/sync-windows-from-wsl.sh
 ## Try It Without Hardware
 
 Loopback mode simulates an empty processor patch by feeding the reference DI
-directly into the analyzer:
+directly into the analyzer. It is useful for quick signal-analysis smoke tests:
 
 ```bash
 matchpatch normalize \
@@ -80,6 +80,33 @@ matchpatch normalize \
   -o setlist_loopback_adjusted.hls \
   -S 01A \
   --keep-temp
+```
+
+Simulated-hardware mode adds stateful preset and snapshot steering, routing
+validation, deterministic gain differences, and snapshot compression. Use it
+for portable integration testing without USB hardware:
+
+```bash
+matchpatch normalize \
+  --device helix \
+  --backend simulated \
+  -i setlist_original.hls \
+  -o setlist_simulated_adjusted.hls \
+  -S 01A,01B \
+  --keep-temp
+```
+
+The worker can also inject deterministic processor failures for error-path
+tests:
+
+```bash
+python -m matchpatch.measure measure \
+  --device helix \
+  --backend simulated \
+  --simulate-fail-presets 6 \
+  --preset-ids 1,6 \
+  --csv analysis.csv \
+  --reference-di reference.wav
 ```
 
 ## Normalize With A Helix
@@ -123,6 +150,29 @@ Helix defaults:
 |---|---|
 | Processed audio recording | USB `1/2` |
 | Reference DI playback | USB `3/4` |
+
+## Choosing A Reference DI
+
+Use a clean DI measurement track that represents the playing style you want to
+normalize. Patch levels react differently to palm-muted attacks, chords, and
+sustained notes, especially when compression or gain staging varies between
+presets.
+
+The current reference track is intended for a guitarist playing various
+genres, mainly rock. The guitar is tuned to E-flat; the notes below are written
+as played and therefore sound one semitone lower:
+
+- two palm-muted chugs on the low E string;
+- an A5 chord rooted on the low E string;
+- a B5 chord rooted on the low E string;
+- 12th fret on the G string;
+- 12th fret on the B string;
+- 15th fret on the B string;
+- 15th fret on the high E string, ringing out.
+
+Tailor the DI measurement track to the player's style. For instruments other
+than guitar, use a track designed for that instrument's dynamics and frequency
+range.
 
 ## Supported Files
 
