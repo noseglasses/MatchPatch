@@ -6,6 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12,<3.15"
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/noseglasses/MatchPatch"
+Issues = "https://github.com/noseglasses/MatchPatch/issues"
+Repository = "https://github.com/noseglasses/MatchPatch.git"
+
 [project.scripts]
 matchpatch = "matchpatch.cli:main"
 
