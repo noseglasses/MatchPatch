@@ -6,6 +6,7 @@ import argparse
 import csv
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -27,6 +28,7 @@ from matchpatch.devices.base import (
     DeviceProfile,
     SteeringOptions,
 )
+from matchpatch.progress import ProgressEvent
 
 if TYPE_CHECKING:
     from matchpatch.audio import AudioConfig
@@ -221,6 +223,8 @@ def measure_presets(
     *,
     snapshot_count: int | None = None,
     analysis_options: AnalysisOptions = AnalysisOptions(),
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+    log_output: bool = True,
 ) -> None:
     measured_snapshots = snapshot_count if snapshot_count is not None else profile.snapshot_count
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -230,15 +234,40 @@ def measure_presets(
         writer = csv.DictWriter(csv_file, fieldnames=csv_fields(measured_snapshots))
         writer.writeheader()
 
-        for preset_id in preset_ids:
+        for preset_index, preset_id in enumerate(preset_ids, start=1):
             device_patch = handler.format_patch_id(preset_id)
-            print(f"[MEASURE] {profile.name}:{device_patch}", flush=True)
+            _emit_progress(
+                on_progress,
+                ProgressEvent(
+                    "preset_started",
+                    preset_id=preset_id,
+                    device_patch=device_patch,
+                    preset_index=preset_index,
+                    preset_total=len(preset_ids),
+                    snapshot_total=measured_snapshots,
+                ),
+            )
+
+            if log_output:
+                print(f"[MEASURE] {profile.name}:{device_patch}", flush=True)
 
             try:
                 backend.activate_preset(preset_id)
                 results = []
 
                 for snapshot in range(1, measured_snapshots + 1):
+                    _emit_progress(
+                        on_progress,
+                        ProgressEvent(
+                            "snapshot_started",
+                            preset_id=preset_id,
+                            device_patch=device_patch,
+                            preset_index=preset_index,
+                            preset_total=len(preset_ids),
+                            snapshot=snapshot,
+                            snapshot_total=measured_snapshots,
+                        ),
+                    )
                     backend.reapply_snapshot(snapshot)
                     values = analyze_audio(backend.record(reference), sample_rate, analysis_options)
                     results.append(
@@ -247,12 +276,28 @@ def measure_presets(
                             values.crest_factor_db,
                         )
                     )
-                    print(
-                        f"  snapshot {snapshot}: "
-                        f"{values.short_term_lufs:.3f} LUFS, "
-                        f"{values.crest_factor_db:.3f} dB crest",
-                        flush=True,
+                    _emit_progress(
+                        on_progress,
+                        ProgressEvent(
+                            "snapshot_completed",
+                            preset_id=preset_id,
+                            device_patch=device_patch,
+                            preset_index=preset_index,
+                            preset_total=len(preset_ids),
+                            snapshot=snapshot,
+                            snapshot_total=measured_snapshots,
+                            lufs=values.short_term_lufs,
+                            crest_factor_db=values.crest_factor_db,
+                        ),
                     )
+
+                    if log_output:
+                        print(
+                            f"  snapshot {snapshot}: "
+                            f"{values.short_term_lufs:.3f} LUFS, "
+                            f"{values.crest_factor_db:.3f} dB crest",
+                            flush=True,
+                        )
 
                 append_result_row(
                     writer,
@@ -263,11 +308,25 @@ def measure_presets(
                 )
 
             except Exception as exc:
-                print(
-                    f"[ERROR] {profile.name}:{device_patch}: {exc}",
-                    file=sys.stderr,
-                    flush=True,
+                _emit_progress(
+                    on_progress,
+                    ProgressEvent(
+                        "preset_failed",
+                        message=str(exc),
+                        preset_id=preset_id,
+                        device_patch=device_patch,
+                        preset_index=preset_index,
+                        preset_total=len(preset_ids),
+                        snapshot_total=measured_snapshots,
+                    ),
                 )
+
+                if log_output:
+                    print(
+                        f"[ERROR] {profile.name}:{device_patch}: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 append_result_row(
                     writer,
                     preset_id,
@@ -277,6 +336,16 @@ def measure_presets(
                 )
 
             csv_file.flush()
+
+    _emit_progress(on_progress, ProgressEvent("measurement_completed"))
+
+
+def _emit_progress(
+    callback: Callable[[ProgressEvent], None] | None,
+    event: ProgressEvent,
+) -> None:
+    if callback is not None:
+        callback(event)
 
 
 def resolve_audio_config(args: argparse.Namespace, profile: DeviceProfile) -> AudioConfig:
@@ -325,6 +394,8 @@ def measure(args: argparse.Namespace) -> None:
     reference = load_reference_audio(Path(args.reference_di), sample_rate)
     snapshot_count = getattr(args, "snapshot_count", None) or profile.snapshot_count
     analysis_options = getattr(args, "analysis_options", AnalysisOptions())
+    on_progress = getattr(args, "on_progress", None)
+    log_output = not getattr(args, "progress_jsonl", False)
 
     if args.backend == "loopback":
         measure_presets(
@@ -336,6 +407,8 @@ def measure(args: argparse.Namespace) -> None:
             LoopbackBackend(),
             snapshot_count=snapshot_count,
             analysis_options=analysis_options,
+            on_progress=on_progress,
+            log_output=log_output,
         )
         return
 
@@ -355,6 +428,8 @@ def measure(args: argparse.Namespace) -> None:
             ),
             snapshot_count=snapshot_count,
             analysis_options=analysis_options,
+            on_progress=on_progress,
+            log_output=log_output,
         )
         return
 
@@ -378,6 +453,8 @@ def measure(args: argparse.Namespace) -> None:
             ),
             snapshot_count=snapshot_count,
             analysis_options=analysis_options,
+            on_progress=on_progress,
+            log_output=log_output,
         )
 
 
@@ -541,6 +618,7 @@ def parse_args() -> argparse.Namespace:
     measure_parser.add_argument("--analysis-window", type=float)
     measure_parser.add_argument("--analysis-interval", type=float)
     measure_parser.add_argument("--minimum-valid-lufs", type=float)
+    measure_parser.add_argument("--progress-jsonl", action="store_true")
     add_hardware_arguments(measure_parser)
 
     args = parser.parse_args()
@@ -555,6 +633,8 @@ def main() -> None:
     else:
         if args.backend == "helix":
             args.backend = "hardware"
+        if getattr(args, "progress_jsonl", False):
+            args.on_progress = lambda event: print(event.to_json(), flush=True)
         measure(args)
 
 

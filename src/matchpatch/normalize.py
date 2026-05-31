@@ -5,15 +5,20 @@ from __future__ import annotations
 import argparse
 import csv
 import os
-import shutil
+import queue
 import subprocess
 import tempfile
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from matchpatch.analysis import AnalysisOptions
 from matchpatch.config import Config, config_value, load_config, parse_channel_mapping, prefer
 from matchpatch.devices import get_device_profile
 from matchpatch.devices.base import NormalizationPolicy
+from matchpatch.progress import ProgressEvent
+from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_presets
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_WINDOWS_PYTHON = PROJECT_DIR / ".venv-windows" / "Scripts" / "python.exe"
@@ -152,9 +157,11 @@ def wait_for_user_confirmation(message: str) -> None:
 
 
 def run_windows_analysis(
-    args: argparse.Namespace,
+    args: argparse.Namespace | NormalizationRequest,
     preset_ids: list[int],
     csv_path: Path,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> None:
     windows_python = Path(args.windows_python).resolve()
 
@@ -207,10 +214,75 @@ def run_windows_analysis(
         if value is not None:
             command.extend([option, value])
 
+    if on_progress is None:
+        try:
+            run_command(command, timeout=args.timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("Timed out waiting for native Windows analysis") from exc
+        return
+
+    command.append("--progress-jsonl")
+    _run_progress_command(command, args.timeout, on_progress, cancel_requested)
+
+
+def _run_progress_command(
+    command: list[object],
+    timeout: float | None,
+    on_progress: Callable[[ProgressEvent], None],
+    cancel_requested: Callable[[], bool] | None = None,
+) -> None:
+    process = subprocess.Popen(  # noqa: S603
+        [str(arg) for arg in command],
+        text=True,
+        stdout=subprocess.PIPE,
+        bufsize=1,
+    )
+    lines: queue.Queue[str | None] = queue.Queue()
+
+    def read_stdout() -> None:
+        assert process.stdout is not None
+
+        for line in process.stdout:
+            lines.put(line)
+
+        lines.put(None)
+
+    threading.Thread(target=read_stdout, daemon=True).start()
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    stream_open = True
+
     try:
-        run_command(command, timeout=args.timeout)
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError("Timed out waiting for native Windows analysis") from exc
+        while stream_open or process.poll() is None:
+            if cancel_requested is not None and cancel_requested():
+                raise RuntimeError("Normalization cancelled by user")
+
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("Timed out waiting for native Windows analysis")
+
+            try:
+                line = lines.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            if line is None:
+                stream_open = False
+                continue
+
+            try:
+                on_progress(ProgressEvent.from_json(line))
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Invalid progress output from native Windows analysis: {line}"
+                ) from exc
+
+        return_code = process.wait()
+
+        if return_code:
+            raise subprocess.CalledProcessError(return_code, [str(arg) for arg in command])
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -250,54 +322,63 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def request_from_args(args: argparse.Namespace) -> NormalizationRequest:
+    return NormalizationRequest(
+        device=args.device,
+        input_path=Path(args.input),
+        output_path=Path(args.output) if args.output else None,
+        automation=args.automation,
+        preset_set=args.preset_set,
+        limit=args.limit,
+        keep_temp=args.keep_temp,
+        ignore_bad_lufs=args.ignore_bad_lufs,
+        target_lufs=args.target_lufs,
+        backend=args.backend,
+        windows_python=args.windows_python,
+        reference_di=Path(args.reference_di),
+        audio_device=args.audio_device,
+        sample_rate=args.sample_rate,
+        input_mapping=args.input_mapping,
+        output_mapping=args.output_mapping,
+        blocksize=args.blocksize,
+        steering_output=args.steering_output,
+        steering_channel=args.steering_channel,
+        preset_wait=args.preset_wait,
+        snapshot_wait=args.snapshot_wait,
+        measurement_wait=args.measurement_wait,
+        simulate_fail_presets=args.simulate_fail_presets,
+        timeout=args.timeout,
+        policy=args.policy,
+        analysis_options=args.analysis_options,
+    )
+
+
+def _cli_confirm_import(request: ImportRequest) -> bool:
+    wait_for_user_confirmation(request.message)
+    return True
+
+
+def _cli_progress(event: ProgressEvent) -> None:
+    if event.phase == "preparing_reamp":
+        print("Creating reamp file")
+    elif event.phase == "applying":
+        print("Applying gain adjustments")
+    elif event.kind == "temp_retained":
+        print(event.message)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = apply_config(parse_args(argv))
-    profile = get_device_profile(args.device)
-    handler = profile.create_patch_file_handler(PROJECT_DIR)
-    input_path = Path(args.input).resolve()
-    handler.validate_input(input_path)
+    request = request_from_args(args)
 
-    if not Path(args.reference_di).is_file():
-        raise ValueError(f"Reference DI WAV does not exist: {args.reference_di}")
-
-    if args.automation:
-        if args.output:
-            raise ValueError("--output must not be specified with --automation")
-
-        reamp_path = handler.automation_output_path(input_path, "_reamp")
-        output_path = handler.automation_output_path(input_path, "_adjusted")
-        print(f"Creating reamp file: {reamp_path}")
-        handler.create_reamp_file(input_path, reamp_path)
-        wait_for_user_confirmation(
-            f"Please import this reamp file into {profile.display_name}:\n{reamp_path}"
-        )
-    else:
-        if not args.output:
-            raise ValueError("--output is required unless --automation is used")
-
-        output_path = Path(args.output).resolve()
-        handler.validate_output(input_path, output_path)
-
-    requested_ids = (
-        handler.parse_patch_set(args.preset_set) if args.preset_set is not None else None
-    )
-    assignments = handler.list_assignments(input_path)
-    preset_ids = handler.select_preset_ids(input_path, assignments, requested_ids)
-
-    if args.limit is not None:
-        if args.limit < 1:
-            raise ValueError("--limit must be at least 1")
-
-        preset_ids = preset_ids[: args.limit]
-
-    if not preset_ids:
-        raise ValueError("Patch file contains no measurable presets")
-
-    temp_dir = Path(tempfile.mkdtemp(prefix="matchpatch_gain_", dir=PROJECT_DIR))
-    success = False
-
-    try:
-        csv_path = temp_dir / "lufs_analysis.csv"
+    def run_analysis(
+        workflow_request: NormalizationRequest,
+        preset_ids: list[int],
+        csv_path: Path,
+        on_progress: Callable[[ProgressEvent], None] | None,
+    ) -> None:
+        profile = get_device_profile(workflow_request.device)
+        handler = profile.create_patch_file_handler(PROJECT_DIR)
         print(f"Device     : {profile.name}")
         print(f"Preset set : {','.join(str(preset_id) for preset_id in preset_ids)}")
         print(
@@ -307,34 +388,14 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Temp CSV   : {csv_path}")
         run_windows_analysis(args, preset_ids, csv_path)
 
-        measured_rows = count_csv_rows(csv_path)
-
-        if measured_rows != len(preset_ids):
-            raise RuntimeError(
-                f"Windows analysis wrote {measured_rows} rows for {len(preset_ids)} presets"
-            )
-
-        handler.apply_analysis_csv(
-            input_path,
-            output_path,
-            csv_path,
-            args.ignore_bad_lufs,
-            args.target_lufs,
-            args.policy,
-        )
-        success = True
-
-    finally:
-        if args.keep_temp or not success:
-            print(f"Kept temp  : {temp_dir}")
-        else:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
+    result = normalize_presets(
+        request,
+        run_analysis=run_analysis,
+        on_progress=_cli_progress,
+        confirm_import=_cli_confirm_import if request.automation else None,
+        get_profile=get_device_profile,
+        make_temp_dir=lambda: Path(tempfile.mkdtemp(prefix="matchpatch_gain_", dir=PROJECT_DIR)),
+    )
     print()
     print("[OK] Gain-adjusted patch file written")
-    print(f"Output: {output_path}")
-
-    if args.automation:
-        wait_for_user_confirmation(
-            f"Please import this adjusted file into {profile.display_name}:\n{output_path}"
-        )
+    print(f"Output: {result.output_path}")
