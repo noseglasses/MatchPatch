@@ -156,7 +156,7 @@ minimum_valid_lufs = -90.0
     assert args.blocksize == 128
     assert args.steering_output == "Configured MIDI"
     assert args.policy.snapshot_count == 3
-    assert args.policy.solo_marker == "lead"
+    assert args.policy.solo_regex == "lead"
     assert args.analysis_options.window_seconds == 2.0
 
 
@@ -165,6 +165,18 @@ def test_apply_config_rejects_invalid_snapshot_count(tmp_path) -> None:
     config_path.write_text("[policy]\nmeasured_snapshots = 0\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="at least 1"):
+        normalize.apply_config(
+            normalize.parse_args(
+                ["--config", str(config_path), "--device", "helix", "-i", "input.hls"]
+            )
+        )
+
+
+def test_apply_config_rejects_invalid_solo_regex(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[policy]\nsolo_regex = '('\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid solo snapshot regex"):
         normalize.apply_config(
             normalize.parse_args(
                 ["--config", str(config_path), "--device", "helix", "-i", "input.hls"]
@@ -255,6 +267,7 @@ def test_progress_command_parses_json_lines(monkeypatch) -> None:
 
     class FakeProcess:
         stdout = ['{"kind":"preset_started","device_patch":"01A"}\n']
+        stderr = []
 
         def poll(self):
             return 0
@@ -267,6 +280,26 @@ def test_progress_command_parses_json_lines(monkeypatch) -> None:
     normalize._run_progress_command(["worker"], None, events.append)
 
     assert events == [normalize.ProgressEvent("preset_started", device_patch="01A")]
+
+
+def test_progress_command_forwards_stderr_as_log_event(monkeypatch) -> None:
+    events = []
+
+    class FakeProcess:
+        stdout = []
+        stderr = ["worker detail\n"]
+
+        def poll(self):
+            return 0
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(normalize.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+
+    normalize._run_progress_command(["worker"], None, events.append)
+
+    assert events == [normalize.ProgressEvent("error_log", message="worker detail")]
 
 
 def test_main_runs_measurement_and_applies_csv(tmp_path, monkeypatch) -> None:

@@ -200,7 +200,7 @@ measurement_wait_seconds = 0.5
 
 [policy]
 measured_snapshots = 4
-solo_marker = "solo"
+solo_regex = '(?i)\bsolo\b'
 solo_gain_bump_db = 3.0
 crest_factor_reference_db = 12.0
 crest_factor_correction_ratio = 0.4
@@ -333,3 +333,7 @@ then publishes to PyPI through GitHub OIDC without a stored API token.
 The project logo and square icons live under `doc/assets/`. Use
 `matchmatch-icon-512.png` for GitHub's social preview and future application
 packaging.
+
+## License
+
+MatchPatch is open source software released under the [MIT License](LICENSE).

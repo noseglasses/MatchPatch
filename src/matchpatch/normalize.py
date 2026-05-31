@@ -6,12 +6,15 @@ import argparse
 import csv
 import os
 import queue
+import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from matchpatch.analysis import AnalysisOptions
 from matchpatch.config import Config, config_value, load_config, parse_channel_mapping, prefer
@@ -36,11 +39,23 @@ def _mapping_argument(value: object | None) -> str | None:
     return ",".join(str(channel) for channel in parse_channel_mapping(value))
 
 
-def _normalization_policy(config: Config) -> NormalizationPolicy:
+def _normalization_policy(config: Config, args: argparse.Namespace) -> NormalizationPolicy:
     policy = NormalizationPolicy(
         snapshot_count=config_value(config, "policy", "measured_snapshots", default=4),
-        solo_marker=config_value(config, "policy", "solo_marker", default="solo"),
-        solo_gain_bump_db=config_value(config, "policy", "solo_gain_bump_db", default=3.0),
+        solo_regex=cast(
+            str,
+            prefer(
+                args.solo_regex,
+                config,
+                "policy",
+                "solo_regex",
+                default=config_value(config, "policy", "solo_marker", default=r"(?i)\bsolo\b"),
+            ),
+        ),
+        solo_gain_bump_db=cast(
+            float,
+            prefer(args.solo_gain_bump_db, config, "policy", "solo_gain_bump_db", default=3.0),
+        ),
         crest_factor_reference_db=config_value(
             config, "policy", "crest_factor_reference_db", default=12.0
         ),
@@ -55,6 +70,10 @@ def _normalization_policy(config: Config) -> NormalizationPolicy:
 
     if policy.snapshot_count < 1:
         raise ValueError("Configured measured snapshot count must be at least 1")
+    try:
+        re.compile(policy.solo_regex)
+    except re.error as exc:
+        raise ValueError(f"Invalid solo snapshot regex: {exc}") from exc
 
     return policy
 
@@ -93,13 +112,7 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     )
     args.target_lufs = prefer(args.target_lufs, config, "normalize", "target_lufs", default=-16.0)
     args.timeout = prefer(args.timeout, config, "normalize", "timeout_seconds")
-    args.ignore_bad_lufs = prefer(
-        args.ignore_bad_lufs,
-        config,
-        "normalize",
-        "ignore_bad_lufs",
-        default=False,
-    )
+    args.ignore_bad_lufs = True
     args.audio_device = prefer(args.audio_device, config, *device_audio, "device")
     args.sample_rate = prefer(args.sample_rate, config, *device_audio, "sample_rate")
     args.input_mapping = _mapping_argument(
@@ -121,7 +134,7 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
         *device_steering,
         "measurement_wait_seconds",
     )
-    args.policy = _normalization_policy(config)
+    args.policy = _normalization_policy(config, args)
     args.analysis_options = _analysis_options(config)
     return args
 
@@ -235,24 +248,27 @@ def _run_progress_command(
         [str(arg) for arg in command],
         text=True,
         stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         bufsize=1,
     )
-    lines: queue.Queue[str | None] = queue.Queue()
+    lines: queue.Queue[tuple[str, str] | None] = queue.Queue()
 
-    def read_stdout() -> None:
-        assert process.stdout is not None
+    def read_stream(name: str) -> None:
+        stream = getattr(process, name)
+        assert stream is not None
 
-        for line in process.stdout:
-            lines.put(line)
+        for line in stream:
+            lines.put((name, line))
 
         lines.put(None)
 
-    threading.Thread(target=read_stdout, daemon=True).start()
+    threading.Thread(target=read_stream, args=("stdout",), daemon=True).start()
+    threading.Thread(target=read_stream, args=("stderr",), daemon=True).start()
     deadline = time.monotonic() + timeout if timeout is not None else None
-    stream_open = True
+    open_streams = 2
 
     try:
-        while stream_open or process.poll() is None:
+        while open_streams or process.poll() is None:
             if cancel_requested is not None and cancel_requested():
                 raise RuntimeError("Normalization cancelled by user")
 
@@ -265,14 +281,19 @@ def _run_progress_command(
                 continue
 
             if line is None:
-                stream_open = False
+                open_streams -= 1
+                continue
+
+            stream_name, text = line
+            if stream_name == "stderr":
+                on_progress(ProgressEvent("error_log", message=text.rstrip()))
                 continue
 
             try:
-                on_progress(ProgressEvent.from_json(line))
+                on_progress(ProgressEvent.from_json(text))
             except ValueError as exc:
                 raise RuntimeError(
-                    f"Invalid progress output from native Windows analysis: {line}"
+                    f"Invalid progress output from native Windows analysis: {text}"
                 ) from exc
 
         return_code = process.wait()
@@ -295,8 +316,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("-S", "--preset-set")
     parser.add_argument("-n", "--limit", type=int)
     parser.add_argument("--keep-temp", action="store_true")
-    parser.add_argument("--ignore-bad-lufs", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--target-lufs", type=float)
+    parser.add_argument("--solo-regex")
+    parser.add_argument("--solo-gain-bump-db", type=float)
     parser.add_argument(
         "--backend",
         choices=["hardware", "loopback", "simulated"],
@@ -365,6 +387,10 @@ def _cli_progress(event: ProgressEvent) -> None:
         print("Applying gain adjustments")
     elif event.kind == "temp_retained":
         print(event.message)
+    elif event.kind == "log":
+        print(event.message)
+    elif event.kind == "error_log":
+        print(event.message, file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> None:

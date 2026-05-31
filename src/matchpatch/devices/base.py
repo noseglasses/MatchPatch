@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -14,6 +15,7 @@ class PatchAssignment:
     id: int
     device_patch: str
     name: str
+    snapshot_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -36,7 +38,7 @@ class SteeringOptions:
 @dataclass(frozen=True)
 class NormalizationPolicy:
     snapshot_count: int = 4
-    solo_marker: str = "solo"
+    solo_regex: str = r"(?i)\bsolo\b"
     solo_gain_bump_db: float = 3.0
     crest_factor_reference_db: float = 12.0
     crest_factor_correction_ratio: float = 0.4
@@ -66,6 +68,10 @@ class DeviceController(ABC):
 
 
 class PatchFileHandler(ABC):
+    def set_log_callback(self, callback: Callable[[str], None] | None) -> None:
+        """Receive device-specific utility output when a front end wants it."""
+        return None
+
     @abstractmethod
     def validate_input(self, input_path: Path) -> None:
         """Validate an input setlist or preset file."""
