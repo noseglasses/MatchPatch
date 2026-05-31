@@ -466,14 +466,26 @@ def assign_snapshot_level(data, gain_deltas=None):
 # =================================================
 
 
-def get_crest_factor_correction(crest_factor_db):
+def get_crest_factor_correction(
+    crest_factor_db,
+    reference_db=CREST_FACTOR_REFERENCE_DB,
+    correction_ratio=CREST_FACTOR_CORRECTION_RATIO,
+    max_correction_db=MAX_CREST_FACTOR_CORRECTION_DB,
+):
     return min(
-        max((CREST_FACTOR_REFERENCE_DB - crest_factor_db) * CREST_FACTOR_CORRECTION_RATIO, 0.0),
-        MAX_CREST_FACTOR_CORRECTION_DB,
+        max((reference_db - crest_factor_db) * correction_ratio, 0.0),
+        max_correction_db,
     )
 
 
-def load_lufs_analysis_file(filename, target_lufs=TARGET_LUFS):
+def load_lufs_analysis_file(
+    filename,
+    target_lufs=TARGET_LUFS,
+    snapshot_count=4,
+    crest_factor_reference_db=CREST_FACTOR_REFERENCE_DB,
+    crest_factor_correction_ratio=CREST_FACTOR_CORRECTION_RATIO,
+    max_crest_factor_correction_db=MAX_CREST_FACTOR_CORRECTION_DB,
+):
 
     gain_deltas = {}
 
@@ -485,7 +497,7 @@ def load_lufs_analysis_file(filename, target_lufs=TARGET_LUFS):
 
             if any(
                 str(row.get(key) or "").strip().upper() == LUFS_ERROR_SENTINEL
-                for i in range(1, 5)
+                for i in range(1, snapshot_count + 1)
                 for key in [f"LUFS{i}", f"CrestFactor{i}"]
             ):
                 print(
@@ -497,7 +509,7 @@ def load_lufs_analysis_file(filename, target_lufs=TARGET_LUFS):
 
             snapshot_gain_deltas = {}
 
-            for i in range(1, 5):
+            for i in range(1, snapshot_count + 1):
                 lufs_key = f"LUFS{i}"
                 crest_factor_key = f"CrestFactor{i}"
 
@@ -508,7 +520,12 @@ def load_lufs_analysis_file(filename, target_lufs=TARGET_LUFS):
                     crest_factor_db = float(row[crest_factor_key])
 
                     lufs_delta = target_lufs - lufs_value
-                    crest_factor_correction = get_crest_factor_correction(crest_factor_db)
+                    crest_factor_correction = get_crest_factor_correction(
+                        crest_factor_db,
+                        crest_factor_reference_db,
+                        crest_factor_correction_ratio,
+                        max_crest_factor_correction_db,
+                    )
                     gain_delta = round(lufs_delta - crest_factor_correction, 1)
 
                 else:
@@ -735,7 +752,15 @@ def normalize_snapshot_assigned_parameters(data):
     return changes
 
 
-def adjust_snapshot_gains(data, gain_deltas, ignore_bad_lufs=False):
+def adjust_snapshot_gains(
+    data,
+    gain_deltas,
+    ignore_bad_lufs=False,
+    snapshot_count=4,
+    solo_marker="solo",
+    solo_gain_bump_db=SOLO_GAIN_BUMP,
+    gain_deadband_db=GAIN_ADJUSTMENT_DEADBAND_DB,
+):
 
     changes = 0
 
@@ -790,10 +815,10 @@ def adjust_snapshot_gains(data, gain_deltas, ignore_bad_lufs=False):
             }
 
         # -----------------------------------------
-        # process first 4 view snapshots only
+        # process measured view snapshots only
         # -----------------------------------------
 
-        for snapshot_index in range(4):
+        for snapshot_index in range(snapshot_count):
             snapshot_key = f"snapshot{snapshot_index}"
             snapshot = tone.get(snapshot_key)
 
@@ -805,12 +830,12 @@ def adjust_snapshot_gains(data, gain_deltas, ignore_bad_lufs=False):
 
             snapshot_name = snapshot.get("@name", f"Snapshot {snapshot_index + 1}")
 
-            is_solo = "solo" in snapshot_name.lower()
+            is_solo = solo_marker.lower() in snapshot_name.lower()
 
             gain_delta = snapshot_gain_deltas[snapshot_index]
 
             if is_solo:
-                gain_delta += SOLO_GAIN_BUMP
+                gain_delta += solo_gain_bump_db
 
             current_gain = get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain)
 
@@ -818,7 +843,7 @@ def adjust_snapshot_gains(data, gain_deltas, ignore_bad_lufs=False):
 
             delta_text = f"Delta: {gain_delta:+.1f} dB"
 
-            if abs(gain_delta) <= GAIN_ADJUSTMENT_DEADBAND_DB:
+            if abs(gain_delta) <= gain_deadband_db:
                 print(
                     f"[GAIN] "
                     f"{helix_preset} "
@@ -987,7 +1012,14 @@ def convert_json_text(text, mode):
 
 
 def process_json_structure(
-    json_text, gain_deltas=None, assign_output_gain=False, ignore_bad_lufs=False
+    json_text,
+    gain_deltas=None,
+    assign_output_gain=False,
+    ignore_bad_lufs=False,
+    snapshot_count=4,
+    solo_marker="solo",
+    solo_gain_bump_db=SOLO_GAIN_BUMP,
+    gain_deadband_db=GAIN_ADJUSTMENT_DEADBAND_DB,
 ):
 
     data = json.loads(json_text)
@@ -1005,7 +1037,15 @@ def process_json_structure(
     gain_changes = 0
 
     if gain_deltas is not None:
-        gain_changes = adjust_snapshot_gains(data, gain_deltas, ignore_bad_lufs)
+        gain_changes = adjust_snapshot_gains(
+            data,
+            gain_deltas,
+            ignore_bad_lufs,
+            snapshot_count,
+            solo_marker,
+            solo_gain_bump_db,
+            gain_deadband_db,
+        )
 
     modified_json_text = json.dumps(data, indent=1)
 
@@ -1149,6 +1189,36 @@ def main():
         ),
     )
 
+    parser.add_argument("--snapshot-count", type=int, default=4)
+
+    parser.add_argument("--solo-marker", default="solo")
+
+    parser.add_argument("--solo-gain-bump-db", type=float, default=SOLO_GAIN_BUMP)
+
+    parser.add_argument(
+        "--crest-factor-reference-db",
+        type=float,
+        default=CREST_FACTOR_REFERENCE_DB,
+    )
+
+    parser.add_argument(
+        "--crest-factor-correction-ratio",
+        type=float,
+        default=CREST_FACTOR_CORRECTION_RATIO,
+    )
+
+    parser.add_argument(
+        "--max-crest-factor-correction-db",
+        type=float,
+        default=MAX_CREST_FACTOR_CORRECTION_DB,
+    )
+
+    parser.add_argument(
+        "--gain-deadband-db",
+        type=float,
+        default=GAIN_ADJUSTMENT_DEADBAND_DB,
+    )
+
     mode_group = parser.add_mutually_exclusive_group(required=True)
 
     mode_group.add_argument("-r", "--reamp", action="store_true", help=("Convert Multi/XLR -> USB"))
@@ -1169,6 +1239,9 @@ def main():
 
     try:
         input_filetype = get_filetype(args.input)
+
+        if args.snapshot_count < 1 or args.snapshot_count > 8:
+            raise ValueError("Snapshot count must be between 1 and 8")
 
         json_text, original_hls_text = load_input(args.input)
 
@@ -1202,7 +1275,14 @@ def main():
             if not args.lufs_analysis_file:
                 raise ValueError("Adjust gain mode requires -g lufs_analysis.csv")
 
-            gain_deltas = load_lufs_analysis_file(args.lufs_analysis_file, args.target_lufs)
+            gain_deltas = load_lufs_analysis_file(
+                args.lufs_analysis_file,
+                args.target_lufs,
+                args.snapshot_count,
+                args.crest_factor_reference_db,
+                args.crest_factor_correction_ratio,
+                args.max_crest_factor_correction_db,
+            )
 
             if input_filetype == "hlx":
                 gain_deltas = normalize_single_preset_gain_deltas(gain_deltas)
@@ -1212,6 +1292,10 @@ def main():
             gain_deltas,
             args.reamp or args.stage or args.adjust_gain,
             args.ignore_bad_lufs,
+            args.snapshot_count,
+            args.solo_marker,
+            args.solo_gain_bump_db,
+            args.gain_deadband_db,
         )
 
         save_output(modified_json_text, args.output, original_hls_text)

@@ -372,7 +372,9 @@ def worker_args(**overrides):
 def test_measure_dispatches_loopback_without_audio_module(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr("matchpatch.measure.load_reference_audio", lambda path, rate: "reference")
-    monkeypatch.setattr("matchpatch.measure.measure_presets", lambda *args: calls.append(args))
+    monkeypatch.setattr(
+        "matchpatch.measure.measure_presets", lambda *args, **kwargs: calls.append(args)
+    )
 
     measure(worker_args())
 
@@ -383,7 +385,9 @@ def test_measure_dispatches_loopback_without_audio_module(monkeypatch) -> None:
 def test_measure_dispatches_stateful_simulator_without_audio_module(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr("matchpatch.measure.load_reference_audio", lambda path, rate: "reference")
-    monkeypatch.setattr("matchpatch.measure.measure_presets", lambda *args: calls.append(args))
+    monkeypatch.setattr(
+        "matchpatch.measure.measure_presets", lambda *args, **kwargs: calls.append(args)
+    )
 
     measure(
         worker_args(
@@ -413,7 +417,9 @@ def test_measure_configures_hardware_backend(monkeypatch) -> None:
     profile = get_device_profile("helix")
     monkeypatch.setattr("matchpatch.measure.get_device_profile", lambda device: profile)
     monkeypatch.setattr("matchpatch.measure.load_reference_audio", lambda path, rate: "reference")
-    monkeypatch.setattr("matchpatch.measure.measure_presets", lambda *args: calls.append(args))
+    monkeypatch.setattr(
+        "matchpatch.measure.measure_presets", lambda *args, **kwargs: calls.append(args)
+    )
     monkeypatch.setattr(profile, "create_controller", lambda options: ContextController())
     monkeypatch.setitem(
         sys.modules,
@@ -507,6 +513,77 @@ def test_worker_parse_args_supports_hardware_aliases(monkeypatch) -> None:
     assert args.steering_output == "port"
     assert args.input_mapping == (1, 2)
     assert args.simulate_fail_presets == [6, 7]
+
+
+def test_worker_parse_args_reads_toml_defaults(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[normalize]
+backend = "loopback"
+
+[devices.helix.audio]
+input_mapping = [3, 4]
+blocksize = 64
+
+[policy]
+measured_snapshots = 2
+
+[analysis]
+window_seconds = 1.5
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "measure",
+            "measure",
+            "--config",
+            str(config_path),
+            "--device",
+            "helix",
+            "--preset-ids",
+            "1",
+            "--csv",
+            "results.csv",
+            "--reference-di",
+            "reference.wav",
+        ],
+    )
+
+    args = parse_args()
+
+    assert args.backend == "loopback"
+    assert args.input_mapping == (3, 4)
+    assert args.blocksize == 64
+    assert args.snapshot_count == 2
+    assert args.analysis_options.window_seconds == 1.5
+
+
+def test_worker_parse_args_rejects_invalid_snapshot_count(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "measure",
+            "measure",
+            "--device",
+            "helix",
+            "--preset-ids",
+            "1",
+            "--csv",
+            "results.csv",
+            "--reference-di",
+            "reference.wav",
+            "--snapshot-count",
+            "0",
+        ],
+    )
+
+    with pytest.raises(ValueError, match="at least 1"):
+        parse_args()
 
 
 def test_worker_main_dispatches_devices_and_legacy_helix_backend(monkeypatch) -> None:

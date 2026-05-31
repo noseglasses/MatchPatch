@@ -33,6 +33,17 @@ class SteeringOptions:
     measurement_wait_seconds: float
 
 
+@dataclass(frozen=True)
+class NormalizationPolicy:
+    snapshot_count: int = 4
+    solo_marker: str = "solo"
+    solo_gain_bump_db: float = 3.0
+    crest_factor_reference_db: float = 12.0
+    crest_factor_correction_ratio: float = 0.4
+    max_crest_factor_correction_db: float = 3.0
+    gain_deadband_db: float = 0.25
+
+
 class DeviceController(ABC):
     def __enter__(self) -> Self:
         return self
@@ -96,6 +107,7 @@ class PatchFileHandler(ABC):
         csv_path: Path,
         ignore_bad_lufs: bool,
         target_lufs: float,
+        policy: NormalizationPolicy,
     ) -> None:
         """Apply measured gain adjustments to a patch file."""
 
