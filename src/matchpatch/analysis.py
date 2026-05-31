@@ -14,6 +14,13 @@ class AudioMeasurements:
     crest_factor_db: float
 
 
+@dataclass(frozen=True)
+class AnalysisOptions:
+    window_seconds: float = 3.0
+    interval_seconds: float = 0.1
+    minimum_valid_lufs: float = -100.0
+
+
 def _as_float_audio(audio: np.ndarray) -> np.ndarray:
     result = np.asarray(audio, dtype=np.float64)
 
@@ -31,6 +38,7 @@ def calculate_average_short_term_lufs(
     sample_rate: int,
     window_seconds: float = 3.0,
     interval_seconds: float = 0.1,
+    minimum_valid_lufs: float = -100.0,
 ) -> float:
     """Average LUFS values from sliding three-second analysis windows."""
 
@@ -47,7 +55,7 @@ def calculate_average_short_term_lufs(
     for end in range(window_frames, samples.shape[0] + 1, interval_frames):
         value = meter.integrated_loudness(samples[end - window_frames : end])
 
-        if np.isfinite(value) and value > -100.0:
+        if np.isfinite(value) and value > minimum_valid_lufs:
             values.append(float(value))
 
     if not values:
@@ -67,8 +75,18 @@ def calculate_crest_factor_db(audio: np.ndarray) -> float:
     return float(20.0 * np.log10(peak / rms))
 
 
-def analyze_audio(audio: np.ndarray, sample_rate: int) -> AudioMeasurements:
+def analyze_audio(
+    audio: np.ndarray,
+    sample_rate: int,
+    options: AnalysisOptions = AnalysisOptions(),
+) -> AudioMeasurements:
     return AudioMeasurements(
-        short_term_lufs=calculate_average_short_term_lufs(audio, sample_rate),
+        short_term_lufs=calculate_average_short_term_lufs(
+            audio,
+            sample_rate,
+            options.window_seconds,
+            options.interval_seconds,
+            options.minimum_valid_lufs,
+        ),
         crest_factor_db=calculate_crest_factor_db(audio),
     )

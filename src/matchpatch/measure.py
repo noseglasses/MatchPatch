@@ -12,7 +12,14 @@ from typing import TYPE_CHECKING, Protocol
 import numpy as np
 import soundfile as sf
 
-from matchpatch.analysis import analyze_audio
+from matchpatch.analysis import AnalysisOptions, analyze_audio
+from matchpatch.config import (
+    config_value,
+    load_config,
+)
+from matchpatch.config import (
+    parse_channel_mapping as parse_config_mapping,
+)
 from matchpatch.devices import get_device_profile, list_device_profiles
 from matchpatch.devices.base import (
     AudioRouting,
@@ -211,12 +218,16 @@ def measure_presets(
     reference: np.ndarray,
     sample_rate: int,
     backend: MeasurementBackend,
+    *,
+    snapshot_count: int | None = None,
+    analysis_options: AnalysisOptions = AnalysisOptions(),
 ) -> None:
+    measured_snapshots = snapshot_count if snapshot_count is not None else profile.snapshot_count
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     handler = profile.create_patch_file_handler(Path.cwd())
 
     with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=csv_fields(profile.snapshot_count))
+        writer = csv.DictWriter(csv_file, fieldnames=csv_fields(measured_snapshots))
         writer.writeheader()
 
         for preset_id in preset_ids:
@@ -227,9 +238,9 @@ def measure_presets(
                 backend.activate_preset(preset_id)
                 results = []
 
-                for snapshot in range(1, profile.snapshot_count + 1):
+                for snapshot in range(1, measured_snapshots + 1):
                     backend.reapply_snapshot(snapshot)
-                    values = analyze_audio(backend.record(reference), sample_rate)
+                    values = analyze_audio(backend.record(reference), sample_rate, analysis_options)
                     results.append(
                         (
                             values.short_term_lufs,
@@ -247,7 +258,7 @@ def measure_presets(
                     writer,
                     preset_id,
                     device_patch,
-                    profile.snapshot_count,
+                    measured_snapshots,
                     results,
                 )
 
@@ -261,7 +272,7 @@ def measure_presets(
                     writer,
                     preset_id,
                     device_patch,
-                    profile.snapshot_count,
+                    measured_snapshots,
                     None,
                 )
 
@@ -312,6 +323,8 @@ def measure(args: argparse.Namespace) -> None:
     defaults = profile.default_audio_routing()
     sample_rate = args.sample_rate if args.sample_rate is not None else defaults.sample_rate
     reference = load_reference_audio(Path(args.reference_di), sample_rate)
+    snapshot_count = getattr(args, "snapshot_count", None) or profile.snapshot_count
+    analysis_options = getattr(args, "analysis_options", AnalysisOptions())
 
     if args.backend == "loopback":
         measure_presets(
@@ -321,6 +334,8 @@ def measure(args: argparse.Namespace) -> None:
             reference,
             sample_rate,
             LoopbackBackend(),
+            snapshot_count=snapshot_count,
+            analysis_options=analysis_options,
         )
         return
 
@@ -333,11 +348,13 @@ def measure(args: argparse.Namespace) -> None:
             sample_rate,
             SimulatedHardwareBackend(
                 defaults,
-                profile.snapshot_count,
+                snapshot_count,
                 args.input_mapping,
                 args.output_mapping,
                 frozenset(args.simulate_fail_presets),
             ),
+            snapshot_count=snapshot_count,
+            analysis_options=analysis_options,
         )
         return
 
@@ -359,6 +376,8 @@ def measure(args: argparse.Namespace) -> None:
                 controller,
                 steering_options.measurement_wait_seconds,
             ),
+            snapshot_count=snapshot_count,
+            analysis_options=analysis_options,
         )
 
 
@@ -403,10 +422,94 @@ def add_hardware_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sample-rate", type=int)
     parser.add_argument("--input-mapping", type=parse_channel_mapping)
     parser.add_argument("--output-mapping", type=parse_channel_mapping)
-    parser.add_argument("--blocksize", type=int, default=0)
+    parser.add_argument("--blocksize", type=int)
     parser.add_argument("--preset-wait", type=float)
     parser.add_argument("--snapshot-wait", type=float)
     parser.add_argument("--measurement-wait", type=float)
+
+
+def apply_config(args: argparse.Namespace) -> argparse.Namespace:
+    config = load_config(args.config)
+    device_audio = ("devices", args.device, "audio")
+    device_steering = ("devices", args.device, "steering")
+    args.backend = args.backend or config_value(config, "normalize", "backend", default="hardware")
+    args.audio_device = (
+        args.audio_device
+        if args.audio_device is not None
+        else config_value(config, *device_audio, "device")
+    )
+    args.sample_rate = (
+        args.sample_rate
+        if args.sample_rate is not None
+        else config_value(config, *device_audio, "sample_rate")
+    )
+
+    for name in ("input_mapping", "output_mapping"):
+        value = getattr(args, name)
+
+        if value is None:
+            value = config_value(config, *device_audio, name)
+
+        if value is not None:
+            setattr(args, name, parse_config_mapping(value))
+
+    args.blocksize = (
+        args.blocksize
+        if args.blocksize is not None
+        else config_value(config, *device_audio, "blocksize", default=0)
+    )
+    args.steering_output = (
+        args.steering_output
+        if args.steering_output is not None
+        else config_value(config, *device_steering, "output")
+    )
+    args.steering_channel = (
+        args.steering_channel
+        if args.steering_channel is not None
+        else config_value(config, *device_steering, "channel")
+    )
+    args.preset_wait = (
+        args.preset_wait
+        if args.preset_wait is not None
+        else config_value(config, *device_steering, "preset_wait_seconds")
+    )
+    args.snapshot_wait = (
+        args.snapshot_wait
+        if args.snapshot_wait is not None
+        else config_value(config, *device_steering, "snapshot_wait_seconds")
+    )
+    args.measurement_wait = (
+        args.measurement_wait
+        if args.measurement_wait is not None
+        else config_value(config, *device_steering, "measurement_wait_seconds")
+    )
+    args.snapshot_count = (
+        args.snapshot_count
+        if args.snapshot_count is not None
+        else config_value(config, "policy", "measured_snapshots")
+    )
+
+    if args.snapshot_count is not None and args.snapshot_count < 1:
+        raise ValueError("Configured measured snapshot count must be at least 1")
+
+    args.analysis_options = AnalysisOptions(
+        window_seconds=(
+            args.analysis_window
+            if args.analysis_window is not None
+            else config_value(config, "analysis", "window_seconds", default=3.0)
+        ),
+        interval_seconds=(
+            args.analysis_interval
+            if args.analysis_interval is not None
+            else config_value(config, "analysis", "interval_seconds", default=0.1)
+        ),
+        minimum_valid_lufs=(
+            args.minimum_valid_lufs
+            if args.minimum_valid_lufs is not None
+            else config_value(config, "analysis", "minimum_valid_lufs", default=-100.0)
+        ),
+    )
+    return args
 
 
 def parse_args() -> argparse.Namespace:
@@ -419,13 +522,13 @@ def parse_args() -> argparse.Namespace:
         help="Measure processor snapshots for each preset",
     )
     measure_parser.add_argument("--device", required=True)
+    measure_parser.add_argument("--config", help="TOML configuration file")
     measure_parser.add_argument("--preset-ids", type=parse_int_list, required=True)
     measure_parser.add_argument("--csv", required=True)
     measure_parser.add_argument("--reference-di", required=True)
     measure_parser.add_argument(
         "--backend",
         choices=["hardware", "loopback", "simulated", "helix"],
-        default="hardware",
         help="Use hardware, empty-patch loopback, or a stateful processor simulation",
     )
     measure_parser.add_argument(
@@ -434,9 +537,14 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Comma-separated numeric preset IDs that fail in simulated mode",
     )
+    measure_parser.add_argument("--snapshot-count", type=int)
+    measure_parser.add_argument("--analysis-window", type=float)
+    measure_parser.add_argument("--analysis-interval", type=float)
+    measure_parser.add_argument("--minimum-valid-lufs", type=float)
     add_hardware_arguments(measure_parser)
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    return apply_config(args) if args.command == "measure" else args
 
 
 def main() -> None:

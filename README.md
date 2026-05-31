@@ -139,10 +139,55 @@ Useful options:
 | `-S 01A,01B,02A` | Measure selected processor slots |
 | `-n 8` | Limit measurement to the first eight selected presets |
 | `--target-lufs -18` | Override the default `-16 LUFS` target |
+| `--config ~/.config/matchpatch/config.toml` | Load durable machine and policy defaults |
 | `--keep-temp` | Keep the generated measurement CSV |
 | `--audio-device "Helix ASIO"` | Select an ambiguous audio device |
 | `--midi-output "Helix"` | Select an ambiguous MIDI output |
 | `--timeout 300` | Limit analysis time |
+
+## Configuration
+
+Use a TOML file for durable machine settings and normalization policy. MatchPatch
+loads `~/.config/matchpatch/config.toml` automatically when it exists. Pass
+`--config PATH` to use a different file. Command-line options override the file;
+the `MATCHPATCH_BACKEND`, `MATCHPATCH_WINDOWS_PYTHON`, and
+`MATCHPATCH_REFERENCE_DI` environment variables override matching file values.
+
+```toml
+[normalize]
+backend = "hardware"
+reference_di = "/path/to/reference-di.wav"
+target_lufs = -16.0
+timeout_seconds = 300
+
+[devices.helix.audio]
+device = "Helix"
+sample_rate = 48000
+input_mapping = [1, 2]
+output_mapping = [3, 4]
+blocksize = 0
+
+[devices.helix.steering]
+output = "Helix"
+channel = 0
+preset_wait_seconds = 0.5
+snapshot_wait_seconds = 0.05
+measurement_wait_seconds = 0.5
+
+[policy]
+measured_snapshots = 4
+solo_marker = "solo"
+solo_gain_bump_db = 3.0
+crest_factor_reference_db = 12.0
+crest_factor_correction_ratio = 0.4
+max_crest_factor_correction_db = 3.0
+gain_deadband_db = 0.25
+
+[analysis]
+window_seconds = 3.0
+interval_seconds = 0.1
+minimum_valid_lufs = -100.0
+```
 
 Helix defaults:
 

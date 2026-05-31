@@ -87,6 +87,91 @@ def test_wait_for_user_confirmation_prompts(monkeypatch, capsys) -> None:
     assert prompts == ["Press Enter to continue..."]
 
 
+def test_apply_config_layers_cli_environment_and_toml(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[normalize]
+backend = "hardware"
+reference_di = "configured.wav"
+target_lufs = -18.0
+timeout_seconds = 90
+ignore_bad_lufs = true
+
+[devices.helix.audio]
+device = "Configured Audio"
+sample_rate = 44100
+input_mapping = [3, 4]
+output_mapping = [5, 6]
+blocksize = 128
+
+[devices.helix.steering]
+output = "Configured MIDI"
+channel = 2
+preset_wait_seconds = 0.8
+snapshot_wait_seconds = 0.1
+measurement_wait_seconds = 0.7
+
+[policy]
+measured_snapshots = 3
+solo_marker = "lead"
+solo_gain_bump_db = 4.0
+crest_factor_reference_db = 11.0
+crest_factor_correction_ratio = 0.5
+max_crest_factor_correction_db = 2.0
+gain_deadband_db = 0.1
+
+[analysis]
+window_seconds = 2.0
+interval_seconds = 0.2
+minimum_valid_lufs = -90.0
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MATCHPATCH_BACKEND", "loopback")
+    monkeypatch.setenv("MATCHPATCH_REFERENCE_DI", "environment.wav")
+    args = normalize.apply_config(
+        normalize.parse_args(
+            [
+                "--config",
+                str(config_path),
+                "--device",
+                "helix",
+                "-i",
+                "input.hls",
+                "--target-lufs",
+                "-17",
+                "--audio-device",
+                "CLI Audio",
+            ]
+        )
+    )
+
+    assert args.backend == "loopback"
+    assert args.reference_di == "environment.wav"
+    assert args.target_lufs == -17
+    assert args.audio_device == "CLI Audio"
+    assert args.input_mapping == "3,4"
+    assert args.output_mapping == "5,6"
+    assert args.blocksize == 128
+    assert args.steering_output == "Configured MIDI"
+    assert args.policy.snapshot_count == 3
+    assert args.policy.solo_marker == "lead"
+    assert args.analysis_options.window_seconds == 2.0
+
+
+def test_apply_config_rejects_invalid_snapshot_count(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[policy]\nmeasured_snapshots = 0\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="at least 1"):
+        normalize.apply_config(
+            normalize.parse_args(
+                ["--config", str(config_path), "--device", "helix", "-i", "input.hls"]
+            )
+        )
+
+
 def test_run_windows_analysis_builds_worker_command(tmp_path, monkeypatch) -> None:
     windows_python = tmp_path / "python.exe"
     windows_python.touch()
@@ -123,8 +208,10 @@ def test_run_windows_analysis_builds_worker_command(tmp_path, monkeypatch) -> No
         "--device",
     ]
     assert "1,6" in command
-    assert ["--audio-device", "Helix"] == command[-8:-6]
-    assert command[-2:] == ["--simulate-fail-presets", "6,7"]
+    audio_index = command.index("--audio-device")
+    assert command[audio_index : audio_index + 2] == ["--audio-device", "Helix"]
+    failure_index = command.index("--simulate-fail-presets")
+    assert command[failure_index : failure_index + 2] == ["--simulate-fail-presets", "6,7"]
     assert timeout == 12.0
 
 

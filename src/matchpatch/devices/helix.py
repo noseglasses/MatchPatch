@@ -15,6 +15,7 @@ from matchpatch.devices.base import (
     AudioRouting,
     DeviceController,
     DeviceProfile,
+    NormalizationPolicy,
     PatchAssignment,
     PatchFileHandler,
     SteeringOptions,
@@ -120,6 +121,7 @@ class HelixPatchFileHandler(PatchFileHandler):
         csv_path: Path,
         ignore_bad_lufs: bool,
         target_lufs: float,
+        policy: NormalizationPolicy = NormalizationPolicy(),
     ) -> None:
         legacy_csv_path = self._create_legacy_analysis_csv(csv_path)
 
@@ -134,6 +136,20 @@ class HelixPatchFileHandler(PatchFileHandler):
                 legacy_csv_path,
                 "--target-lufs",
                 target_lufs,
+                "--snapshot-count",
+                policy.snapshot_count,
+                "--solo-marker",
+                policy.solo_marker,
+                "--solo-gain-bump-db",
+                policy.solo_gain_bump_db,
+                "--crest-factor-reference-db",
+                policy.crest_factor_reference_db,
+                "--crest-factor-correction-ratio",
+                policy.crest_factor_correction_ratio,
+                "--max-crest-factor-correction-db",
+                policy.max_crest_factor_correction_db,
+                "--gain-deadband-db",
+                policy.gain_deadband_db,
             ]
 
             if ignore_bad_lufs:
