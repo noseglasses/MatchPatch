@@ -60,6 +60,37 @@ def test_loopback_backend_writes_compatible_csv(tmp_path) -> None:
     assert rows[0]["CrestFactor1"] == rows[0]["CrestFactor4"]
 
 
+def test_measure_presets_emits_structured_progress(tmp_path) -> None:
+    sample_rate = 48000
+    times = np.arange(sample_rate * 4) / sample_rate
+    reference = np.sin(2 * np.pi * 1000 * times)[:, np.newaxis]
+    events = []
+
+    measure_presets(
+        get_device_profile("helix"),
+        [1],
+        tmp_path / "events.csv",
+        reference,
+        sample_rate,
+        LoopbackBackend(),
+        snapshot_count=2,
+        on_progress=events.append,
+        log_output=False,
+    )
+
+    assert [event.kind for event in events] == [
+        "preset_started",
+        "snapshot_started",
+        "snapshot_completed",
+        "snapshot_started",
+        "snapshot_completed",
+        "measurement_completed",
+    ]
+    assert events[0].device_patch == "01A"
+    assert events[2].snapshot == 1
+    assert events[2].lufs is not None
+
+
 class FakePatchFileHandler(PatchFileHandler):
     def validate_input(self, input_path: Path) -> None:
         return None

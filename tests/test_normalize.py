@@ -250,6 +250,25 @@ def test_run_windows_analysis_translates_timeout(tmp_path, monkeypatch) -> None:
         normalize.run_windows_analysis(args, [1], tmp_path / "results.csv")
 
 
+def test_progress_command_parses_json_lines(monkeypatch) -> None:
+    events = []
+
+    class FakeProcess:
+        stdout = ['{"kind":"preset_started","device_patch":"01A"}\n']
+
+        def poll(self):
+            return 0
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(normalize.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+
+    normalize._run_progress_command(["worker"], None, events.append)
+
+    assert events == [normalize.ProgressEvent("preset_started", device_patch="01A")]
+
+
 def test_main_runs_measurement_and_applies_csv(tmp_path, monkeypatch) -> None:
     handler = FakeHandler()
     profile = FakeProfile(handler)

@@ -109,6 +109,30 @@ python -m matchpatch.measure measure \
   --reference-di reference.wav
 ```
 
+## Graphical Interface
+
+Install the optional PySide6 interface and launch it:
+
+```bash
+uv sync --locked --no-default-groups --group wsl --extra gui
+matchpatch-gui
+```
+
+The GUI starts in `loopback` mode so the guided workflow can be exercised
+without processor hardware. Choose an `.hls` or `.hlx` file, select the presets,
+and follow the import confirmation dialogs. Switch to `hardware` when a Helix
+and its native Windows audio environment are available.
+
+On WSLg, the launcher automatically selects the WSLg Wayland socket when the
+shell's systemd runtime directory does not contain it. If Wayland is unavailable
+and Qt must use XCB, install the Ubuntu runtime packages:
+
+```bash
+sudo apt install \
+  libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+  libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xkb1 libxcb-util1
+```
+
 ## Normalize With A Helix
 
 List available audio devices and MIDI outputs:
