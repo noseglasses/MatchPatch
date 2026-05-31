@@ -76,15 +76,24 @@ def test_select_preset_ids_for_setlists_and_presets(tmp_path) -> None:
 def test_list_assignments_and_reamp_delegate_to_legacy_script(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
     calls = []
-    payload = [{"id": 1, "helix_preset": "01A", "name": "Clean"}]
+    payload = [
+        {
+            "id": 1,
+            "helix_preset": "01A",
+            "name": "Clean",
+            "snapshot_names": ["Rhythm", "Solo"],
+        }
+    ]
 
-    def fake_run(*args, capture=False):
+    def fake_run(*args, capture=False, log_output=True):
         calls.append((args, capture))
         return subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))
 
     monkeypatch.setattr(handler, "_run", fake_run)
 
-    assert handler.list_assignments(Path("set.hls")) == [PatchAssignment(1, "01A", "Clean")]
+    assert handler.list_assignments(Path("set.hls")) == [
+        PatchAssignment(1, "01A", "Clean", ("Rhythm", "Solo"))
+    ]
     handler.create_reamp_file(Path("set.hls"), Path("reamp.hls"))
     assert calls[1][0] == ("-i", Path("set.hls"), "-o", Path("reamp.hls"), "--reamp")
 
@@ -103,6 +112,23 @@ def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> N
     assert command[0][-1] == "--list-presets"
     assert options["stdout"] is subprocess.PIPE
     assert options["stderr"] is subprocess.PIPE
+
+
+def test_legacy_script_runner_forwards_captured_output_to_logger(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    messages = []
+    handler.set_log_callback(messages.append)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            [], 0, stdout="first\nsecond\n", stderr=""
+        ),
+    )
+
+    handler._run("--reamp")
+
+    assert messages == ["first", "second"]
 
 
 def test_apply_analysis_csv_translates_generic_patch_column(tmp_path, monkeypatch) -> None:
@@ -124,10 +150,11 @@ def test_apply_analysis_csv_translates_generic_patch_column(tmp_path, monkeypatc
 
     assert seen["rows"] == [{"Preset": "1", "HelixPreset": "01A", "LUFS1": "-15.5"}]
     assert "--ignore-bad-lufs" in seen["args"]
+    assert seen["args"][seen["args"].index("--solo-regex") + 1] == r"(?i)\bsolo\b"
     assert not seen["legacy"].exists()
 
 
-def test_apply_analysis_csv_omits_optional_flag_and_cleans_up_on_failure(
+def test_apply_analysis_csv_always_tolerates_bad_lufs_and_cleans_up_on_failure(
     tmp_path, monkeypatch
 ) -> None:
     handler = make_handler(tmp_path)
@@ -145,8 +172,50 @@ def test_apply_analysis_csv_omits_optional_flag_and_cleans_up_on_failure(
     with pytest.raises(RuntimeError, match="legacy failure"):
         handler.apply_analysis_csv(Path("set.hls"), Path("out.hls"), csv_path, False, -16)
 
-    assert "--ignore-bad-lufs" not in seen["args"]
+    assert "--ignore-bad-lufs" in seen["args"]
     assert not seen["legacy"].exists()
+
+
+def test_apply_analysis_csv_reports_legacy_stderr(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    csv_path = tmp_path / "measurements.csv"
+    csv_path.write_text("Preset,DevicePatch\n1,01A\n", encoding="utf-8")
+
+    def fail(*args, capture=False):
+        raise subprocess.CalledProcessError(
+            1,
+            ["legacy"],
+            stderr="ERROR: Implausible output gain 21.9 dB for 17B Solo.",
+        )
+
+    monkeypatch.setattr(handler, "_run", fail)
+
+    with pytest.raises(RuntimeError, match="Implausible output gain 21.9 dB for 17B Solo"):
+        handler.apply_analysis_csv(Path("set.hls"), Path("out.hls"), csv_path, False, -16)
+
+
+def test_apply_analysis_csv_filters_gain_lines_from_error_popup(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    csv_path = tmp_path / "measurements.csv"
+    csv_path.write_text("Preset,DevicePatch\n1,01A\n", encoding="utf-8")
+
+    def fail(*args, capture=False, log_output=True):
+        raise subprocess.CalledProcessError(
+            1,
+            ["legacy"],
+            output=(
+                "[GAIN] 01A SNAPSHOT 1 | 0.0 dB -> 8.1 dB (Delta: +8.1 dB)\n"
+                "ERROR: Implausible output gain 21.9 dB for 17B Solo.\n"
+            ),
+        )
+
+    monkeypatch.setattr(handler, "_run", fail)
+
+    with pytest.raises(RuntimeError) as exc:
+        handler.apply_analysis_csv(Path("set.hls"), Path("out.hls"), csv_path, False, -16)
+
+    assert "Implausible output gain" in str(exc.value)
+    assert "[GAIN]" not in str(exc.value)
 
 
 def test_midi_controller_sends_program_and_snapshot_messages(monkeypatch) -> None:

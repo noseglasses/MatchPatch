@@ -115,6 +115,13 @@ def extract_preset_assignments(data):
                 "id": preset_index + 1,
                 "helix_preset": preset_index_to_helix(preset_index),
                 "name": preset_name,
+                "snapshot_names": [
+                    snapshot.get("@name", f"Snapshot {snapshot_index + 1}")
+                    for snapshot_index in range(8)
+                    if isinstance(
+                        snapshot := preset.get("tone", {}).get(f"snapshot{snapshot_index}"), dict
+                    )
+                ],
             }
         )
 
@@ -495,18 +502,6 @@ def load_lufs_analysis_file(
         for row in reader:
             helix_preset = row["HelixPreset"].strip()
 
-            if any(
-                str(row.get(key) or "").strip().upper() == LUFS_ERROR_SENTINEL
-                for i in range(1, snapshot_count + 1)
-                for key in [f"LUFS{i}", f"CrestFactor{i}"]
-            ):
-                print(
-                    f"[WARNING] {helix_preset}: "
-                    "Helix analysis failed; "
-                    "skipping gain adjustment for this preset"
-                )
-                continue
-
             snapshot_gain_deltas = {}
 
             for i in range(1, snapshot_count + 1):
@@ -515,7 +510,12 @@ def load_lufs_analysis_file(
 
                 gain_delta = None
 
-                if row.get(lufs_key) and row.get(crest_factor_key):
+                if any(
+                    str(row.get(key) or "").strip().upper() == LUFS_ERROR_SENTINEL
+                    for key in [lufs_key, crest_factor_key]
+                ):
+                    gain_delta = None
+                elif row.get(lufs_key) and row.get(crest_factor_key):
                     lufs_value = float(row[lufs_key])
                     crest_factor_db = float(row[crest_factor_key])
 
@@ -757,12 +757,13 @@ def adjust_snapshot_gains(
     gain_deltas,
     ignore_bad_lufs=False,
     snapshot_count=4,
-    solo_marker="solo",
+    solo_regex=r"(?i)\bsolo\b",
     solo_gain_bump_db=SOLO_GAIN_BUMP,
     gain_deadband_db=GAIN_ADJUSTMENT_DEADBAND_DB,
 ):
 
     changes = 0
+    solo_pattern = re.compile(solo_regex)
 
     presets = data.get("presets", [])
 
@@ -830,16 +831,19 @@ def adjust_snapshot_gains(
 
             snapshot_name = snapshot.get("@name", f"Snapshot {snapshot_index + 1}")
 
-            is_solo = solo_marker.lower() in snapshot_name.lower()
+            is_solo = solo_pattern.search(snapshot_name) is not None
 
             gain_delta = snapshot_gain_deltas[snapshot_index]
+            marker = " (S)" if is_solo else ""
+
+            if gain_delta is None:
+                print(f"[GAIN] {helix_preset} {snapshot_name}{marker} | bad LUFS")
+                continue
 
             if is_solo:
                 gain_delta += solo_gain_bump_db
 
             current_gain = get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain)
-
-            marker = " (S)" if is_solo else ""
 
             delta_text = f"Delta: {gain_delta:+.1f} dB"
 
@@ -867,12 +871,7 @@ def adjust_snapshot_gains(
                 if not ignore_bad_lufs:
                     raise ValueError(message)
 
-                print(
-                    f"[GAIN] {helix_preset} "
-                    f"{snapshot_name}: "
-                    f"skipping bad LUFS measurement "
-                    f"({message})"
-                )
+                print(f"[GAIN] {helix_preset} {snapshot_name}{marker} | bad LUFS ({message})")
                 continue
 
             snapshot_controllers = snapshot.setdefault("controllers", {})
@@ -1017,7 +1016,7 @@ def process_json_structure(
     assign_output_gain=False,
     ignore_bad_lufs=False,
     snapshot_count=4,
-    solo_marker="solo",
+    solo_regex=r"(?i)\bsolo\b",
     solo_gain_bump_db=SOLO_GAIN_BUMP,
     gain_deadband_db=GAIN_ADJUSTMENT_DEADBAND_DB,
 ):
@@ -1042,7 +1041,7 @@ def process_json_structure(
             gain_deltas,
             ignore_bad_lufs,
             snapshot_count,
-            solo_marker,
+            solo_regex,
             solo_gain_bump_db,
             gain_deadband_db,
         )
@@ -1191,7 +1190,7 @@ def main():
 
     parser.add_argument("--snapshot-count", type=int, default=4)
 
-    parser.add_argument("--solo-marker", default="solo")
+    parser.add_argument("--solo-regex", "--solo-marker", dest="solo_regex", default=r"(?i)\bsolo\b")
 
     parser.add_argument("--solo-gain-bump-db", type=float, default=SOLO_GAIN_BUMP)
 
@@ -1293,7 +1292,7 @@ def main():
             args.reamp or args.stage or args.adjust_gain,
             args.ignore_bad_lufs,
             args.snapshot_count,
-            args.solo_marker,
+            args.solo_regex,
             args.solo_gain_bump_db,
             args.gain_deadband_db,
         )

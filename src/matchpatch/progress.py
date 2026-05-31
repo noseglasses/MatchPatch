@@ -20,6 +20,7 @@ class ProgressEvent:
     snapshot_total: int | None = None
     lufs: float | None = None
     crest_factor_db: float | None = None
+    path: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))

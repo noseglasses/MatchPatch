@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
 
@@ -25,15 +26,45 @@ from matchpatch.devices.base import (
 class HelixPatchFileHandler(PatchFileHandler):
     def __init__(self, project_dir: Path) -> None:
         self.script = project_dir / "Python" / "preset_handling.py"
+        self.log_callback: Callable[[str], None] | None = None
 
-    def _run(self, *args: object, capture: bool = False) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, str(self.script), *(str(arg) for arg in args)],
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE if capture else None,
-            stderr=subprocess.PIPE if capture else None,
-        )
+    def set_log_callback(self, callback: Callable[[str], None] | None) -> None:
+        self.log_callback = callback
+
+    def _run(
+        self,
+        *args: object,
+        capture: bool = False,
+        log_output: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        should_capture = capture or self.log_callback is not None
+
+        try:
+            completed = subprocess.run(
+                [sys.executable, str(self.script), *(str(arg) for arg in args)],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE if should_capture else None,
+                stderr=subprocess.PIPE if should_capture else None,
+            )
+        except subprocess.CalledProcessError as exc:
+            if log_output:
+                self._log_output(exc.stdout)
+                self._log_output(exc.stderr)
+            raise
+
+        if log_output:
+            self._log_output(completed.stdout)
+            self._log_output(completed.stderr)
+        return completed
+
+    def _log_output(self, output: str | None) -> None:
+        if self.log_callback is None or not output:
+            return
+
+        for line in output.splitlines():
+            if line.strip():
+                self.log_callback(line)
 
     def validate_input(self, input_path: Path) -> None:
         if input_path.suffix.lower() not in {".hls", ".hlx"}:
@@ -44,12 +75,13 @@ class HelixPatchFileHandler(PatchFileHandler):
             raise ValueError(f"Helix output must use the {input_path.suffix.lower()} extension")
 
     def list_assignments(self, input_path: Path) -> list[PatchAssignment]:
-        completed = self._run("-i", input_path, "--list-presets", capture=True)
+        completed = self._run("-i", input_path, "--list-presets", capture=True, log_output=False)
         return [
             PatchAssignment(
                 id=assignment["id"],
                 device_patch=assignment["helix_preset"],
                 name=assignment["name"],
+                snapshot_names=tuple(assignment.get("snapshot_names", ())),
             )
             for assignment in json.loads(completed.stdout)
         ]
@@ -138,8 +170,8 @@ class HelixPatchFileHandler(PatchFileHandler):
                 target_lufs,
                 "--snapshot-count",
                 policy.snapshot_count,
-                "--solo-marker",
-                policy.solo_marker,
+                "--solo-regex",
+                policy.solo_regex,
                 "--solo-gain-bump-db",
                 policy.solo_gain_bump_db,
                 "--crest-factor-reference-db",
@@ -152,10 +184,16 @@ class HelixPatchFileHandler(PatchFileHandler):
                 policy.gain_deadband_db,
             ]
 
-            if ignore_bad_lufs:
-                args.append("--ignore-bad-lufs")
+            args.append("--ignore-bad-lufs")
 
-            self._run(*args)
+            try:
+                self._run(*args, capture=True)
+            except subprocess.CalledProcessError as exc:
+                details = _error_details(exc)
+                message = "Helix gain adjustment failed"
+                if details:
+                    message += f":\n{details}"
+                raise RuntimeError(message) from exc
         finally:
             legacy_csv_path.unlink(missing_ok=True)
 
@@ -286,3 +324,13 @@ class HelixDeviceProfile(DeviceProfile):
 
     def create_controller(self, options: SteeringOptions) -> DeviceController:
         return HelixMidiController(options)
+
+
+def _error_details(exc: subprocess.CalledProcessError) -> str:
+    lines = (exc.stderr or "").splitlines() + (exc.stdout or "").splitlines()
+    errors = [line for line in lines if line.strip().startswith("ERROR:")]
+
+    if errors:
+        return "\n".join(errors)
+
+    return lines[-1].strip() if lines else ""

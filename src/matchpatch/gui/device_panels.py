@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import argparse
 
-from PySide6.QtWidgets import QFormLayout, QGroupBox, QLineEdit, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFormLayout,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class HelixSettingsPanel(QWidget):
@@ -25,11 +33,31 @@ class HelixSettingsPanel(QWidget):
         self.output_mapping = QLineEdit()
         self.blocksize = QSpinBox()
         self.blocksize.setRange(0, 65536)
-        audio.addRow("Audio device", self.audio_device)
-        audio.addRow("Sample rate", self.sample_rate)
-        audio.addRow("Recording channels", self.input_mapping)
-        audio.addRow("Playback channels", self.output_mapping)
-        audio.addRow("Block size", self.blocksize)
+        audio.addRow(
+            _label("Audio device", "Windows audio-interface name used for Helix I/O."),
+            self.audio_device,
+        )
+        audio.addRow(
+            _label(
+                "Sample rate",
+                "Audio sample rate used while replaying and recording the reference DI.",
+            ),
+            self.sample_rate,
+        )
+        audio.addRow(
+            _label(
+                "Recording channels", "Input channels carrying the Helix-processed stereo signal."
+            ),
+            self.input_mapping,
+        )
+        audio.addRow(
+            _label("Playback channels", "Output channels sending the reference DI to the Helix."),
+            self.output_mapping,
+        )
+        audio.addRow(
+            _label("Block size", "Audio buffer size. Use 0 to let the audio backend decide."),
+            self.blocksize,
+        )
 
         steering = QFormLayout(self.steering_group)
         self.steering_output = QLineEdit()
@@ -38,15 +66,28 @@ class HelixSettingsPanel(QWidget):
         self.preset_wait = QLineEdit()
         self.snapshot_wait = QLineEdit()
         self.measurement_wait = QLineEdit()
-        steering.addRow("MIDI output", self.steering_output)
-        steering.addRow("MIDI channel", self.steering_channel)
-        steering.addRow("Preset wait (s)", self.preset_wait)
-        steering.addRow("Snapshot wait (s)", self.snapshot_wait)
-        steering.addRow("Measurement wait (s)", self.measurement_wait)
-
-    def set_hardware_enabled(self, enabled: bool) -> None:
-        self.audio_group.setEnabled(enabled)
-        self.steering_group.setEnabled(enabled)
+        steering.addRow(
+            _label("MIDI output", "MIDI port substring used to find the connected Helix."),
+            self.steering_output,
+        )
+        steering.addRow(
+            _label("MIDI channel", "Zero-based MIDI channel used for preset and snapshot changes."),
+            self.steering_channel,
+        )
+        steering.addRow(
+            _label("Preset wait (s)", "Pause after switching presets before continuing."),
+            self.preset_wait,
+        )
+        steering.addRow(
+            _label("Snapshot wait (s)", "Pause after switching snapshots before continuing."),
+            self.snapshot_wait,
+        )
+        steering.addRow(
+            _label(
+                "Measurement wait (s)", "Pause before capturing loudness after a snapshot change."
+            ),
+            self.measurement_wait,
+        )
 
     def populate(self, args: argparse.Namespace) -> None:
         self.audio_device.setText(_text(args.audio_device or "Helix"))
@@ -84,3 +125,9 @@ def _append(argv: list[str], name: str, value: object) -> None:
 
 def _text(value: object | None) -> str:
     return "" if value is None else str(value)
+
+
+def _label(text: str, tooltip: str) -> QLabel:
+    label = QLabel(text)
+    label.setToolTip(tooltip)
+    return label

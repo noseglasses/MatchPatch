@@ -43,7 +43,7 @@ class NormalizationRequest:
     preset_set: str | None = None
     limit: int | None = None
     keep_temp: bool = False
-    ignore_bad_lufs: bool = False
+    ignore_bad_lufs: bool = True
     target_lufs: float = -16.0
     timeout: float | None = None
     audio_device: str | int | None = None
@@ -65,6 +65,7 @@ class NormalizationRequest:
 class NormalizationResult:
     output_path: Path
     temp_dir: Path | None
+    retained_csv_path: Path | None = None
 
 
 ProgressCallback = Callable[[ProgressEvent], None]
@@ -85,6 +86,9 @@ def normalize_presets(
 ) -> NormalizationResult:
     profile = get_profile(request.device)
     handler = profile.create_patch_file_handler(PROJECT_DIR)
+    log_setter = getattr(handler, "set_log_callback", None)
+    if log_setter is not None:
+        log_setter(lambda message: _emit(on_progress, ProgressEvent("log", message=message)))
     input_path = request.input_path.resolve()
     handler.validate_input(input_path)
 
@@ -170,7 +174,11 @@ def normalize_presets(
         else:
             _emit(
                 on_progress,
-                ProgressEvent("temp_retained", message=f"Kept temporary files: {temp_dir}"),
+                ProgressEvent(
+                    "temp_retained",
+                    message=f"Kept temporary CSV: {csv_path}",
+                    path=str(csv_path),
+                ),
             )
 
     _emit(
@@ -185,7 +193,11 @@ def normalize_presets(
             ImportRequest("adjusted", profile.display_name, output_path),
         )
 
-    return NormalizationResult(output_path, temp_dir if request.keep_temp or not success else None)
+    return NormalizationResult(
+        output_path,
+        temp_dir if request.keep_temp or not success else None,
+        csv_path if request.keep_temp or not success else None,
+    )
 
 
 def _emit(callback: ProgressCallback | None, event: ProgressEvent) -> None:
