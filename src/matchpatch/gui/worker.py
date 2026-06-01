@@ -14,6 +14,7 @@ class NormalizationWorker(QObject):
     progress = Signal(object)
     import_requested = Signal(object)
     completed = Signal(object)
+    cancelled = Signal()
     failed = Signal(str)
     finished = Signal()
 
@@ -40,7 +41,10 @@ class NormalizationWorker(QObject):
                 confirm_import=self._confirm_import,
             )
         except Exception as exc:  # noqa: BLE001
-            self.failed.emit(str(exc))
+            if self._cancelled:
+                self.cancelled.emit()
+            else:
+                self.failed.emit(str(exc))
         else:
             self.completed.emit(result)
         finally:
