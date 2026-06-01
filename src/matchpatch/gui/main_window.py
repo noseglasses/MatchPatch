@@ -76,10 +76,13 @@ PHASE_ICON = {
     "waiting_for_adjusted_import": QStyle.StandardPixmap.SP_MediaPause,
     "error": QStyle.StandardPixmap.SP_MessageBoxWarning,
     "cancelling": QStyle.StandardPixmap.SP_MessageBoxWarning,
+    "normalization_cancelled_by_user": QStyle.StandardPixmap.SP_MessageBoxWarning,
 }
 
 
 def _phase_text(phase: str) -> str:
+    if phase == "normalization_cancelled_by_user":
+        return "Normalization cancelled by user"
     return phase.replace("_", " ").title()
 
 
@@ -500,6 +503,7 @@ class MainWindow(QMainWindow):
         self.worker.progress.connect(self.update_progress)
         self.worker.import_requested.connect(self.confirm_import)
         self.worker.completed.connect(self.normalization_completed)
+        self.worker.cancelled.connect(self.normalization_cancelled)
         self.worker.failed.connect(self.show_error)
         self.worker.finished.connect(self.worker_thread.quit, Qt.ConnectionType.DirectConnection)
         self.worker.finished.connect(self.worker.deleteLater)
@@ -577,6 +581,11 @@ class MainWindow(QMainWindow):
         self._log(message, "error")
         QMessageBox.critical(self, "MatchPatch error", message)
 
+    def normalization_cancelled(self) -> None:
+        self._stop_busy_phase()
+        self._set_phase("normalization_cancelled_by_user")
+        self._log("Normalization cancelled by user", "warning")
+
     def worker_finished(self) -> None:
         self._stop_busy_phase()
         self.start_button.setEnabled(True)
@@ -585,14 +594,27 @@ class MainWindow(QMainWindow):
         self.worker_thread = None
 
     def cancel_normalization(self) -> None:
-        if self.worker is not None:
+        if self.worker is not None and self._confirm_cancellation():
             self.worker.cancel()
             self._set_phase("cancelling")
             self._log("Cancellation requested", "warning")
             self._start_busy_phase()
 
+    def _confirm_cancellation(self) -> bool:
+        answer = QMessageBox.question(
+            self,
+            "Cancel measurement",
+            "A measurement is currently running. Do you want to cancel it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.worker is not None:
+            if not self._confirm_cancellation():
+                event.ignore()
+                return
             self.worker.cancel()
         if self.worker_thread is not None:
             self.worker_thread.quit()

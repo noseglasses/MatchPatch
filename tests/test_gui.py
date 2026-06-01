@@ -4,13 +4,14 @@ import os
 import threading
 import time
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtGui import Qt
+from PySide6.QtGui import QCloseEvent, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QHeaderView,
@@ -392,6 +393,20 @@ def test_completion_logs_output_without_redundant_popup(tmp_path, monkeypatch, a
     window.close()
 
 
+def test_cancellation_sets_status_without_redundant_popup(monkeypatch, app) -> None:
+    window = MainWindow()
+    popups = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
+
+    window.normalization_cancelled()
+
+    assert popups == []
+    assert window.phase.text() == "Normalization cancelled by user"
+    assert "Normalization cancelled by user" in window.log.toHtml()
+
+    window.close()
+
+
 def test_bad_lufs_is_logged_as_warning(app) -> None:
     window = MainWindow()
     window.update_progress(ProgressEvent("log", message="[GAIN] 02B Clean | bad LUFS"))
@@ -455,6 +470,96 @@ def test_worker_thread_exits_without_processing_gui_events(monkeypatch, app) -> 
 
     app.processEvents()
     window.close()
+
+
+def test_worker_emits_cancelled_instead_of_failed_after_cancellation(monkeypatch, app) -> None:
+    worker = NormalizationWorker(object())
+    cancelled = []
+    failures = []
+    monkeypatch.setattr(
+        gui_worker,
+        "normalize_presets",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("cancelled")),
+    )
+    worker.cancelled.connect(lambda: cancelled.append(True))
+    worker.failed.connect(failures.append)
+
+    worker.cancel()
+    worker.run()
+
+    assert cancelled == [True]
+    assert failures == []
+
+
+def test_cancel_button_keeps_measurement_running_when_confirmation_is_declined(
+    monkeypatch, app
+) -> None:
+    window = MainWindow()
+    worker = Mock()
+    window.worker = worker
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
+
+    window.cancel_normalization()
+
+    worker.cancel.assert_not_called()
+    assert window.phase.text() == "Ready"
+
+    window.worker = None
+    window.close()
+
+
+def test_cancel_button_requests_cancellation_when_confirmation_is_accepted(
+    monkeypatch, app
+) -> None:
+    window = MainWindow()
+    worker = Mock()
+    window.worker = worker
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+
+    window.cancel_normalization()
+
+    worker.cancel.assert_called_once_with()
+    assert window.phase.text() == "Cancelling"
+
+    window.worker = None
+    window.close()
+
+
+def test_closing_main_window_is_ignored_when_cancellation_is_declined(monkeypatch, app) -> None:
+    window = MainWindow()
+    worker = Mock()
+    window.worker = worker
+    quit_requests = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
+    monkeypatch.setattr(QApplication, "quit", lambda: quit_requests.append(True))
+    event = QCloseEvent()
+
+    window.closeEvent(event)
+
+    assert not event.isAccepted()
+    worker.cancel.assert_not_called()
+    assert quit_requests == []
+
+    window.worker = None
+    window.close()
+
+
+def test_closing_main_window_cancels_measurement_when_confirmation_is_accepted(
+    monkeypatch, app
+) -> None:
+    window = MainWindow()
+    worker = Mock()
+    window.worker = worker
+    quit_requests = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QApplication, "quit", lambda: quit_requests.append(True))
+    event = QCloseEvent()
+
+    window.closeEvent(event)
+
+    assert event.isAccepted()
+    worker.cancel.assert_called_once_with()
+    assert quit_requests == [True]
 
 
 def test_closing_main_window_explicitly_quits_application(monkeypatch, app) -> None:
