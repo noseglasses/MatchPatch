@@ -6,9 +6,16 @@ Remove your name from any Preset/Snapshot information!
 
 ## Agent
 
-The icon after the status word in the Status pane is a wireframe box rather than a proper emoji. Fix.
+The icon after the status word in the Status pane is a wireframe box rather than a proper emoji. Fix. (done, tested)
 
-The first colum (selected files) is too wide. It should be exactly as wide as the contained checkboxes.
+Please only show the progress pane while there is something in progress. Move the status words/sentences like "Ready" to a footer line of the MatchPatch window in order for it being always visible. The actual progress bar should only be displayed while something is actually processed. The progress pane should be displayed below the row with the "start normalization" and "cancel" buttons. (done, tested)
+
+Do the following for the MatchPatch gui (python code in src/matchpatch/gui):
+When cancelling while the measurment is ongoing. There is a popup that informs that the measurment was cancelled. Then the gui window and the taskbar icon disappears but the command does not terminate (hangs in the terminal where it was started). (done, tested)
+
+The windows displayed when MatchPatch gui is started from the WSL/VSCode have no proper border. This looks strange and especially the area of popups is hard to distinguish from the MatchPatch main window in the background. Please make the window borders more visible.
+
+The first colum (selected files) in the presets table is too wide. It should be exactly as wide as the contained checkboxes.
 
 Use fa-star as solo icon in highlighted snapshot name colums of the presets table instead of the currently used icon.
 
@@ -41,5 +48,4 @@ Make the README.md more GUI centered and add the CLI command information later o
 
 The project logo in the About window is displayed too small. The text below the logo symbol is barely unreadable. Enlarge. (done, tested)
 
-Do the following for the MatchPatch gui (python code in src/matchpatch/gui):
-Mark rows in the preset table of those presets that has associated snapshots where bad LUFS values were registered during measurment by giving them a light red background (or is there a better way of highlighting?). (done)
+Mark rows in the preset table of those presets that has associated snapshots where bad LUFS values were registered during measurment by giving them a light red background (or is there a better way of highlighting?). (done, tested)

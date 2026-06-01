@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -300,6 +301,68 @@ def test_progress_command_forwards_stderr_as_log_event(monkeypatch) -> None:
     normalize._run_progress_command(["worker"], None, events.append)
 
     assert events == [normalize.ProgressEvent("error_log", message="worker detail")]
+
+
+def test_progress_command_does_not_hang_when_cancelled_process_cannot_be_reaped(
+    monkeypatch,
+) -> None:
+    class FakeProcess:
+        stdout = []
+        stderr = []
+
+        def __init__(self) -> None:
+            self.killed = False
+            self.wait_timeout = None
+
+        def poll(self):
+            return None
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, timeout=None):
+            self.wait_timeout = timeout
+            raise subprocess.TimeoutExpired("worker", timeout)
+
+    process = FakeProcess()
+    monkeypatch.setattr(normalize.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        normalize._run_progress_command(["worker"], None, lambda event: None, lambda: True)
+
+    assert process.killed
+    assert process.wait_timeout == normalize.PROCESS_REAP_TIMEOUT_SECONDS
+
+
+def test_progress_command_does_not_hang_when_cancelled_process_kill_stalls(
+    monkeypatch,
+) -> None:
+    kill_started = threading.Event()
+    release_kill = threading.Event()
+
+    class FakeProcess:
+        stdout = []
+        stderr = []
+
+        def poll(self):
+            return None
+
+        def kill(self) -> None:
+            kill_started.set()
+            release_kill.wait()
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(normalize, "PROCESS_REAP_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(normalize.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+
+    try:
+        with pytest.raises(RuntimeError, match="cancelled"):
+            normalize._run_progress_command(["worker"], None, lambda event: None, lambda: True)
+        assert kill_started.is_set()
+    finally:
+        release_kill.set()
 
 
 def test_main_runs_measurement_and_applies_csv(tmp_path, monkeypatch) -> None:

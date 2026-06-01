@@ -25,6 +25,7 @@ from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_p
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_WINDOWS_PYTHON = PROJECT_DIR / ".venv-windows" / "Scripts" / "python.exe"
+PROCESS_REAP_TIMEOUT_SECONDS = 1.0
 DEFAULT_REFERENCE_DI = (
     PROJECT_DIR
     / "Reaper"
@@ -302,8 +303,20 @@ def _run_progress_command(
             raise subprocess.CalledProcessError(return_code, [str(arg) for arg in command])
     finally:
         if process.poll() is None:
-            process.kill()
-            process.wait()
+            cleanup = threading.Thread(target=_kill_process, args=(process,), daemon=True)
+            cleanup.start()
+            cleanup.join(PROCESS_REAP_TIMEOUT_SECONDS)
+
+
+def _kill_process(process: subprocess.Popen[str]) -> None:
+    try:
+        process.kill()
+    except OSError:
+        return
+    try:
+        process.wait(timeout=PROCESS_REAP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from matchpatch.gui import main_window
+from matchpatch.gui import worker as gui_worker
 from matchpatch.gui.main_window import MainWindow
 from matchpatch.gui.worker import NormalizationWorker
 from matchpatch.normalize import DEFAULT_REFERENCE_DI, DEFAULT_WINDOWS_PYTHON
@@ -431,3 +432,36 @@ def test_worker_import_confirmation_blocks_until_answered(app) -> None:
     worker.answer_import(True)
     thread.join()
     assert answers == [True]
+
+
+def test_worker_thread_exits_without_processing_gui_events(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = object()
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(
+        gui_worker,
+        "normalize_presets",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("cancelled")),
+    )
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: None)
+
+    window.start_normalization()
+    thread = window.worker_thread
+
+    assert thread is not None
+    assert thread.wait(1000)
+
+    app.processEvents()
+    window.close()
+
+
+def test_closing_main_window_explicitly_quits_application(monkeypatch, app) -> None:
+    window = MainWindow()
+    quit_requests = []
+    monkeypatch.setattr(QApplication, "quit", lambda: quit_requests.append(True))
+
+    window.close()
+
+    assert quit_requests == [True]
