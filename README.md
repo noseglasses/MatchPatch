@@ -11,6 +11,10 @@
 
 **Measure. Match. Play. Automatic Loudness Alignment for Presets.**
 
+Playing in a cover band with one preset per song? Tired of balancing presets
+and snapshots by hand, frustrating your sound engineer, or losing a gorgeous
+solo because its level was too low? MatchPatch gets every patch stage-ready.
+
 MatchPatch normalizes gain across audio-processor presets and snapshots. It
 plays a reference DI through each patch, measures LUFS and crest factor, then
 writes adjusted preset files with balanced output levels.
@@ -22,15 +26,16 @@ Windows, Linux, and WSL.
 
 ## Why MatchPatch?
 
-- Replace manual gain matching with a repeatable Python workflow.
+- Replace manual gain matching with a guided workflow.
 - Normalize Helix `.hls` setlists and `.hlx` presets.
-- Test the complete measurement pipeline without hardware using loopback mode.
+- Exercise the complete workflow without hardware using loopback mode.
 - Keep environments and dependencies reproducible with one `uv.lock`.
 
 ## How It Works
 
 ```text
-MatchPatch CLI
+MatchPatch GUI
+  -> choose a preset or setlist file
   -> preset and snapshot selection
   -> reference playback and processed-audio recording
   -> LUFS and crest-factor analysis
@@ -67,49 +72,7 @@ Windows and synchronize its audio environment:
 scripts/sync-windows-from-wsl.sh
 ```
 
-## Try It Without Hardware
-
-Loopback mode simulates an empty processor patch by feeding the reference DI
-directly into the analyzer. It is useful for quick signal-analysis smoke tests:
-
-```bash
-matchpatch normalize \
-  --device helix \
-  --backend loopback \
-  -i setlist_original.hls \
-  -o setlist_loopback_adjusted.hls \
-  -S 01A \
-  --keep-temp
-```
-
-Simulated-hardware mode adds stateful preset and snapshot steering, routing
-validation, deterministic gain differences, and snapshot compression. Use it
-for portable integration testing without USB hardware:
-
-```bash
-matchpatch normalize \
-  --device helix \
-  --backend simulated \
-  -i setlist_original.hls \
-  -o setlist_simulated_adjusted.hls \
-  -S 01A,01B \
-  --keep-temp
-```
-
-The worker can also inject deterministic processor failures for error-path
-tests:
-
-```bash
-python -m matchpatch.measure measure \
-  --device helix \
-  --backend simulated \
-  --simulate-fail-presets 6 \
-  --preset-ids 1,6 \
-  --csv analysis.csv \
-  --reference-di reference.wav
-```
-
-## Graphical Interface
+## Graphical Quick Start
 
 Install the optional PySide6 interface and launch it:
 
@@ -120,10 +83,10 @@ matchpatch-gui
 
 The GUI starts in `loopback` mode so the guided workflow can be exercised
 without processor hardware. Choose an `.hls` or `.hlx` file, select the presets,
-and follow the import confirmation dialogs. Switch to `hardware` when a Helix
-and its native Windows audio environment are available.
+choose an output file, and follow the import confirmation dialogs. Switch to
+`hardware` when a Helix and its native Windows audio environment are available.
 
-On WSLg, the launcher automatically selects the WSLg Wayland socket when the
+On WSL, the launcher automatically selects the WSL Wayland socket when the
 shell's systemd runtime directory does not contain it. If Wayland is unavailable
 and Qt must use XCB, install the Ubuntu runtime packages:
 
@@ -132,42 +95,6 @@ sudo apt install \
   libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
   libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xkb1 libxcb-util1
 ```
-
-## Normalize With A Helix
-
-List available audio devices and MIDI outputs:
-
-```bash
-scripts/measure-windows-from-wsl.sh devices
-```
-
-Run the guided workflow:
-
-```bash
-matchpatch normalize --device helix -a -i setlist_original.hls
-```
-
-MatchPatch creates a reamp file, pauses while you import it into the Helix,
-measures the presets, and creates the adjusted file.
-
-For a single `.hlx` preset, specify the temporary Helix slot:
-
-```bash
-matchpatch normalize --device helix -a -i "Song.hlx" -S 12A
-```
-
-Useful options:
-
-| Option | Purpose |
-|---|---|
-| `-S 01A,01B,02A` | Measure selected processor slots |
-| `-n 8` | Limit measurement to the first eight selected presets |
-| `--target-lufs -18` | Override the default `-16 LUFS` target |
-| `--config ~/.config/matchpatch/config.toml` | Load durable machine and policy defaults |
-| `--keep-temp` | Keep the generated measurement CSV |
-| `--audio-device "Helix ASIO"` | Select an ambiguous audio device |
-| `--midi-output "Helix"` | Select an ambiguous MIDI output |
-| `--timeout 300` | Limit analysis time |
 
 ## Configuration
 
@@ -253,6 +180,89 @@ range.
 
 Keep backups of original processor files. Generated reamp files are meant for
 measurement, not stage use.
+
+## Command-Line Interface
+
+The GUI is the easiest way to use MatchPatch. The CLI exposes the same
+normalization workflow for scripting, testing, and advanced setups.
+
+### Normalize With A Helix
+
+List available audio devices and MIDI outputs:
+
+```bash
+scripts/measure-windows-from-wsl.sh devices
+```
+
+Run the guided hardware workflow:
+
+```bash
+matchpatch normalize --device helix -a -i setlist_original.hls
+```
+
+MatchPatch creates a reamp file, pauses while you import it into the Helix,
+measures the presets, and creates the adjusted file.
+
+For a single `.hlx` preset, specify the temporary Helix slot:
+
+```bash
+matchpatch normalize --device helix -a -i "Song.hlx" -S 12A
+```
+
+Useful options:
+
+| Option | Purpose |
+|---|---|
+| `-S 01A,01B,02A` | Measure selected processor slots |
+| `-n 8` | Limit measurement to the first eight selected presets |
+| `--target-lufs -18` | Override the default `-16 LUFS` target |
+| `--config ~/.config/matchpatch/config.toml` | Load durable machine and policy defaults |
+| `--keep-temp` | Keep the generated measurement CSV |
+| `--audio-device "Helix ASIO"` | Select an ambiguous audio device |
+| `--midi-output "Helix"` | Select an ambiguous MIDI output |
+| `--timeout 300` | Limit analysis time |
+
+### Try It Without Hardware
+
+Loopback mode simulates an empty processor patch by feeding the reference DI
+directly into the analyzer. It is useful for quick signal-analysis smoke tests:
+
+```bash
+matchpatch normalize \
+  --device helix \
+  --backend loopback \
+  -i setlist_original.hls \
+  -o setlist_loopback_adjusted.hls \
+  -S 01A \
+  --keep-temp
+```
+
+Simulated-hardware mode adds stateful preset and snapshot steering, routing
+validation, deterministic gain differences, and snapshot compression. Use it
+for portable integration testing without USB hardware:
+
+```bash
+matchpatch normalize \
+  --device helix \
+  --backend simulated \
+  -i setlist_original.hls \
+  -o setlist_simulated_adjusted.hls \
+  -S 01A,01B \
+  --keep-temp
+```
+
+The worker can also inject deterministic processor failures for error-path
+tests:
+
+```bash
+python -m matchpatch.measure measure \
+  --device helix \
+  --backend simulated \
+  --simulate-fail-presets 6 \
+  --preset-ids 1,6 \
+  --csv analysis.csv \
+  --reference-di reference.wav
+```
 
 ## Device Profiles
 
