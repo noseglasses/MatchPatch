@@ -133,6 +133,7 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.cancel_button)
         layout.addLayout(buttons)
         layout.addWidget(self._build_progress())
+        layout.addWidget(self._build_retained_csv())
         layout.addStretch()
         self._set_phase("ready")
         self._populate_devices()
@@ -233,36 +234,47 @@ class MainWindow(QMainWindow):
         self.device_settings = content
         return content
 
-    def _build_progress(self) -> QGroupBox:
-        group = QGroupBox("Progress")
-        self.progress_group = group
-        group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        layout = QVBoxLayout(group)
+    def _build_progress(self) -> QWidget:
+        pane = QWidget()
+        self.progress_group = pane
+        pane.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        layout = QVBoxLayout(pane)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.current = QLabel("")
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 1)
-        self.progress.hide()
+        self.preset_progress = QProgressBar()
+        self.preset_progress.setRange(0, 1)
+        layout.addWidget(self.current)
+        layout.addWidget(self.preset_progress)
+        pane.hide()
+        return pane
+
+    def _build_retained_csv(self) -> QWidget:
+        pane = QWidget()
+        self.retained_csv_pane = pane
+        layout = QVBoxLayout(pane)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.retained_csv_label = _label(
             "Retained CSV", "Exact measurement CSV path when temporary files are retained."
         )
         self.retained_csv = QLineEdit()
         self.retained_csv.setReadOnly(True)
-        self.retained_csv_label.hide()
-        self.retained_csv.hide()
-        layout.addWidget(self.current)
-        layout.addWidget(self.progress)
         layout.addWidget(self.retained_csv_label)
         layout.addWidget(self.retained_csv)
-        group.hide()
-        return group
+        pane.hide()
+        return pane
 
     def _build_footer(self) -> None:
         self.phase_icon = QLabel()
         self.phase_icon.setFixedSize(16, 16)
         self.phase = QLabel()
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setFixedWidth(160)
+        self.progress.hide()
         footer = self.statusBar()
         footer.addWidget(self.phase_icon)
         footer.addWidget(self.phase)
+        footer.addPermanentWidget(self.progress)
 
     def _build_log(self) -> QWidget:
         content = QWidget()
@@ -491,8 +503,7 @@ class MainWindow(QMainWindow):
             for row in range(self.preset_table.rowCount()):
                 self._clear_preset_adjustments(row)
         self.retained_csv.clear()
-        self.retained_csv_label.hide()
-        self.retained_csv.hide()
+        self.retained_csv_pane.hide()
         self._set_phase("starting")
         self._log("Normalization started", "info")
         self._start_busy_phase()
@@ -514,6 +525,7 @@ class MainWindow(QMainWindow):
     def update_progress(self, event: ProgressEvent) -> None:
         if event.phase:
             self._set_phase(event.phase)
+            self.progress_group.hide()
             if event.phase in {
                 "completed",
                 "waiting_for_reamp_import",
@@ -524,20 +536,22 @@ class MainWindow(QMainWindow):
                 self._start_busy_phase()
 
         if event.device_patch:
-            text = f"Preset {event.device_patch}"
+            text = self._preset_progress_text(event)
             if event.snapshot is not None:
-                text += f", snapshot {event.snapshot}/{event.snapshot_total}"
+                text += self._snapshot_progress_text(event)
             self.current.setText(text)
 
         if event.preset_total and event.snapshot_total and event.preset_index:
             self.busy_timer.stop()
+            self.progress.hide()
             self.progress_group.show()
-            self.progress.show()
             total = event.preset_total * event.snapshot_total
             snapshot = event.snapshot or 1
             value = (event.preset_index - 1) * event.snapshot_total + snapshot
-            self.progress.setRange(0, total)
-            self.progress.setValue(value)
+            self.preset_progress.setRange(0, total)
+            self.preset_progress.setValue(value)
+        elif event.kind == "measurement_completed":
+            self.progress_group.hide()
 
         message = event.message or event.kind.replace("_", " ")
         if event.kind == "log":
@@ -546,8 +560,7 @@ class MainWindow(QMainWindow):
             message += f": {event.lufs:.3f} LUFS, {event.crest_factor_db:.3f} dB crest"
         if event.kind == "temp_retained" and event.path:
             self.retained_csv.setText(event.path)
-            self.retained_csv_label.show()
-            self.retained_csv.show()
+            self.retained_csv_pane.show()
 
         if "bad LUFS" in message or message.startswith("[WARNING]"):
             level = "warning"
@@ -571,8 +584,7 @@ class MainWindow(QMainWindow):
         self._set_phase("completed")
         if result.retained_csv_path is not None:
             self.retained_csv.setText(str(result.retained_csv_path))
-            self.retained_csv_label.show()
-            self.retained_csv.show()
+            self.retained_csv_pane.show()
         self._log(f"Output: {result.output_path}", "success")
 
     def show_error(self, message: str) -> None:
@@ -905,21 +917,32 @@ class MainWindow(QMainWindow):
 
     def _start_busy_phase(self) -> None:
         self.busy_timer.start()
-        self.progress_group.show()
-        self.progress.show()
-        self.progress.setRange(0, 1)
-        self.progress.setValue(0)
+        self.progress.hide()
 
     def _show_busy_progress(self) -> None:
-        self.progress.setRange(0, 0)
+        self.progress.show()
 
     def _stop_busy_phase(self) -> None:
         self.busy_timer.stop()
-        if self.progress.minimum() == 0 and self.progress.maximum() == 0:
-            self.progress.setRange(0, 1)
-            self.progress.setValue(0)
         self.progress.hide()
         self.progress_group.hide()
+
+    def _preset_progress_text(self, event: ProgressEvent) -> str:
+        row = self._preset_row(event.device_patch or "")
+        if row is None:
+            return f"Preset {event.device_patch}"
+        name = self.preset_table.item(row, 2)
+        if name and name.text():
+            return f"Preset {event.device_patch}: {name.text()}"
+        return f"Preset {event.device_patch}"
+
+    def _snapshot_progress_text(self, event: ProgressEvent) -> str:
+        text = f", snapshot {event.snapshot}/{event.snapshot_total}"
+        row = self._preset_row(event.device_patch or "")
+        if row is None or event.snapshot is None:
+            return text
+        name = self.preset_table.item(row, 3 + (event.snapshot - 1) * 2)
+        return f"{text}: {name.text()}" if name and name.text() else text
 
 
 def _path_row(field: QLineEdit, button: QPushButton) -> QWidget:
