@@ -11,7 +11,9 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QPoint
 from PySide6.QtGui import QCloseEvent, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QHeaderView,
@@ -236,12 +238,23 @@ def test_preset_table_can_be_sorted_by_column_headers(app) -> None:
         window._clear_preset_adjustments(row)
 
     assert window.preset_table.isSortingEnabled()
+    header = window.preset_table.horizontalHeader()
+    assert header.sectionsClickable()
 
-    window.preset_table.sortItems(1, Qt.SortOrder.AscendingOrder)
+    def click_header(column: int) -> None:
+        QTest.mouseClick(
+            header.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            QPoint(header.sectionViewportPosition(column) + header.sectionSize(column) // 2, 5),
+        )
+        app.processEvents()
+
+    click_header(1)
     assert window.preset_table.item(0, 1).text() == "01A"
     assert window.preset_table.item(0, 2).text() == "Lead"
 
-    window.preset_table.sortItems(2, Qt.SortOrder.AscendingOrder)
+    click_header(2)
     assert window.preset_table.item(0, 1).text() == "02B"
     assert window.preset_table.item(0, 2).text() == "Clean"
 
