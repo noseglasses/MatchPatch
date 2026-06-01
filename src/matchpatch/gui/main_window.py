@@ -501,7 +501,7 @@ class MainWindow(QMainWindow):
         self.worker.import_requested.connect(self.confirm_import)
         self.worker.completed.connect(self.normalization_completed)
         self.worker.failed.connect(self.show_error)
-        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.finished.connect(self.worker_thread.quit, Qt.ConnectionType.DirectConnection)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker_thread.finished.connect(self.worker_finished)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
@@ -555,7 +555,7 @@ class MainWindow(QMainWindow):
         self._stop_busy_phase()
         answer = QMessageBox.question(
             self,
-            "Import processor file",
+            "Import preset/setlist file",
             request.message,
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
         )
@@ -598,6 +598,7 @@ class MainWindow(QMainWindow):
             self.worker_thread.quit()
             self.worker_thread.wait()
         super().closeEvent(event)
+        QApplication.quit()
 
     def _base_argv(self, input_path: str) -> list[str]:
         argv = [
