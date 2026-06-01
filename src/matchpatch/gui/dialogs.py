@@ -85,12 +85,12 @@ class HelpDialog(QDialog):
             "reamp and adjusted files.</li>"
             "</ol>"
             "<h3>Progress</h3>"
-            "<p>An animated progress bar means MatchPatch is working on a phase whose "
-            "duration cannot be estimated yet. Preset and snapshot measurements use "
-            "determinate progress when totals are known.</p>"
+            "<p>An animated progress bar in the window footer means MatchPatch is working "
+            "on a phase whose duration cannot be estimated yet. While presets are measured, "
+            "a determinate progress pane shows the current preset and snapshot.</p>"
             "<h3>Temporary files</h3>"
             "<p>Enable <b>Keep temporary files</b> to retain the measurement CSV. "
-            "Its exact path appears in the Progress area.</p>"
+            "Its exact path appears below the processing controls.</p>"
             f'<p>More documentation: <a href="{PROJECT_URL}">{PROJECT_URL}</a></p>'
         )
         layout.addWidget(help_text)

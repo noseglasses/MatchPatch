@@ -60,9 +60,10 @@ def test_main_window_starts_with_registry_device_and_loopback(app) -> None:
     assert window.log_level.currentText() == "Info"
     assert window.device_stack.count() == 1
     assert window.device_panels["helix"].audio_group.isEnabled()
-    assert window.progress.parent().sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
+    assert window.progress_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
     assert not window.statusBar().isHidden()
     assert window.phase.parent() is window.statusBar()
+    assert window.progress.parent() is window.statusBar()
     progress_index = window.content.layout().indexOf(window.progress_group)
     button_layout = window.content.layout().itemAt(progress_index - 1).layout()
     assert button_layout is not None
@@ -95,9 +96,10 @@ def test_log_section_and_busy_progress(app) -> None:
 
     assert window.log_section is window.log
     window._start_busy_phase()
-    assert not window.progress_group.isHidden()
-    assert not window.progress.isHidden()
+    assert window.progress_group.isHidden()
+    assert window.progress.isHidden()
     window._show_busy_progress()
+    assert not window.progress.isHidden()
     assert window.progress.minimum() == 0
     assert window.progress.maximum() == 0
     window.update_progress(
@@ -109,7 +111,9 @@ def test_log_section_and_busy_progress(app) -> None:
             snapshot_total=4,
         )
     )
-    assert window.progress.maximum() == 8
+    assert not window.progress_group.isHidden()
+    assert window.progress.isHidden()
+    assert window.preset_progress.maximum() == 8
     window._stop_busy_phase()
     assert window.progress_group.isHidden()
     assert window.progress.isHidden()
@@ -126,7 +130,7 @@ def test_progress_statuses_include_suitable_icons(monkeypatch, app) -> None:
     window.update_progress(ProgressEvent("phase", phase="measuring"))
     assert window.phase.text() == "Measuring"
     assert not window.phase_icon.pixmap().isNull()
-    assert not window.progress_group.isHidden()
+    assert window.progress_group.isHidden()
     window.update_progress(ProgressEvent("phase", phase="waiting_for_reamp_import"))
     assert window.phase.text() == "Waiting For Reamp Import"
     assert window.progress_group.isHidden()
@@ -138,6 +142,33 @@ def test_progress_statuses_include_suitable_icons(monkeypatch, app) -> None:
     window.show_error("Measurement failed")
     assert window.phase.text() == "Error"
     assert not window.phase_icon.pixmap().isNull()
+
+    window.close()
+
+
+def test_preset_progress_shows_current_preset_and_snapshot_names(app) -> None:
+    window = MainWindow()
+    window.preset_table.insertRow(0)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Lead"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Rhythm", "Solo"))
+
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_started",
+            device_patch="02B",
+            preset_index=1,
+            preset_total=1,
+            snapshot=2,
+            snapshot_total=4,
+        )
+    )
+
+    assert window.current.text() == "Preset 02B: Lead, snapshot 2/4: Solo"
+    assert not window.progress_group.isHidden()
+    window.update_progress(ProgressEvent("measurement_completed"))
+    assert window.progress_group.isHidden()
 
     window.close()
 

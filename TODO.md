@@ -10,8 +10,15 @@ The icon after the status word in the Status pane is a wireframe box rather than
 
 Please only show the progress pane while there is something in progress. Move the status words/sentences like "Ready" to a footer line of the MatchPatch window in order for it being always visible. The actual progress bar should only be displayed while something is actually processed. The progress pane should be displayed below the row with the "start normalization" and "cancel" buttons. (done, tested)
 
-Do the following for the MatchPatch gui (python code in src/matchpatch/gui):
 When cancelling while the measurment is ongoing. There is a popup that informs that the measurment was cancelled. Then the gui window and the taskbar icon disappears but the command does not terminate (hangs in the terminal where it was started). (done, tested)
+
+Add a cancelation query if "cancel" button is pressed while the measurment is going on. This query should also be displayed if the measurement is going on and the user attempts to close the window. If upon a attempt to close the window in such a case the cancellation is aborted through the popup the window closing is ignored. (done, tested)
+
+When a running measurment is canceled, after the cancel-query there is another popup that tells that user that the normalization was cancelt. That popup is superfluous and to be removed. Also after cancelling, the status reads "Error". I would expect it to read "Normalization cancelled by user" instead. (done, tested)
+
+
+Do the following for the MatchPatch gui (python code in src/matchpatch/gui):
+The Progress pane should only be visible while the presets are processed (and the name of presets and snapshots currently processed are shown). The general progress bar that is used while the measurment is prepared should be moved to the window footer and only displayed while processing steps are running whose duration cannot be estimated beforehand.
 
 The windows displayed when MatchPatch gui is started from the WSL/VSCode have no proper border. This looks strange and especially the area of popups is hard to distinguish from the MatchPatch main window in the background. Please make the window borders more visible.
 
