@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
 )
 
+from matchpatch.gui import main_window
 from matchpatch.gui.main_window import MainWindow
 from matchpatch.gui.worker import NormalizationWorker
 from matchpatch.normalize import DEFAULT_REFERENCE_DI, DEFAULT_WINDOWS_PYTHON
@@ -58,8 +59,19 @@ def test_main_window_starts_with_registry_device_and_loopback(app) -> None:
     assert window.device_stack.count() == 1
     assert window.device_panels["helix"].audio_group.isEnabled()
     assert window.progress.parent().sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
+    assert not window.statusBar().isHidden()
+    assert window.phase.parent() is window.statusBar()
+    progress_index = window.content.layout().indexOf(window.progress_group)
+    button_layout = window.content.layout().itemAt(progress_index - 1).layout()
+    assert button_layout is not None
+    assert button_layout.indexOf(window.start_button) >= 0
+    assert button_layout.indexOf(window.cancel_button) >= 0
+    assert window.progress_group.isHidden()
+    assert window.progress.isHidden()
     assert not hasattr(window, "ignore_bad_lufs")
     assert window.preset_table.verticalHeader().isHidden()
+    assert not window.preset_table.wordWrap()
+    assert window.preset_table_note.text() == "Only non-empty presets are listed."
 
     window.close()
 
@@ -81,6 +93,8 @@ def test_log_section_and_busy_progress(app) -> None:
 
     assert window.log_section is window.log
     window._start_busy_phase()
+    assert not window.progress_group.isHidden()
+    assert not window.progress.isHidden()
     window._show_busy_progress()
     assert window.progress.minimum() == 0
     assert window.progress.maximum() == 0
@@ -94,6 +108,34 @@ def test_log_section_and_busy_progress(app) -> None:
         )
     )
     assert window.progress.maximum() == 8
+    window._stop_busy_phase()
+    assert window.progress_group.isHidden()
+    assert window.progress.isHidden()
+
+    window.close()
+
+
+def test_progress_statuses_include_suitable_icons(monkeypatch, app) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: None)
+
+    assert window.phase.text() == "Ready"
+    assert not window.phase_icon.pixmap().isNull()
+    window.update_progress(ProgressEvent("phase", phase="measuring"))
+    assert window.phase.text() == "Measuring"
+    assert not window.phase_icon.pixmap().isNull()
+    assert not window.progress_group.isHidden()
+    window.update_progress(ProgressEvent("phase", phase="waiting_for_reamp_import"))
+    assert window.phase.text() == "Waiting For Reamp Import"
+    assert window.progress_group.isHidden()
+    window.update_progress(ProgressEvent("phase", phase="measuring"))
+    window.normalization_completed(NormalizationResult(Path("adjusted.hls"), None))
+    assert window.phase.text() == "Completed"
+    assert not window.phase_icon.pixmap().isNull()
+    assert window.progress_group.isHidden()
+    window.show_error("Measurement failed")
+    assert window.phase.text() == "Error"
+    assert not window.phase_icon.pixmap().isNull()
 
     window.close()
 
@@ -138,12 +180,36 @@ def test_preset_bulk_selection_buttons(app) -> None:
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
         for row in range(window.preset_table.rowCount())
     )
-    assert window.preset_table.item(0, 4).text() == "+0 dB"
+    assert window.preset_table.item(0, 4).text() == "+0"
     window.set_all_presets_checked(True)
     assert all(
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Checked
         for row in range(window.preset_table.rowCount())
     )
+
+    window.close()
+
+
+def test_preset_table_can_be_sorted_by_column_headers(app) -> None:
+    window = MainWindow()
+    for row, (patch, name) in enumerate((("02B", "Clean"), ("01A", "Lead"))):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked)
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(patch))
+        window.preset_table.setItem(row, 2, QTableWidgetItem(name))
+        window._clear_preset_adjustments(row)
+
+    assert window.preset_table.isSortingEnabled()
+
+    window.preset_table.sortItems(1, Qt.SortOrder.AscendingOrder)
+    assert window.preset_table.item(0, 1).text() == "01A"
+    assert window.preset_table.item(0, 2).text() == "Lead"
+
+    window.preset_table.sortItems(2, Qt.SortOrder.AscendingOrder)
+    assert window.preset_table.item(0, 1).text() == "02B"
+    assert window.preset_table.item(0, 2).text() == "Clean"
 
     window.close()
 
@@ -169,13 +235,15 @@ def test_gain_log_updates_preset_correction_columns(app) -> None:
     )
 
     assert window.preset_table.horizontalHeaderItem(3).text() == "1"
-    assert window.preset_table.horizontalHeaderItem(4).text() == "Δ"
-    assert window.preset_table.item(0, 3).text() == "Solo 🎸"
-    assert window.preset_table.item(0, 4).text() == "+11.1 dB"
+    assert window.preset_table.horizontalHeaderItem(4).text() == "Δ (dB)"
+    assert window.preset_table.item(0, 3).text() == "Solo"
+    assert not window.preset_table.item(0, 3).icon().isNull()
+    assert window.preset_table.item(0, 3).toolTip() == "Solo snapshot"
+    assert window.preset_table.item(0, 4).text() == "+11.1"
     assert window.preset_table.item(0, 5).text() == "Clean"
-    assert window.preset_table.item(0, 6).text() == "+0.0 dB"
+    assert window.preset_table.item(0, 6).text() == "+0.0"
     assert window.preset_table.item(0, 7).text() == "Rhythm"
-    assert window.preset_table.item(0, 8).text() == "-2.0 dB"
+    assert window.preset_table.item(0, 8).text() == "-2.0"
     assert window.preset_table.item(0, 4).foreground().color().name() == "#15803d"
     assert window.preset_table.item(0, 8).foreground().color().name() == "#b91c1c"
     assert all(
@@ -205,7 +273,53 @@ def test_snapshot_names_are_preloaded_and_bad_lufs_is_marked(app) -> None:
     assert window.preset_table.item(0, 4).font().pointSize() > app.font().pointSize()
     assert "unusable LUFS" in window.preset_table.item(0, 4).toolTip()
     assert window.preset_table.item(0, 5).text() == "Solo"
+    assert all(
+        window.preset_table.item(0, column).background().color().name() == "#fee2e2"
+        for column in range(window.preset_table.columnCount())
+    )
 
+    window.close()
+
+
+def test_bad_lufs_row_highlight_is_reset_for_new_input_and_measurement(monkeypatch, app) -> None:
+    window = MainWindow()
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+
+    window.update_progress(ProgressEvent("log", message="[GAIN] 02B Clean | bad LUFS"))
+    assert window.preset_table.item(0, 0).background().color().name() == "#fee2e2"
+
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: None)
+
+    class FailingProfile:
+        @staticmethod
+        def create_patch_file_handler(root):
+            class FailingHandler:
+                @staticmethod
+                def validate_input(path):
+                    raise ValueError("Invalid input")
+
+            return FailingHandler()
+
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: FailingProfile())
+    window.input_path.setText("missing.hls")
+    window.load_assignments()
+    assert window.preset_table.item(0, 0).background().style() == Qt.BrushStyle.NoBrush
+
+    window.update_progress(ProgressEvent("log", message="[GAIN] 02B Clean | bad LUFS"))
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: object())
+    monkeypatch.setattr(main_window.QThread, "start", lambda self: None)
+    window.start_normalization()
+    assert window.preset_table.item(0, 0).background().style() == Qt.BrushStyle.NoBrush
+
+    window.worker_finished()
     window.close()
 
 
@@ -225,7 +339,8 @@ def test_implausible_gain_warning_is_marked_as_bad_lufs(app) -> None:
         )
     )
 
-    assert window.preset_table.item(0, 3).text() == "Solo 🎸"
+    assert window.preset_table.item(0, 3).text() == "Solo"
+    assert not window.preset_table.item(0, 3).icon().isNull()
     assert window.preset_table.item(0, 4).text() == "⚠️"
 
     window.close()

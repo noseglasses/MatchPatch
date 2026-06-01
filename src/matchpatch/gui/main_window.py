@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from datetime import datetime
 from html import escape
 from pathlib import Path
+from typing import Iterator
 
 from PySide6.QtCore import QThread, QTimer
 from PySide6.QtGui import QBrush, QCloseEvent, QColor, QIcon, Qt
@@ -62,6 +64,23 @@ GAIN_STABLE_PATTERN = re.compile(
 GAIN_BAD_LUFS_PATTERN = re.compile(
     r"^\[GAIN\] (?P<patch>\d{2}[A-D]) (?P<label>.*?) \| bad LUFS(?: \(.*\))?$"
 )
+BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
+PHASE_ICON = {
+    "ready": QStyle.StandardPixmap.SP_DialogApplyButton,
+    "starting": QStyle.StandardPixmap.SP_MediaPlay,
+    "preparing_reamp": QStyle.StandardPixmap.SP_BrowserReload,
+    "waiting_for_reamp_import": QStyle.StandardPixmap.SP_MediaPause,
+    "measuring": QStyle.StandardPixmap.SP_ComputerIcon,
+    "applying": QStyle.StandardPixmap.SP_BrowserReload,
+    "completed": QStyle.StandardPixmap.SP_DialogApplyButton,
+    "waiting_for_adjusted_import": QStyle.StandardPixmap.SP_MediaPause,
+    "error": QStyle.StandardPixmap.SP_MessageBoxWarning,
+    "cancelling": QStyle.StandardPixmap.SP_MessageBoxWarning,
+}
+
+
+def _phase_text(phase: str) -> str:
+    return phase.replace("_", " ").title()
 
 
 class MainWindow(QMainWindow):
@@ -91,10 +110,10 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setWidget(content)
         self.setCentralWidget(scroll)
+        self._build_footer()
         layout = QVBoxLayout(content)
         layout.addWidget(self._build_inputs())
         layout.addWidget(self._build_advanced())
-        layout.addWidget(self._build_progress())
         self.start_button = QPushButton("Start normalization")
         self.start_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         self.start_button.setToolTip("Start the guided preset-normalization workflow.")
@@ -110,7 +129,9 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.start_button)
         buttons.addWidget(self.cancel_button)
         layout.addLayout(buttons)
+        layout.addWidget(self._build_progress())
         layout.addStretch()
+        self._set_phase("ready")
         self._populate_devices()
         self.load_defaults()
         QTimer.singleShot(0, self._resize_to_initial_content)
@@ -158,12 +179,15 @@ class MainWindow(QMainWindow):
         self.preset_table = QTableWidget()
         self.preset_table.setHorizontalHeader(SnapshotHeader(self.preset_table))
         self.preset_table.verticalHeader().hide()
+        self.preset_table.setWordWrap(False)
         self.preset_table.setToolTip(
             "Select presets and inspect snapshot names and calculated output-gain adjustments."
         )
         self._configure_snapshot_columns(self.snapshot_count)
         self.preset_table.itemChanged.connect(self._preset_item_changed)
+        self.preset_table.setSortingEnabled(True)
         self.preset_table.setMinimumHeight(160)
+        self.preset_table_note = QLabel("Only non-empty presets are listed.")
         self.single_slot = QLineEdit()
         self.single_slot.setPlaceholderText("Temporary slot, for example 12A")
         self.single_slot.hide()
@@ -193,6 +217,7 @@ class MainWindow(QMainWindow):
         selection_buttons.addStretch()
         layout.addLayout(selection_buttons)
         layout.addWidget(self.preset_table)
+        layout.addWidget(self.preset_table_note)
         layout.addWidget(self.single_slot)
         self.presets = content
         return content
@@ -207,12 +232,13 @@ class MainWindow(QMainWindow):
 
     def _build_progress(self) -> QGroupBox:
         group = QGroupBox("Progress")
+        self.progress_group = group
         group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(group)
-        self.phase = QLabel("Ready")
         self.current = QLabel("")
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
+        self.progress.hide()
         self.retained_csv_label = _label(
             "Retained CSV", "Exact measurement CSV path when temporary files are retained."
         )
@@ -220,12 +246,20 @@ class MainWindow(QMainWindow):
         self.retained_csv.setReadOnly(True)
         self.retained_csv_label.hide()
         self.retained_csv.hide()
-        layout.addWidget(self.phase)
         layout.addWidget(self.current)
         layout.addWidget(self.progress)
         layout.addWidget(self.retained_csv_label)
         layout.addWidget(self.retained_csv)
+        group.hide()
         return group
+
+    def _build_footer(self) -> None:
+        self.phase_icon = QLabel()
+        self.phase_icon.setFixedSize(16, 16)
+        self.phase = QLabel()
+        footer = self.statusBar()
+        footer.addWidget(self.phase_icon)
+        footer.addWidget(self.phase)
 
     def _build_log(self) -> QWidget:
         content = QWidget()
@@ -400,15 +434,17 @@ class MainWindow(QMainWindow):
 
     def load_assignments(self) -> None:
         self.preset_snapshot_positions.clear()
-        self.preset_table.setRowCount(0)
+        self._clear_bad_lufs_highlights()
         path = Path(self.input_path.text())
         is_single_preset = path.suffix.lower() == ".hlx"
         self.single_slot.setVisible(is_single_preset)
         self.preset_table.setVisible(not is_single_preset)
+        self.preset_table_note.setVisible(not is_single_preset)
         self.select_all_button.setVisible(not is_single_preset)
         self.unselect_all_button.setVisible(not is_single_preset)
 
         if path.suffix.lower() == ".hlx":
+            self.preset_table.setRowCount(0)
             self.preset_hint.setText("Choose the temporary Helix slot used during measurement.")
             return
 
@@ -416,16 +452,18 @@ class MainWindow(QMainWindow):
             profile = get_device_profile(self.device.currentData())
             handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
             handler.validate_input(path)
-            for assignment in handler.list_assignments(path):
-                row = self.preset_table.rowCount()
-                self.preset_table.insertRow(row)
-                selected = QTableWidgetItem()
-                selected.setCheckState(Qt.CheckState.Checked)
-                self.preset_table.setItem(row, 0, selected)
-                self.preset_table.setItem(row, 1, QTableWidgetItem(assignment.device_patch))
-                self.preset_table.setItem(row, 2, QTableWidgetItem(assignment.name))
-                self._clear_preset_adjustments(row)
-                self._set_snapshot_names(row, assignment.snapshot_names)
+            with self._sorting_paused():
+                self.preset_table.setRowCount(0)
+                for assignment in handler.list_assignments(path):
+                    row = self.preset_table.rowCount()
+                    self.preset_table.insertRow(row)
+                    selected = QTableWidgetItem()
+                    selected.setCheckState(Qt.CheckState.Checked)
+                    self.preset_table.setItem(row, 0, selected)
+                    self.preset_table.setItem(row, 1, QTableWidgetItem(assignment.device_patch))
+                    self.preset_table.setItem(row, 2, QTableWidgetItem(assignment.name))
+                    self._clear_preset_adjustments(row)
+                    self._set_snapshot_names(row, assignment.snapshot_names)
         except Exception as exc:  # noqa: BLE001
             self.show_error(str(exc))
             return
@@ -445,12 +483,14 @@ class MainWindow(QMainWindow):
         self.log.clear()
         self.log_entries.clear()
         self.preset_snapshot_positions.clear()
-        for row in range(self.preset_table.rowCount()):
-            self._clear_preset_adjustments(row)
+        self._clear_bad_lufs_highlights()
+        with self._sorting_paused():
+            for row in range(self.preset_table.rowCount()):
+                self._clear_preset_adjustments(row)
         self.retained_csv.clear()
         self.retained_csv_label.hide()
         self.retained_csv.hide()
-        self.phase.setText("Starting")
+        self._set_phase("starting")
         self._log("Normalization started", "info")
         self._start_busy_phase()
         self.worker_thread = QThread(self)
@@ -469,7 +509,7 @@ class MainWindow(QMainWindow):
 
     def update_progress(self, event: ProgressEvent) -> None:
         if event.phase:
-            self.phase.setText(event.phase.replace("_", " ").title())
+            self._set_phase(event.phase)
             if event.phase in {
                 "completed",
                 "waiting_for_reamp_import",
@@ -486,7 +526,9 @@ class MainWindow(QMainWindow):
             self.current.setText(text)
 
         if event.preset_total and event.snapshot_total and event.preset_index:
-            self._stop_busy_phase()
+            self.busy_timer.stop()
+            self.progress_group.show()
+            self.progress.show()
             total = event.preset_total * event.snapshot_total
             snapshot = event.snapshot or 1
             value = (event.preset_index - 1) * event.snapshot_total + snapshot
@@ -522,7 +564,7 @@ class MainWindow(QMainWindow):
 
     def normalization_completed(self, result: NormalizationResult) -> None:
         self._stop_busy_phase()
-        self.phase.setText("Completed")
+        self._set_phase("completed")
         if result.retained_csv_path is not None:
             self.retained_csv.setText(str(result.retained_csv_path))
             self.retained_csv_label.show()
@@ -531,7 +573,7 @@ class MainWindow(QMainWindow):
 
     def show_error(self, message: str) -> None:
         self._stop_busy_phase()
-        self.phase.setText("Error")
+        self._set_phase("error")
         self._log(message, "error")
         QMessageBox.critical(self, "MatchPatch error", message)
 
@@ -545,7 +587,7 @@ class MainWindow(QMainWindow):
     def cancel_normalization(self) -> None:
         if self.worker is not None:
             self.worker.cancel()
-            self.phase.setText("Cancelling")
+            self._set_phase("cancelling")
             self._log("Cancellation requested", "warning")
             self._start_busy_phase()
 
@@ -609,10 +651,19 @@ class MainWindow(QMainWindow):
 
     def set_all_presets_checked(self, checked: bool) -> None:
         state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
-        for row in range(self.preset_table.rowCount()):
-            item = self.preset_table.item(row, 0)
-            if item is not None:
-                item.setCheckState(state)
+        with self._sorting_paused():
+            for row in range(self.preset_table.rowCount()):
+                item = self.preset_table.item(row, 0)
+                if item is not None:
+                    item.setCheckState(state)
+
+    def _set_phase(self, phase: str) -> None:
+        self.phase.setText(_phase_text(phase))
+        standard_pixmap = PHASE_ICON.get(phase.lower())
+        icon = (
+            self.style().standardIcon(standard_pixmap) if standard_pixmap is not None else QIcon()
+        )
+        self.phase_icon.setPixmap(icon.pixmap(16, 16))
 
     def _apply_gain_correction(self, message: str) -> None:
         match = (
@@ -646,7 +697,11 @@ class MainWindow(QMainWindow):
         adjustment_item = self.preset_table.item(row, adjustment_column)
         if name_item is None or adjustment_item is None:
             return
-        name_item.setText(f"{label} 🎸" if is_solo else label)
+        name_item.setText(label)
+        name_item.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume) if is_solo else QIcon()
+        )
+        name_item.setToolTip("Solo snapshot" if is_solo else "")
         if match.re is GAIN_BAD_LUFS_PATTERN:
             adjustment_item.setText("⚠️")
             adjustment_item.setToolTip("This snapshot produced an unusable LUFS measurement.")
@@ -655,10 +710,11 @@ class MainWindow(QMainWindow):
             font.setBold(True)
             font.setPointSize(max(font.pointSize(), QApplication.font().pointSize(), 9) + 5)
             adjustment_item.setFont(font)
+            self._set_bad_lufs_highlight(row)
             self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
             return
 
-        adjustment = f"{match['delta']} dB"
+        adjustment = match["delta"]
         self._set_adjustment_value(
             adjustment_item,
             adjustment,
@@ -668,42 +724,53 @@ class MainWindow(QMainWindow):
 
     def _configure_snapshot_columns(self, snapshot_count: int) -> None:
         self.snapshot_count = snapshot_count
-        labels = ["Selected", "Preset", "Name"]
+        labels = ["", "Preset", "Name"]
         for snapshot in range(1, snapshot_count + 1):
-            labels.extend([str(snapshot), "Δ"])
-        self.preset_table.setColumnCount(len(labels))
-        self.preset_table.setHorizontalHeaderLabels(labels)
-        header = self.preset_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(False)
-        self.preset_table.setColumnWidth(0, 58)
-        self.preset_table.setColumnWidth(1, 52)
-        self.preset_table.setColumnWidth(2, 120)
-        for column in range(3, len(labels), 2):
-            self.preset_table.setColumnWidth(column, 100)
-            self.preset_table.setColumnWidth(column + 1, 62)
-        for column, tooltip in enumerate(
-            [
-                "Include this preset in normalization.",
-                "Processor slot containing the preset.",
-                "Preset name read from the input file.",
-                *(
-                    tooltip
-                    for snapshot in range(1, snapshot_count + 1)
-                    for tooltip in (
-                        f"Name of snapshot {snapshot} read from the input file.",
-                        f"Calculated gain adjustment for snapshot {snapshot}.",
-                    )
-                ),
-            ]
-        ):
-            item = self.preset_table.horizontalHeaderItem(column)
-            if item is not None:
-                item.setToolTip(tooltip)
-        for row in range(self.preset_table.rowCount()):
-            self._clear_preset_adjustments(row)
+            labels.extend([str(snapshot), "Δ (dB)"])
+        with self._sorting_paused():
+            self.preset_table.setColumnCount(len(labels))
+            self.preset_table.setHorizontalHeaderLabels(labels)
+            header = self.preset_table.horizontalHeader()
+            header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+            header.setStretchLastSection(False)
+            self.preset_table.setColumnWidth(0, 58)
+            self.preset_table.setColumnWidth(1, 52)
+            self.preset_table.setColumnWidth(2, 120)
+            for column in range(3, len(labels), 2):
+                self.preset_table.setColumnWidth(column, 100)
+                self.preset_table.setColumnWidth(column + 1, 62)
+            for column, tooltip in enumerate(
+                [
+                    "Include this preset in normalization.",
+                    "Processor slot containing the preset.",
+                    "Preset name read from the input file.",
+                    *(
+                        tooltip
+                        for snapshot in range(1, snapshot_count + 1)
+                        for tooltip in (
+                            f"Name of snapshot {snapshot} read from the input file.",
+                            f"Calculated gain adjustment for snapshot {snapshot}.",
+                        )
+                    ),
+                ]
+            ):
+                item = self.preset_table.horizontalHeaderItem(column)
+                if item is not None:
+                    item.setToolTip(tooltip)
+            for row in range(self.preset_table.rowCount()):
+                self._clear_preset_adjustments(row)
+
+    @contextmanager
+    def _sorting_paused(self) -> Iterator[None]:
+        sorting_enabled = self.preset_table.isSortingEnabled()
+        self.preset_table.setSortingEnabled(False)
+        try:
+            yield
+        finally:
+            self.preset_table.setSortingEnabled(sorting_enabled)
 
     def _clear_preset_adjustments(self, row: int) -> None:
+        self._clear_bad_lufs_highlight(row)
         for column in range(3, self.preset_table.columnCount(), 2):
             name = self.preset_table.item(row, column)
             adjustment = self.preset_table.item(row, column + 1)
@@ -713,13 +780,31 @@ class MainWindow(QMainWindow):
             if adjustment is None:
                 adjustment = QTableWidgetItem()
                 self.preset_table.setItem(row, column + 1, adjustment)
-            self._set_adjustment_value(adjustment, "+0 dB", 0)
+            self._set_adjustment_value(adjustment, "+0", 0)
+
+    def _set_bad_lufs_highlight(self, row: int) -> None:
+        for column in range(self.preset_table.columnCount()):
+            item = self.preset_table.item(row, column)
+            if item is not None:
+                item.setBackground(BAD_LUFS_ROW_BACKGROUND)
+
+    def _clear_bad_lufs_highlight(self, row: int) -> None:
+        for column in range(self.preset_table.columnCount()):
+            item = self.preset_table.item(row, column)
+            if item is not None:
+                item.setBackground(QBrush())
+
+    def _clear_bad_lufs_highlights(self) -> None:
+        for row in range(self.preset_table.rowCount()):
+            self._clear_bad_lufs_highlight(row)
 
     def _set_snapshot_names(self, row: int, snapshot_names: tuple[str, ...]) -> None:
         for snapshot, name in enumerate(snapshot_names[: self.snapshot_count]):
             item = self.preset_table.item(row, 3 + snapshot * 2)
             if item is not None:
                 item.setText(name)
+                item.setIcon(QIcon())
+                item.setToolTip("")
 
     def _preset_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() == 0 and item.checkState() != Qt.CheckState.Checked:
@@ -797,6 +882,8 @@ class MainWindow(QMainWindow):
 
     def _start_busy_phase(self) -> None:
         self.busy_timer.start()
+        self.progress_group.show()
+        self.progress.show()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
 
@@ -808,6 +895,8 @@ class MainWindow(QMainWindow):
         if self.progress.minimum() == 0 and self.progress.maximum() == 0:
             self.progress.setRange(0, 1)
             self.progress.setValue(0)
+        self.progress.hide()
+        self.progress_group.hide()
 
 
 def _path_row(field: QLineEdit, button: QPushButton) -> QWidget:

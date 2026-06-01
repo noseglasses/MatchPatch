@@ -37,7 +37,7 @@ class AboutDialog(QDialog):
         logo.setPixmap(
             pixmap.scaled(
                 520,
-                180,
+                320,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )

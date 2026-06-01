@@ -26,7 +26,8 @@ def test_about_dialog_displays_project_metadata_and_logo(app) -> None:
     labels = dialog.findChildren(QLabel)
     texts = [label.text() for label in labels]
 
-    assert any(label.pixmap() is not None for label in labels)
+    logo = next(label.pixmap() for label in labels if label.pixmap() is not None)
+    assert logo.height() == 320
     assert any("MatchPatch" in text for text in texts)
     assert any(__version__ in text for text in texts)
     assert any(PROJECT_URL in text for text in texts)
