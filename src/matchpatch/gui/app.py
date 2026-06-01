@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QMessageLogContext, QtMsgType, qInstallMessageHandler
+from PySide6.QtCore import QMessageLogContext, QTimer, QtMsgType, qInstallMessageHandler
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
@@ -72,6 +73,19 @@ def register_desktop_entry() -> None:
         return
 
 
+def install_terminal_interrupt_handler(app: QApplication, window: MainWindow) -> QTimer:
+    """Route terminal cancellation through the window's normal close handling."""
+
+    def close_window(_signum: int, _frame: object) -> None:
+        QTimer.singleShot(0, window.close)
+
+    signal.signal(signal.SIGINT, close_window)
+    timer = QTimer(app)
+    timer.timeout.connect(lambda: None)
+    timer.start(100)
+    return timer
+
+
 def main() -> None:
     configure_wslg_runtime()
     register_desktop_entry()
@@ -84,6 +98,7 @@ def main() -> None:
     app.setWindowIcon(QIcon(str(icon)))
     window = MainWindow()
     window.show()
+    _interrupt_timer = install_terminal_interrupt_handler(app, window)
     raise SystemExit(app.exec())
 
 
