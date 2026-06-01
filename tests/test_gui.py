@@ -271,7 +271,9 @@ def test_gain_log_updates_preset_correction_columns(app) -> None:
     assert window.preset_table.horizontalHeaderItem(3).text() == "1"
     assert window.preset_table.horizontalHeaderItem(4).text() == "Δ (dB)"
     assert window.preset_table.item(0, 3).text() == "Solo"
-    assert not window.preset_table.item(0, 3).icon().isNull()
+    assert (
+        window.preset_table.cellWidget(0, 3).text() == "Solo <span style='color: #f59e0b;'>★</span>"
+    )
     assert window.preset_table.item(0, 3).toolTip() == "Solo snapshot"
     assert window.preset_table.item(0, 4).text() == "+11.1"
     assert window.preset_table.item(0, 5).text() == "Clean"
@@ -313,6 +315,10 @@ def test_snapshot_names_are_preloaded_and_bad_lufs_is_marked(app) -> None:
     assert window.preset_table.item(0, 4).font().pointSize() > app.font().pointSize()
     assert "unusable LUFS" in window.preset_table.item(0, 4).toolTip()
     assert window.preset_table.item(0, 5).text() == "Solo"
+    assert (
+        window.preset_table.cellWidget(0, 5).text() == "Solo <span style='color: #f59e0b;'>★</span>"
+    )
+    assert window.preset_table.item(0, 5).toolTip() == "Solo snapshot"
     assert all(
         window.preset_table.item(0, column).background().color().name() == "#fee2e2"
         for column in range(window.preset_table.columnCount())
@@ -380,7 +386,9 @@ def test_implausible_gain_warning_is_marked_as_bad_lufs(app) -> None:
     )
 
     assert window.preset_table.item(0, 3).text() == "Solo"
-    assert not window.preset_table.item(0, 3).icon().isNull()
+    assert (
+        window.preset_table.cellWidget(0, 3).text() == "Solo <span style='color: #f59e0b;'>★</span>"
+    )
     assert window.preset_table.item(0, 4).text() == "⚠️"
 
     window.close()

@@ -732,11 +732,7 @@ class MainWindow(QMainWindow):
         adjustment_item = self.preset_table.item(row, adjustment_column)
         if name_item is None or adjustment_item is None:
             return
-        name_item.setText(label)
-        name_item.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume) if is_solo else QIcon()
-        )
-        name_item.setToolTip("Solo snapshot" if is_solo else "")
+        self._set_snapshot_name(name_item, label, is_solo)
         if match.re is GAIN_BAD_LUFS_PATTERN:
             adjustment_item.setText("⚠️")
             adjustment_item.setToolTip("This snapshot produced an unusable LUFS measurement.")
@@ -837,12 +833,35 @@ class MainWindow(QMainWindow):
             self._clear_bad_lufs_highlight(row)
 
     def _set_snapshot_names(self, row: int, snapshot_names: tuple[str, ...]) -> None:
+        try:
+            solo_pattern = re.compile(self.solo_regex.text())
+        except re.error:
+            solo_pattern = None
         for snapshot, name in enumerate(snapshot_names[: self.snapshot_count]):
             item = self.preset_table.item(row, 3 + snapshot * 2)
             if item is not None:
-                item.setText(name)
-                item.setIcon(QIcon())
-                item.setToolTip("")
+                self._set_snapshot_name(
+                    item,
+                    name,
+                    solo_pattern is not None and solo_pattern.search(name) is not None,
+                )
+
+    @staticmethod
+    def _set_snapshot_name(item: QTableWidgetItem, name: str, is_solo: bool) -> None:
+        item.setText(name)
+        item.setIcon(QIcon())
+        item.setToolTip("Solo snapshot" if is_solo else "")
+        table = item.tableWidget()
+        if table is None:
+            return
+        if not is_solo:
+            table.removeCellWidget(item.row(), item.column())
+            return
+        label = QLabel(f"{escape(name)} <span style='color: #f59e0b;'>★</span>")
+        label.setContentsMargins(3, 0, 0, 0)
+        label.setToolTip("Solo snapshot")
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        table.setCellWidget(item.row(), item.column(), label)
 
     def _preset_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() == 0 and item.checkState() != Qt.CheckState.Checked:
