@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QStyle,
     QTableWidgetItem,
 )
 
@@ -279,10 +280,16 @@ def test_gain_log_updates_preset_correction_columns(app) -> None:
     assert window.preset_table.item(0, 8).text() == "-2.0"
     assert window.preset_table.item(0, 4).foreground().color().name() == "#15803d"
     assert window.preset_table.item(0, 8).foreground().color().name() == "#b91c1c"
+    assert window.preset_table.columnWidth(0) == window.style().pixelMetric(
+        QStyle.PixelMetric.PM_IndicatorWidth
+    )
+    assert (
+        window.preset_table.horizontalHeader().sectionResizeMode(0) == QHeaderView.ResizeMode.Fixed
+    )
     assert all(
         window.preset_table.horizontalHeader().sectionResizeMode(column)
         == QHeaderView.ResizeMode.Interactive
-        for column in range(window.preset_table.columnCount())
+        for column in range(1, window.preset_table.columnCount())
     )
 
     window.close()

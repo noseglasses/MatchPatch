@@ -16,10 +16,9 @@ Add a cancelation query if "cancel" button is pressed while the measurment is go
 
 When a running measurment is canceled, after the cancel-query there is another popup that tells that user that the normalization was cancelt. That popup is superfluous and to be removed. Also after cancelling, the status reads "Error". I would expect it to read "Normalization cancelled by user" instead. (done, tested)
 
+The Progress pane should only be visible while the presets are processed (and the name of presets and snapshots currently processed are shown). The general progress bar that is used while the measurment is prepared should be moved to the window footer and only displayed while processing steps are running whose duration cannot be estimated beforehand. (done, tested)
 
 Do the following for the MatchPatch gui (python code in src/matchpatch/gui):
-The Progress pane should only be visible while the presets are processed (and the name of presets and snapshots currently processed are shown). The general progress bar that is used while the measurment is prepared should be moved to the window footer and only displayed while processing steps are running whose duration cannot be estimated beforehand.
-
 The windows displayed when MatchPatch gui is started from the WSL/VSCode have no proper border. This looks strange and especially the area of popups is hard to distinguish from the MatchPatch main window in the background. Please make the window borders more visible.
 
 The first colum (selected files) in the presets table is too wide. It should be exactly as wide as the contained checkboxes.
