@@ -284,7 +284,7 @@ def test_gain_log_updates_preset_correction_columns(app) -> None:
     assert window.preset_table.item(0, 8).foreground().color().name() == "#b91c1c"
     assert window.preset_table.columnWidth(0) == window.style().pixelMetric(
         QStyle.PixelMetric.PM_IndicatorWidth
-    )
+    ) + 2 * window.style().pixelMetric(QStyle.PixelMetric.PM_CheckBoxLabelSpacing)
     assert (
         window.preset_table.horizontalHeader().sectionResizeMode(0) == QHeaderView.ResizeMode.Fixed
     )
