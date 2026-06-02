@@ -910,7 +910,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _set_adjustment_value(item: QTableWidgetItem, text: str, value: float) -> None:
-        item.setText(text)
+        item.setText("0" if value == 0 else text)
         item.setToolTip("")
         font = item.font()
         font.setBold(False)

@@ -214,7 +214,7 @@ def test_preset_bulk_selection_buttons(app) -> None:
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
         for row in range(window.preset_table.rowCount())
     )
-    assert window.preset_table.item(0, 4).text() == "+0"
+    assert window.preset_table.item(0, 4).text() == "0"
     window.set_all_presets_checked(True)
     assert all(
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Checked
@@ -277,7 +277,7 @@ def test_gain_log_updates_preset_correction_columns(app) -> None:
     assert window.preset_table.item(0, 3).toolTip() == "Solo snapshot"
     assert window.preset_table.item(0, 4).text() == "+11.1"
     assert window.preset_table.item(0, 5).text() == "Clean"
-    assert window.preset_table.item(0, 6).text() == "+0.0"
+    assert window.preset_table.item(0, 6).text() == "0"
     assert window.preset_table.item(0, 7).text() == "Rhythm"
     assert window.preset_table.item(0, 8).text() == "-2.0"
     assert window.preset_table.item(0, 4).foreground().color().name() == "#15803d"
