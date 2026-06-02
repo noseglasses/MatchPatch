@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QTableWidgetItem,
 )
+from shiboken6 import isValid
 
 from matchpatch.gui import main_window
 from matchpatch.gui import worker as gui_worker
@@ -66,14 +67,15 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.progress_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
     assert not window.statusBar().isHidden()
     assert window.phase.parent() is window.statusBar()
-    assert window.progress.parent() is window.statusBar()
+    assert window.processing_dot.parent() is window.statusBar()
     progress_index = window.content.layout().indexOf(window.progress_group)
     button_layout = window.content.layout().itemAt(progress_index - 1).layout()
     assert button_layout is not None
     assert button_layout.indexOf(window.start_button) >= 0
     assert button_layout.indexOf(window.cancel_button) >= 0
     assert window.progress_group.isHidden()
-    assert window.progress.isHidden()
+    assert not window.processing_dot.isHidden()
+    assert not window._processing_dot_green
     assert not hasattr(window, "ignore_bad_lufs")
     assert window.preset_table.verticalHeader().isHidden()
     assert not window.preset_table.wordWrap()
@@ -94,17 +96,18 @@ def test_initial_window_size_avoids_scrollbar_for_collapsed_layout(app) -> None:
     window.close()
 
 
-def test_log_section_and_busy_progress(app) -> None:
+def test_log_section_and_busy_indicator(app) -> None:
     window = MainWindow()
 
     assert window.log_section is window.log
     window._start_busy_phase()
     assert window.progress_group.isHidden()
-    assert window.progress.isHidden()
-    window._show_busy_progress()
-    assert not window.progress.isHidden()
-    assert window.progress.minimum() == 0
-    assert window.progress.maximum() == 0
+    assert window.busy_timer.isActive()
+    assert window._processing_dot_green
+    window._toggle_busy_indicator()
+    assert not window._processing_dot_green
+    window._toggle_busy_indicator()
+    assert window._processing_dot_green
     window.update_progress(
         ProgressEvent(
             "preset_started",
@@ -115,11 +118,12 @@ def test_log_section_and_busy_progress(app) -> None:
         )
     )
     assert not window.progress_group.isHidden()
-    assert window.progress.isHidden()
+    assert window.busy_timer.isActive()
     assert window.preset_progress.maximum() == 8
     window._stop_busy_phase()
     assert window.progress_group.isHidden()
-    assert window.progress.isHidden()
+    assert not window.busy_timer.isActive()
+    assert not window._processing_dot_green
 
     window.close()
 
@@ -523,9 +527,12 @@ def test_worker_thread_exits_without_processing_gui_events(monkeypatch, app) -> 
 
     window.start_normalization()
     thread = window.worker_thread
+    worker = window.worker
 
     assert thread is not None
+    assert worker is not None
     assert thread.wait(1000)
+    assert not isValid(worker)
 
     app.processEvents()
     window.close()

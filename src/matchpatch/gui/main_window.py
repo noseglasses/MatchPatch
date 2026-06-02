@@ -65,6 +65,8 @@ GAIN_BAD_LUFS_PATTERN = re.compile(
     r"^\[GAIN\] (?P<patch>\d{2}[A-D]) (?P<label>.*?) \| bad LUFS(?: \(.*\))?$"
 )
 BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
+PROCESSING_DOT_GREY = "#9ca3af"
+PROCESSING_DOT_GREEN = "#16a34a"
 PHASE_ICON = {
     "ready": QStyle.StandardPixmap.SP_DialogApplyButton,
     "starting": QStyle.StandardPixmap.SP_MediaPlay,
@@ -102,9 +104,9 @@ class MainWindow(QMainWindow):
         self.preset_snapshot_positions: dict[str, int] = {}
         self.log_entries: list[tuple[str, str, str]] = []
         self.busy_timer = QTimer(self)
-        self.busy_timer.setSingleShot(True)
-        self.busy_timer.setInterval(2000)
-        self.busy_timer.timeout.connect(self._show_busy_progress)
+        self.busy_timer.setInterval(500)
+        self.busy_timer.timeout.connect(self._toggle_busy_indicator)
+        self._processing_dot_green = False
 
         content = QWidget()
         self.content = content
@@ -267,14 +269,16 @@ class MainWindow(QMainWindow):
         self.phase_icon = QLabel()
         self.phase_icon.setFixedSize(16, 16)
         self.phase = QLabel()
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.setFixedWidth(160)
-        self.progress.hide()
+        self.processing_dot = QLabel()
+        self.processing_dot.setFixedSize(10, 10)
+        self.processing_dot.setToolTip(
+            "Grey when idle; blinks green while MatchPatch is processing."
+        )
+        self._set_processing_dot(False)
         footer = self.statusBar()
         footer.addWidget(self.phase_icon)
         footer.addWidget(self.phase)
-        footer.addPermanentWidget(self.progress)
+        footer.addPermanentWidget(self.processing_dot)
 
     def _build_log(self) -> QWidget:
         content = QWidget()
@@ -518,7 +522,7 @@ class MainWindow(QMainWindow):
         self.worker.cancelled.connect(self.normalization_cancelled)
         self.worker.failed.connect(self.show_error)
         self.worker.finished.connect(self.worker_thread.quit, Qt.ConnectionType.DirectConnection)
-        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker.deleteLater)
         self.worker_thread.finished.connect(self.worker_finished)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
         self.worker_thread.start()
@@ -543,8 +547,6 @@ class MainWindow(QMainWindow):
             self.current.setText(text)
 
         if event.preset_total and event.snapshot_total and event.preset_index:
-            self.busy_timer.stop()
-            self.progress.hide()
             self.progress_group.show()
             total = event.preset_total * event.snapshot_total
             snapshot = event.snapshot or 1
@@ -941,16 +943,22 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._resize_to_initial_content)
 
     def _start_busy_phase(self) -> None:
-        self.busy_timer.start()
-        self.progress.hide()
+        if not self.busy_timer.isActive():
+            self._set_processing_dot(True)
+            self.busy_timer.start()
 
-    def _show_busy_progress(self) -> None:
-        self.progress.show()
+    def _toggle_busy_indicator(self) -> None:
+        self._set_processing_dot(not self._processing_dot_green)
 
     def _stop_busy_phase(self) -> None:
         self.busy_timer.stop()
-        self.progress.hide()
+        self._set_processing_dot(False)
         self.progress_group.hide()
+
+    def _set_processing_dot(self, green: bool) -> None:
+        self._processing_dot_green = green
+        color = PROCESSING_DOT_GREEN if green else PROCESSING_DOT_GREY
+        self.processing_dot.setStyleSheet(f"background-color: {color}; border-radius: 5px;")
 
     def _preset_progress_text(self, event: ProgressEvent) -> str:
         row = self._preset_row(event.device_patch or "")
