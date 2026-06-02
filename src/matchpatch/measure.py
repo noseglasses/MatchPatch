@@ -229,6 +229,11 @@ def measure_presets(
     measured_snapshots = snapshot_count if snapshot_count is not None else profile.snapshot_count
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     handler = profile.create_patch_file_handler(Path.cwd())
+    reference_lufs = analyze_audio(reference, sample_rate, analysis_options).short_term_lufs
+    _emit_progress(
+        on_progress,
+        ProgressEvent("reference_loudness", reference_lufs=reference_lufs),
+    )
 
     with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=csv_fields(measured_snapshots))
@@ -286,6 +291,7 @@ def measure_presets(
                             preset_total=len(preset_ids),
                             snapshot=snapshot,
                             snapshot_total=measured_snapshots,
+                            reference_lufs=reference_lufs,
                             lufs=values.short_term_lufs,
                             crest_factor_db=values.crest_factor_db,
                         ),
@@ -451,11 +457,10 @@ def measure(args: argparse.Namespace) -> None:
         )
         return
 
-    from matchpatch.audio import resolve_audio_device
+    from matchpatch.audio import prepare_audio_config
 
-    audio_config = resolve_audio_config(args, profile)
+    audio_config = prepare_audio_config(resolve_audio_config(args, profile))
     steering_options = resolve_steering_options(args, profile)
-    resolve_audio_device(audio_config.device)
 
     with profile.create_controller(steering_options) as controller:
         measure_presets(

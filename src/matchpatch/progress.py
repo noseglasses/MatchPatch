@@ -18,6 +18,7 @@ class ProgressEvent:
     preset_total: int | None = None
     snapshot: int | None = None
     snapshot_total: int | None = None
+    reference_lufs: float | None = None
     lufs: float | None = None
     crest_factor_db: float | None = None
     path: str | None = None

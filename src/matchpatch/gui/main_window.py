@@ -16,10 +16,18 @@ from PySide6.QtCore import (
     QEvent,
     QPropertyAnimation,
     QSize,
-    QThread,
     QTimer,
 )
-from PySide6.QtGui import QBrush, QCloseEvent, QColor, QIcon, Qt
+from PySide6.QtGui import (
+    QBrush,
+    QCloseEvent,
+    QColor,
+    QIcon,
+    QPainter,
+    QPaintEvent,
+    QPalette,
+    Qt,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -76,6 +84,9 @@ GAIN_BAD_LUFS_PATTERN = re.compile(
 BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
+LOUDNESS_MINIMUM = -60.0
+LOUDNESS_MAXIMUM = 0.0
+LOUDNESS_SCALE = 10
 PHASE_ICON = {
     "ready": QStyle.StandardPixmap.SP_DialogApplyButton,
     "starting": QStyle.StandardPixmap.SP_MediaPlay,
@@ -106,7 +117,6 @@ class MainWindow(QMainWindow):
         screen = QApplication.primaryScreen()
         available_height = screen.availableGeometry().height() if screen is not None else 800
         self.resize(820, min(760, max(560, available_height - 100)))
-        self.worker_thread: QThread | None = None
         self.worker: NormalizationWorker | None = None
         self.device_panels: dict[str, HelixSettingsPanel] = {}
         self.snapshot_count = 4
@@ -200,9 +210,7 @@ class MainWindow(QMainWindow):
         self.preset_table.itemChanged.connect(self._preset_item_changed)
         self.preset_table.setSortingEnabled(True)
         self.preset_table.setMinimumHeight(160)
-        self.preset_table.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
-        )
+        self.preset_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.preset_table.model().rowsInserted.connect(self._preset_table_size_changed)
         self.preset_table.model().rowsRemoved.connect(self._preset_table_size_changed)
         self.preset_table.model().modelReset.connect(self._preset_table_size_changed)
@@ -251,8 +259,30 @@ class MainWindow(QMainWindow):
         self.current = QLabel("")
         self.preset_progress = QProgressBar()
         self.preset_progress.setRange(0, 1)
+        self.reference_loudness = LoudnessBar()
+        self.measured_loudness = LoudnessBar()
+        self.loudness_scale = LoudnessScale()
+        meters = QWidget()
+        meter_layout = QGridLayout(meters)
+        meter_layout.setContentsMargins(0, 0, 0, 0)
+        meter_layout.setHorizontalSpacing(8)
+        meter_layout.setVerticalSpacing(2)
+        self.reference_loudness_label = QLabel("Reference")
+        self.measured_loudness_label = QLabel("Measured")
+        self.reference_loudness_reading = QLabel()
+        self.measured_loudness_reading = QLabel()
+        meter_layout.addWidget(self.reference_loudness_label, 0, 0)
+        meter_layout.addWidget(self.reference_loudness_reading, 0, 1)
+        meter_layout.addWidget(self.reference_loudness, 0, 2)
+        meter_layout.addWidget(self.measured_loudness_label, 1, 0)
+        meter_layout.addWidget(self.measured_loudness_reading, 1, 1)
+        meter_layout.addWidget(self.measured_loudness, 1, 2)
+        meter_layout.addWidget(self.loudness_scale, 2, 2)
+        meter_layout.setColumnStretch(2, 1)
         layout.addWidget(self.current)
+        layout.addWidget(meters)
         layout.addWidget(self.preset_progress)
+        self._reset_loudness_bars()
         pane.hide()
         return pane
 
@@ -324,9 +354,7 @@ class MainWindow(QMainWindow):
         self.advanced_tabs.addTab(self._build_device_settings(), "Device")
         self.advanced_tabs.addTab(self._build_misc(), "Misc")
         self.advanced_tabs.addTab(self._build_log(), "Log")
-        self.advanced_tabs.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
-        )
+        self.advanced_tabs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.advanced_tabs.currentChanged.connect(self._schedule_resize_for_content)
         layout.addWidget(self.advanced_tabs)
         self.advanced = CollapsibleSection("Advanced", content)
@@ -530,24 +558,20 @@ class MainWindow(QMainWindow):
                 self._clear_preset_adjustments(row)
         self.retained_csv.clear()
         self.retained_csv_pane.hide()
+        self._reset_loudness_bars()
         self._set_phase("starting")
         self._log("Normalization started", "info")
         self._log(f"Backend: {getattr(request, 'backend', 'unknown')}", "info")
         self._start_busy_phase()
-        self.worker_thread = QThread(self)
-        self.worker = NormalizationWorker(request)
-        self.worker.moveToThread(self.worker_thread)
-        self.worker_thread.started.connect(self.worker.run)
+        self.worker = NormalizationWorker(request, self)
         self.worker.progress.connect(self.update_progress)
         self.worker.import_requested.connect(self.confirm_import)
         self.worker.completed.connect(self.normalization_completed)
         self.worker.cancelled.connect(self.normalization_cancelled)
         self.worker.failed.connect(self.show_error)
-        self.worker.finished.connect(self.worker_thread.quit, Qt.ConnectionType.DirectConnection)
-        self.worker_thread.finished.connect(self.worker.deleteLater)
-        self.worker_thread.finished.connect(self.worker_finished)
-        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
-        self.worker_thread.start()
+        self.worker.finished.connect(self.worker_finished)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.start()
 
     def update_progress(self, event: ProgressEvent) -> None:
         if event.phase:
@@ -569,7 +593,10 @@ class MainWindow(QMainWindow):
             self.current.setText(text)
 
         if event.preset_total and event.snapshot_total and event.preset_index:
+            progress_was_hidden = self.progress_group.isHidden()
             self.progress_group.show()
+            if progress_was_hidden:
+                self._schedule_resize_for_content()
             total = event.preset_total * event.snapshot_total
             snapshot = event.snapshot or 1
             value = (event.preset_index - 1) * event.snapshot_total + snapshot
@@ -577,6 +604,19 @@ class MainWindow(QMainWindow):
             self.preset_progress.setValue(value)
         elif event.kind == "measurement_completed":
             self.progress_group.hide()
+
+        if event.reference_lufs is not None:
+            self.reference_loudness.set_loudness(
+                event.reference_lufs,
+                self._target_lufs(),
+            )
+            self.reference_loudness_reading.setText(f"{event.reference_lufs:.1f} LUFS")
+        if event.lufs is not None:
+            self.measured_loudness.set_loudness(
+                event.lufs,
+                self._target_lufs(),
+            )
+            self.measured_loudness_reading.setText(_loudness_text(event.lufs, self._target_lufs()))
 
         message = event.message or event.kind.replace("_", " ")
         if event.kind == "log":
@@ -628,7 +668,6 @@ class MainWindow(QMainWindow):
         self.start_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.worker = None
-        self.worker_thread = None
 
     def cancel_normalization(self) -> None:
         if self.worker is not None and self._confirm_cancellation():
@@ -653,9 +692,8 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self.worker.cancel()
-        if self.worker_thread is not None:
-            self.worker_thread.quit()
-            self.worker_thread.wait()
+        if self.worker is not None:
+            self.worker.wait()
         super().closeEvent(event)
         QApplication.quit()
 
@@ -996,6 +1034,20 @@ class MainWindow(QMainWindow):
         color = PROCESSING_DOT_GREEN if green else PROCESSING_DOT_GREY
         self.processing_dot.setStyleSheet(f"background-color: {color}; border-radius: 7px;")
 
+    def _reset_loudness_bars(self) -> None:
+        target_lufs = self._target_lufs()
+        self.reference_loudness.reset_loudness(target_lufs)
+        self.measured_loudness.reset_loudness(target_lufs)
+        waiting_text = f"waiting for signal (target {target_lufs:.1f} LUFS)"
+        self.reference_loudness_reading.setText(waiting_text)
+        self.measured_loudness_reading.setText(waiting_text)
+
+    def _target_lufs(self) -> float:
+        try:
+            return float(self.target_lufs.text())
+        except (AttributeError, ValueError):
+            return -16.0
+
     def _preset_progress_text(self, event: ProgressEvent) -> str:
         row = self._preset_row(event.device_patch or "")
         if row is None:
@@ -1051,6 +1103,92 @@ class ContentHeightTableWidget(QTableWidget):
             )
         )
         return hint
+
+
+class LoudnessBar(QProgressBar):
+    """Display LUFS relative to the configured target with a target marker."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._target_lufs = -16.0
+        self._default_highlight = self.palette().color(QPalette.ColorRole.Highlight)
+        self.setTextVisible(False)
+        self.setRange(
+            round(LOUDNESS_MINIMUM * LOUDNESS_SCALE),
+            round(LOUDNESS_MAXIMUM * LOUDNESS_SCALE),
+        )
+
+    def reset_loudness(self, target_lufs: float) -> None:
+        self._target_lufs = target_lufs
+        self.setValue(self.minimum())
+        self._set_colors(self._default_highlight)
+        self.update()
+
+    def set_loudness(self, lufs: float, target_lufs: float) -> None:
+        self._target_lufs = target_lufs
+        self.setValue(
+            max(
+                self.minimum(),
+                min(self.maximum(), round(lufs * LOUDNESS_SCALE)),
+            )
+        )
+        delta = lufs - target_lufs
+        color = "#dc2626" if delta > 0 else "#2563eb" if delta < 0 else "#16a34a"
+        self._set_colors(QColor(color))
+        self.update()
+
+    def _set_colors(self, highlight: QColor) -> None:
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Highlight, highlight)
+        palette.setColor(QPalette.ColorRole.Text, QColor("#ffffff"))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+        self.setPalette(palette)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        span = self.maximum() - self.minimum()
+        if span <= 0:
+            return
+        target_value = max(
+            self.minimum(),
+            min(self.maximum(), round(self._target_lufs * LOUDNESS_SCALE)),
+        )
+        x = round((target_value - self.minimum()) / span * (self.width() - 1))
+        painter = QPainter(self)
+        painter.setPen(QColor("#111827"))
+        painter.drawLine(x, 0, x, self.height() - 1)
+
+
+class LoudnessScale(QWidget):
+    """Draw a shared LUFS scale aligned with the loudness bars."""
+
+    def sizeHint(self) -> QSize:
+        return QSize(200, 24)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(QPalette.ColorRole.Text))
+        baseline = 2
+        painter.drawLine(0, baseline, self.width() - 1, baseline)
+        for lufs in range(round(LOUDNESS_MINIMUM), round(LOUDNESS_MAXIMUM) + 1, 10):
+            x = round(
+                (lufs - LOUDNESS_MINIMUM)
+                / (LOUDNESS_MAXIMUM - LOUDNESS_MINIMUM)
+                * (self.width() - 1)
+            )
+            painter.drawLine(x, baseline, x, baseline + 4)
+            text = f"{lufs} LUFS" if lufs == LOUDNESS_MAXIMUM else str(lufs)
+            bounds = painter.fontMetrics().boundingRect(text)
+            text_x = max(0, min(self.width() - bounds.width(), x - bounds.width() // 2))
+            painter.drawText(text_x, baseline + 4 + bounds.height(), text)
+
+
+def _loudness_text(lufs: float, target_lufs: float) -> str:
+    delta = lufs - target_lufs
+    direction = "above target" if delta > 0 else "below target" if delta < 0 else "on target"
+    detail = f"{abs(delta):.1f} LUFS {direction}" if delta else direction
+    return f"{lufs:.1f} LUFS ({detail})"
 
 
 def _path_row(field: QLineEdit, button: QPushButton) -> QWidget:

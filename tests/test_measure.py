@@ -79,6 +79,7 @@ def test_measure_presets_emits_structured_progress(tmp_path) -> None:
     )
 
     assert [event.kind for event in events] == [
+        "reference_loudness",
         "preset_started",
         "snapshot_started",
         "snapshot_completed",
@@ -86,9 +87,11 @@ def test_measure_presets_emits_structured_progress(tmp_path) -> None:
         "snapshot_completed",
         "measurement_completed",
     ]
-    assert events[0].device_patch == "01A"
-    assert events[2].snapshot == 1
-    assert events[2].lufs is not None
+    assert events[0].reference_lufs is not None
+    assert events[1].device_patch == "01A"
+    assert events[3].snapshot == 1
+    assert events[3].reference_lufs == events[0].reference_lufs
+    assert events[3].lufs is not None
 
 
 class FakePatchFileHandler(PatchFileHandler):
@@ -463,13 +466,13 @@ def test_measure_configures_hardware_backend(monkeypatch) -> None:
         "matchpatch.audio",
         SimpleNamespace(
             AudioConfig=lambda **kwargs: SimpleNamespace(**kwargs),
-            resolve_audio_device=lambda device: calls.append(("resolved", device)),
+            prepare_audio_config=lambda config: calls.append(("prepared", config.device)) or config,
         ),
     )
 
     measure(worker_args(backend="hardware", audio_device="processor", sample_rate=44100))
 
-    assert calls[0] == ("resolved", "processor")
+    assert calls[0] == ("prepared", "processor")
     assert isinstance(calls[1][-1], HardwareBackend)
 
 

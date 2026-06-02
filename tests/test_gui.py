@@ -11,8 +11,8 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QAbstractAnimation, QPoint
-from PySide6.QtGui import QCloseEvent, Qt
+from PySide6.QtCore import QAbstractAnimation, QCoreApplication, QEvent, QPoint
+from PySide6.QtGui import QCloseEvent, QColor, QPalette, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -73,6 +73,8 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert button_layout is not None
     assert button_layout.indexOf(window.start_button) >= 0
     assert button_layout.indexOf(window.cancel_button) >= 0
+    assert window.progress_group.layout().itemAt(0).widget() is window.current
+    assert window.progress_group.layout().itemAt(2).widget() is window.preset_progress
     assert window.progress_group.isHidden()
     assert not window.processing_dot.isHidden()
     assert not window._processing_dot_green
@@ -152,15 +154,15 @@ def test_single_preset_layout_shrinks_to_its_instruction_label(app) -> None:
 
     assert window.height() < setlist_height
     assert window.preset_hint.height() == window.preset_hint.sizeHint().height()
-    assert window.preset_hint.text() == (
-        "Enter the temporary Helix slot used during measurement."
-    )
+    assert window.preset_hint.text() == ("Enter the temporary Helix slot used during measurement.")
 
     window.close()
 
 
-def test_log_section_and_busy_indicator(app) -> None:
+def test_log_section_and_busy_indicator(monkeypatch, app) -> None:
     window = MainWindow()
+    resize_calls = []
+    monkeypatch.setattr(window, "_schedule_resize_for_content", lambda: resize_calls.append(True))
 
     assert window.log_section is window.log
     window._start_busy_phase()
@@ -181,6 +183,18 @@ def test_log_section_and_busy_indicator(app) -> None:
     assert not window.progress_group.isHidden()
     assert window.busy_animation.state() == QAbstractAnimation.State.Running
     assert window.preset_progress.maximum() == 8
+    assert resize_calls == [True]
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_started",
+            device_patch="01A",
+            preset_index=1,
+            preset_total=2,
+            snapshot=2,
+            snapshot_total=4,
+        )
+    )
+    assert resize_calls == [True]
     window._stop_busy_phase()
     assert window.progress_group.isHidden()
     assert window.busy_animation.state() == QAbstractAnimation.State.Stopped
@@ -238,6 +252,32 @@ def test_preset_progress_shows_current_preset_and_snapshot_names(app) -> None:
     assert not window.progress_group.isHidden()
     window.update_progress(ProgressEvent("measurement_completed"))
     assert window.progress_group.isHidden()
+
+    window.close()
+
+
+def test_progress_shows_reference_and_measured_loudness_relative_to_target(app) -> None:
+    window = MainWindow()
+    window.target_lufs.setText("-18.0")
+    window._reset_loudness_bars()
+
+    window.update_progress(ProgressEvent("reference_loudness", reference_lufs=-20.5))
+    window.update_progress(ProgressEvent("snapshot_completed", reference_lufs=-20.5, lufs=-16.0))
+
+    assert window.reference_loudness_reading.text() == "-20.5 LUFS"
+    assert window.measured_loudness_reading.text() == "-16.0 LUFS (2.0 LUFS above target)"
+    assert not window.reference_loudness.isTextVisible()
+    assert not window.measured_loudness.isTextVisible()
+    assert window.reference_loudness.palette().color(QPalette.ColorRole.Highlight) == QColor(
+        "#2563eb"
+    )
+    assert window.measured_loudness.palette().color(QPalette.ColorRole.Highlight) == QColor(
+        "#dc2626"
+    )
+    assert window.reference_loudness.palette().color(QPalette.ColorRole.Text) == QColor("#ffffff")
+    assert window.loudness_scale.sizeHint().height() == 24
+    assert window.reference_loudness_label.text() == "Reference"
+    assert window.measured_loudness_label.text() == "Measured"
 
     window.close()
 
@@ -440,7 +480,7 @@ def test_bad_lufs_row_highlight_is_reset_for_new_input_and_measurement(monkeypat
     monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
     monkeypatch.setattr(main_window, "apply_config", lambda args: args)
     monkeypatch.setattr(main_window, "request_from_args", lambda args: object())
-    monkeypatch.setattr(main_window.QThread, "start", lambda self: None)
+    monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
     window.start_normalization()
     assert window.preset_table.item(0, 0).background().style() == Qt.BrushStyle.NoBrush
 
@@ -590,15 +630,55 @@ def test_worker_thread_exits_without_processing_gui_events(monkeypatch, app) -> 
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: None)
 
     window.start_normalization()
-    thread = window.worker_thread
     worker = window.worker
 
-    assert thread is not None
     assert worker is not None
-    assert thread.wait(1000)
-    assert not isValid(worker)
+    assert worker.wait(1000)
+    assert isValid(worker)
 
     app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert not isValid(worker)
+    window.close()
+
+
+def test_worker_completion_drains_queued_progress_updates(monkeypatch, app) -> None:
+    window = MainWindow()
+    window.show()
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: object())
+
+    def emit_progress(*args, on_progress, **kwargs):
+        for snapshot in range(1, 13):
+            on_progress(
+                ProgressEvent(
+                    "snapshot_started",
+                    device_patch="01A",
+                    preset_index=1,
+                    preset_total=1,
+                    snapshot=snapshot,
+                    snapshot_total=12,
+                    reference_lufs=-18.0,
+                    lufs=-16.0,
+                )
+            )
+        return NormalizationResult(Path("/tmp/adjusted.hls"), None)
+
+    monkeypatch.setattr(gui_worker, "normalize_presets", emit_progress)
+
+    for _ in range(30):
+        window.start_normalization()
+        worker = window.worker
+        assert worker is not None
+        assert worker.wait(1000)
+        while window.worker is worker:
+            app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert not isValid(worker)
+
+    app.processEvents()
+    assert window.preset_progress.value() == 12
     window.close()
 
 

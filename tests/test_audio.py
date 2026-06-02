@@ -56,7 +56,7 @@ def test_resolve_audio_device_accepts_unique_non_asio_match(monkeypatch) -> None
     assert audio.resolve_audio_device("usb") == 0
 
 
-def test_record_processed_audio_checks_and_records_with_config(monkeypatch) -> None:
+def test_prepare_audio_config_checks_settings_and_record_uses_resolved_device(monkeypatch) -> None:
     calls: list[tuple[str, dict]] = []
     recorded = np.ones((3, 2))
     sd = SimpleNamespace(
@@ -77,7 +77,10 @@ def test_record_processed_audio_checks_and_records_with_config(monkeypatch) -> N
         round_trip_latency_seconds=0.0,
     )
 
-    np.testing.assert_array_equal(audio.record_processed_audio(np.zeros((3, 2)), config), recorded)
+    prepared = audio.prepare_audio_config(config)
+    np.testing.assert_array_equal(
+        audio.record_processed_audio(np.zeros((3, 2)), prepared), recorded
+    )
     assert calls[0] == (
         "input",
         {"device": 2, "channels": 2, "dtype": "float32", "samplerate": 48000},
@@ -85,6 +88,7 @@ def test_record_processed_audio_checks_and_records_with_config(monkeypatch) -> N
     assert calls[2][1]["device"] == (2, 2)
     assert calls[2][1]["input_mapping"] == [1, 2]
     assert calls[2][1]["output_mapping"] == [3, 4]
+    assert prepared.device == 2
 
 
 def test_record_processed_audio_pads_and_trims_fixed_latency(monkeypatch) -> None:

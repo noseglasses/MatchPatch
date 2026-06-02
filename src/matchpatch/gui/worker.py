@@ -4,28 +4,26 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal
 
 from matchpatch.normalize import run_windows_analysis
 from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_presets
 
 
-class NormalizationWorker(QObject):
+class NormalizationWorker(QThread):
     progress = Signal(object)
     import_requested = Signal(object)
     completed = Signal(object)
     cancelled = Signal()
     failed = Signal(str)
-    finished = Signal()
 
-    def __init__(self, request: NormalizationRequest) -> None:
-        super().__init__()
+    def __init__(self, request: NormalizationRequest, parent: QObject | None = None) -> None:
+        super().__init__(parent)
         self.request = request
         self._confirmation = threading.Event()
         self._confirmation_answer = False
         self._cancelled = False
 
-    @Slot()
     def run(self) -> None:
         try:
             result = normalize_presets(
@@ -47,8 +45,6 @@ class NormalizationWorker(QObject):
                 self.failed.emit(str(exc))
         else:
             self.completed.emit(result)
-        finally:
-            self.finished.emit()
 
     def answer_import(self, confirmed: bool) -> None:
         self._confirmation_answer = confirmed

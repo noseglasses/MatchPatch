@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -57,6 +57,24 @@ def resolve_audio_device(query: str | int | None) -> int | None:
     raise ValueError(f"Audio device query {query!r} is ambiguous; use a numeric device ID")
 
 
+def prepare_audio_config(config: AudioConfig) -> AudioConfig:
+    """Resolve and validate audio settings once before recording starts."""
+    device = resolve_audio_device(config.device)
+    sd.check_input_settings(
+        device=device,
+        channels=len(config.input_mapping),
+        dtype="float32",
+        samplerate=config.sample_rate,
+    )
+    sd.check_output_settings(
+        device=device,
+        channels=len(config.output_mapping),
+        dtype="float32",
+        samplerate=config.sample_rate,
+    )
+    return replace(config, device=device)
+
+
 def record_processed_audio(
     reference_audio: np.ndarray,
     config: AudioConfig,
@@ -82,19 +100,6 @@ def record_processed_audio(
     playback = np.concatenate(
         [silence[:pre_roll_frames], reference, silence[pre_roll_frames:]],
         axis=0,
-    )
-
-    sd.check_input_settings(
-        device=device,
-        channels=len(config.input_mapping),
-        dtype="float32",
-        samplerate=config.sample_rate,
-    )
-    sd.check_output_settings(
-        device=device,
-        channels=len(config.output_mapping),
-        dtype="float32",
-        samplerate=config.sample_rate,
     )
 
     recorded = sd.playrec(
