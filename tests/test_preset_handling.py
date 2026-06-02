@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import importlib.util
+import json
+import zlib
 from pathlib import Path
 from types import ModuleType
 
@@ -46,3 +50,32 @@ def test_assignment_extraction_includes_snapshot_names() -> None:
     assignments = module.extract_preset_assignments(data)
 
     assert assignments[0]["snapshot_names"] == ["Rhythm", "Solo"]
+
+
+def test_build_hls_text_updates_crc32_for_encoded_data() -> None:
+    module = _load_legacy_module()
+    original = json.dumps(
+        {
+            "compression": {"crc32": 0, "decompressed_size": 0, "type": "zlib"},
+            "encoded_data": "",
+        }
+    )
+
+    rebuilt = json.loads(module.build_hls_text(original, '{"presets": []}'))
+    raw = zlib.decompress(base64.b64decode(rebuilt["encoded_data"]))
+
+    assert rebuilt["compression"]["crc32"] == binascii.crc32(raw) & 0xFFFFFFFF
+    assert rebuilt["compression"]["decompressed_size"] == len(raw)
+
+
+def test_save_output_packs_crc32_for_encoded_data(tmp_path) -> None:
+    module = _load_legacy_module()
+    output_path = tmp_path / "setlist.hls"
+
+    module.save_output('{"presets": []}', output_path)
+
+    wrapper = json.loads(output_path.read_text(encoding="utf-8"))
+    raw = zlib.decompress(base64.b64decode(wrapper["encoded_data"]))
+
+    assert wrapper["compression"]["crc32"] == binascii.crc32(raw) & 0xFFFFFFFF
+    assert wrapper["compression"]["decompressed_size"] == len(raw)

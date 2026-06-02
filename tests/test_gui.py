@@ -256,30 +256,47 @@ def test_preset_progress_shows_current_preset_and_snapshot_names(app) -> None:
     window.close()
 
 
-def test_progress_shows_reference_and_measured_loudness_relative_to_target(app) -> None:
+def test_progress_shows_measured_loudness_relative_to_target(app) -> None:
     window = MainWindow()
     window.target_lufs.setText("-18.0")
     window._reset_loudness_bars()
+    measured_text_color = window.measured_loudness_reading.palette().color(
+        QPalette.ColorRole.WindowText
+    )
 
     window.update_progress(ProgressEvent("reference_loudness", reference_lufs=-20.5))
     window.update_progress(ProgressEvent("snapshot_completed", reference_lufs=-20.5, lufs=-16.0))
 
-    assert window.reference_loudness_reading.text() == "-20.5 LUFS"
     assert window.measured_loudness_reading.text() == "-16.0 LUFS (2.0 LUFS above target)"
-    assert not window.reference_loudness.isTextVisible()
+    assert not hasattr(window, "reference_loudness")
+    assert not hasattr(window, "reference_loudness_label")
+    assert not hasattr(window, "reference_loudness_reading")
     assert not window.measured_loudness.isTextVisible()
-    assert window.reference_loudness.palette().color(QPalette.ColorRole.Highlight) == QColor(
-        "#2563eb"
+    assert window.measured_loudness.palette().color(
+        QPalette.ColorRole.Highlight
+    ) == main_window._loudness_bar_color(
+        -16.0,
+        -18.0,
     )
-    assert window.measured_loudness.palette().color(QPalette.ColorRole.Highlight) == QColor(
-        "#dc2626"
+    assert (
+        window.measured_loudness_reading.palette().color(QPalette.ColorRole.WindowText)
+        == measured_text_color
     )
-    assert window.reference_loudness.palette().color(QPalette.ColorRole.Text) == QColor("#ffffff")
     assert window.loudness_scale.sizeHint().height() == 24
-    assert window.reference_loudness_label.text() == "Reference:"
     assert window.measured_loudness_label.text() == "Measured:"
 
     window.close()
+
+
+def test_measured_loudness_bar_uses_symmetric_green_yellow_red_gradient() -> None:
+    assert main_window._loudness_bar_color(-18.0, -18.0) == QColor("#16a34a")
+    assert main_window._loudness_bar_color(-16.5, -18.0) == QColor(128, 171, 41)
+    assert main_window._loudness_bar_color(-15.0, -18.0) == QColor("#eab308")
+    assert main_window._loudness_bar_color(-13.5, -18.0) == QColor(227, 108, 23)
+    assert main_window._loudness_bar_color(-12.0, -18.0) == QColor("#dc2626")
+    assert main_window._loudness_bar_color(-15.0, -18.0) == (
+        main_window._loudness_bar_color(-21.0, -18.0)
+    )
 
 
 def test_main_window_loads_explicit_config(tmp_path, app) -> None:

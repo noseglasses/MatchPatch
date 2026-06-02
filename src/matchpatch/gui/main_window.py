@@ -87,6 +87,11 @@ PROCESSING_DOT_GREEN = "#16a34a"
 LOUDNESS_MINIMUM = -60.0
 LOUDNESS_MAXIMUM = 0.0
 LOUDNESS_SCALE = 10
+LOUDNESS_YELLOW_DELTA = 3.0
+LOUDNESS_RED_DELTA = 6.0
+LOUDNESS_TARGET_GREEN = QColor(PROCESSING_DOT_GREEN)
+LOUDNESS_WARNING_YELLOW = QColor("#eab308")
+LOUDNESS_WARNING_RED = QColor("#dc2626")
 PHASE_ICON = {
     "ready": QStyle.StandardPixmap.SP_DialogApplyButton,
     "starting": QStyle.StandardPixmap.SP_MediaPlay,
@@ -259,7 +264,6 @@ class MainWindow(QMainWindow):
         self.current = QLabel("")
         self.preset_progress = QProgressBar()
         self.preset_progress.setRange(0, 1)
-        self.reference_loudness = LoudnessBar()
         self.measured_loudness = LoudnessBar()
         self.loudness_scale = LoudnessScale()
         meters = QWidget()
@@ -267,17 +271,12 @@ class MainWindow(QMainWindow):
         meter_layout.setContentsMargins(0, 0, 0, 0)
         meter_layout.setHorizontalSpacing(8)
         meter_layout.setVerticalSpacing(2)
-        self.reference_loudness_label = QLabel("Reference:")
         self.measured_loudness_label = QLabel("Measured:")
-        self.reference_loudness_reading = QLabel()
         self.measured_loudness_reading = QLabel()
-        meter_layout.addWidget(self.reference_loudness_label, 0, 0)
-        meter_layout.addWidget(self.reference_loudness_reading, 0, 1)
-        meter_layout.addWidget(self.reference_loudness, 0, 2)
-        meter_layout.addWidget(self.measured_loudness_label, 1, 0)
-        meter_layout.addWidget(self.measured_loudness_reading, 1, 1)
-        meter_layout.addWidget(self.measured_loudness, 1, 2)
-        meter_layout.addWidget(self.loudness_scale, 2, 2)
+        meter_layout.addWidget(self.measured_loudness_label, 0, 0)
+        meter_layout.addWidget(self.measured_loudness_reading, 0, 1)
+        meter_layout.addWidget(self.measured_loudness, 0, 2)
+        meter_layout.addWidget(self.loudness_scale, 1, 2)
         meter_layout.setColumnStretch(2, 1)
         layout.addWidget(self.current)
         layout.addWidget(meters)
@@ -631,18 +630,17 @@ class MainWindow(QMainWindow):
         elif event.kind == "measurement_completed":
             self.progress_group.hide()
 
-        if event.reference_lufs is not None:
-            self.reference_loudness.set_loudness(
-                event.reference_lufs,
-                self._target_lufs(),
-            )
-            self.reference_loudness_reading.setText(f"{event.reference_lufs:.1f} LUFS")
         if event.lufs is not None:
+            target_lufs = self._target_lufs()
             self.measured_loudness.set_loudness(
                 event.lufs,
-                self._target_lufs(),
+                target_lufs,
+                _loudness_bar_color(
+                    event.lufs,
+                    target_lufs,
+                ),
             )
-            self.measured_loudness_reading.setText(_loudness_text(event.lufs, self._target_lufs()))
+            self.measured_loudness_reading.setText(_loudness_text(event.lufs, target_lufs))
 
         message = event.message or event.kind.replace("_", " ")
         if event.kind == "log":
@@ -1062,10 +1060,8 @@ class MainWindow(QMainWindow):
 
     def _reset_loudness_bars(self) -> None:
         target_lufs = self._target_lufs()
-        self.reference_loudness.reset_loudness(target_lufs)
         self.measured_loudness.reset_loudness(target_lufs)
         waiting_text = f"waiting for signal (target {target_lufs:.1f} LUFS)"
-        self.reference_loudness_reading.setText(waiting_text)
         self.measured_loudness_reading.setText(waiting_text)
 
     def _target_lufs(self) -> float:
@@ -1150,7 +1146,12 @@ class LoudnessBar(QProgressBar):
         self._set_colors(self._default_highlight)
         self.update()
 
-    def set_loudness(self, lufs: float, target_lufs: float) -> None:
+    def set_loudness(
+        self,
+        lufs: float,
+        target_lufs: float,
+        highlight: QColor | None = None,
+    ) -> None:
         self._target_lufs = target_lufs
         self.setValue(
             max(
@@ -1158,9 +1159,11 @@ class LoudnessBar(QProgressBar):
                 min(self.maximum(), round(lufs * LOUDNESS_SCALE)),
             )
         )
-        delta = lufs - target_lufs
-        color = "#dc2626" if delta > 0 else "#2563eb" if delta < 0 else "#16a34a"
-        self._set_colors(QColor(color))
+        if highlight is None:
+            delta = lufs - target_lufs
+            color = "#dc2626" if delta > 0 else "#2563eb" if delta < 0 else "#16a34a"
+            highlight = QColor(color)
+        self._set_colors(highlight)
         self.update()
 
     def _set_colors(self, highlight: QColor) -> None:
@@ -1215,6 +1218,29 @@ def _loudness_text(lufs: float, target_lufs: float) -> str:
     direction = "above target" if delta > 0 else "below target" if delta < 0 else "on target"
     detail = f"{abs(delta):.1f} LUFS {direction}" if delta else direction
     return f"{lufs:.1f} LUFS ({detail})"
+
+
+def _loudness_bar_color(lufs: float, target_lufs: float) -> QColor:
+    delta = abs(lufs - target_lufs)
+    if delta <= LOUDNESS_YELLOW_DELTA:
+        return _interpolate_color(
+            LOUDNESS_TARGET_GREEN,
+            LOUDNESS_WARNING_YELLOW,
+            delta / LOUDNESS_YELLOW_DELTA,
+        )
+    return _interpolate_color(
+        LOUDNESS_WARNING_YELLOW,
+        LOUDNESS_WARNING_RED,
+        min((delta - LOUDNESS_YELLOW_DELTA) / (LOUDNESS_RED_DELTA - LOUDNESS_YELLOW_DELTA), 1.0),
+    )
+
+
+def _interpolate_color(start: QColor, end: QColor, fraction: float) -> QColor:
+    return QColor(
+        round(start.red() + (end.red() - start.red()) * fraction),
+        round(start.green() + (end.green() - start.green()) * fraction),
+        round(start.blue() + (end.blue() - start.blue()) * fraction),
+    )
 
 
 def _path_row(field: QLineEdit, button: QPushButton) -> QWidget:
