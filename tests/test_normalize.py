@@ -10,6 +10,7 @@ import pytest
 
 from matchpatch import normalize
 from matchpatch.devices.base import PatchAssignment
+from matchpatch.workflow import NormalizationRequest, export_adjusted_file, normalize_presets
 
 
 class FakeHandler:
@@ -204,9 +205,7 @@ def test_apply_config_cli_snapshot_count_overrides_toml(tmp_path) -> None:
 def test_apply_config_rejects_snapshot_count_above_device_limit() -> None:
     with pytest.raises(ValueError, match="must not exceed 8"):
         normalize.apply_config(
-            normalize.parse_args(
-                ["--device", "helix", "-i", "input.hls", "--snapshot-count", "9"]
-            )
+            normalize.parse_args(["--device", "helix", "-i", "input.hls", "--snapshot-count", "9"])
         )
 
 
@@ -460,6 +459,87 @@ def write_analysis_csv(args, preset_ids, csv_path) -> None:
         writer.writeheader()
         for preset_id in preset_ids:
             writer.writerow({"Preset": preset_id, "DevicePatch": f"patch-{preset_id}"})
+
+
+def test_gui_style_workflow_defers_adjusted_file_export(tmp_path) -> None:
+    handler = FakeHandler()
+    input_path = tmp_path / "input.hls"
+    reference = tmp_path / "reference.wav"
+    work_dir = tmp_path / "work"
+    input_path.touch()
+    reference.touch()
+    work_dir.mkdir()
+    confirmations = []
+
+    result = normalize_presets(
+        NormalizationRequest(
+            device="fake",
+            input_path=input_path,
+            backend="loopback",
+            windows_python="python.exe",
+            reference_di=reference,
+            defer_export=True,
+        ),
+        run_analysis=lambda request, preset_ids, csv_path, callback: write_analysis_csv(
+            request, preset_ids, csv_path
+        ),
+        confirm_import=lambda request: confirmations.append(request.kind) or True,
+        get_profile=lambda device: FakeProfile(handler),
+        make_temp_dir=lambda: work_dir,
+    )
+
+    assert confirmations == ["measurement"]
+    assert handler.applied == []
+    assert result.output_path is None
+    assert result.temp_dir == work_dir
+    assert result.retained_csv_path == work_dir / "lufs_analysis.csv"
+
+
+def test_export_adjusted_file_applies_retained_csv(tmp_path) -> None:
+    handler = FakeHandler()
+    input_path = tmp_path / "input.hls"
+    output_path = tmp_path / "output.hls"
+    csv_path = tmp_path / "lufs_analysis.csv"
+    input_path.touch()
+
+    export_adjusted_file(
+        NormalizationRequest(
+            device="fake",
+            input_path=input_path,
+            backend="loopback",
+            windows_python="python.exe",
+            reference_di=tmp_path / "reference.wav",
+        ),
+        csv_path,
+        output_path,
+        get_profile=lambda device: FakeProfile(handler),
+    )
+
+    assert handler.applied[0][0:3] == (input_path.resolve(), output_path.resolve(), csv_path)
+
+
+def test_export_adjusted_file_passes_complete_csv_through(tmp_path) -> None:
+    handler = FakeHandler()
+    input_path = tmp_path / "input.hls"
+    output_path = tmp_path / "output.hls"
+    csv_path = tmp_path / "lufs_analysis.csv"
+    input_path.touch()
+    csv_path.write_text("Preset,DevicePatch\n1,01A\n2,01B\n", encoding="utf-8")
+
+    export_adjusted_file(
+        NormalizationRequest(
+            device="fake",
+            input_path=input_path,
+            backend="loopback",
+            windows_python="python.exe",
+            reference_di=tmp_path / "reference.wav",
+        ),
+        csv_path,
+        output_path,
+        get_profile=lambda device: FakeProfile(handler),
+    )
+
+    assert handler.applied[0][2] == csv_path
 
 
 def test_main_automation_creates_measurement_file_confirms_and_keeps_temp(

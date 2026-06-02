@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+import shutil
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -67,7 +69,12 @@ from matchpatch.gui.snapshot_header import SnapshotHeader
 from matchpatch.gui.worker import NormalizationWorker
 from matchpatch.normalize import apply_config, parse_args, request_from_args
 from matchpatch.progress import ProgressEvent
-from matchpatch.workflow import ImportRequest, NormalizationRequest, NormalizationResult
+from matchpatch.workflow import (
+    ImportRequest,
+    NormalizationRequest,
+    NormalizationResult,
+    export_adjusted_file,
+)
 
 GAIN_CORRECTION_PATTERN = re.compile(
     r"^\[GAIN\] (?P<patch>\d{2}[A-D]) (?P<label>.*?) \| "
@@ -135,6 +142,8 @@ class MainWindow(QMainWindow):
         available_height = screen.availableGeometry().height() if screen is not None else 800
         self.resize(820, min(760, max(560, available_height - 100)))
         self.worker: NormalizationWorker | None = None
+        self.completed_request: NormalizationRequest | None = None
+        self.completed_result: NormalizationResult | None = None
         self.device_panels: dict[str, HelixSettingsPanel] = {}
         self.snapshot_count = 4
         self.preset_snapshot_positions: dict[str, int] = {}
@@ -162,11 +171,27 @@ class MainWindow(QMainWindow):
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton)
         )
         self.cancel_button.setToolTip("Stop the currently running normalization workflow.")
-        self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_normalization)
+        self.start_cancel_stack = QStackedWidget()
+        self.start_cancel_stack.addWidget(self.start_button)
+        self.start_cancel_stack.addWidget(self.cancel_button)
+        self.export_button = QPushButton("Export")
+        self.export_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        )
+        self.export_button.setToolTip("Write the normalized setlist or preset to the output file.")
+        self.export_button.setEnabled(False)
+        self.export_button.clicked.connect(self.export_output)
+        action_button_height = max(
+            button.sizeHint().height()
+            for button in (self.start_button, self.cancel_button, self.export_button)
+        )
+        self.start_cancel_stack.setFixedHeight(action_button_height)
+        for button in (self.start_button, self.cancel_button, self.export_button):
+            button.setFixedHeight(action_button_height)
         buttons = QHBoxLayout()
-        buttons.addWidget(self.start_button)
-        buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.start_cancel_stack)
+        buttons.addWidget(self.export_button)
         layout.addLayout(buttons)
         layout.addWidget(self._build_progress())
         layout.addWidget(self._build_retained_csv())
@@ -191,12 +216,23 @@ class MainWindow(QMainWindow):
             0,
         )
         layout.addWidget(_path_row(self.input_path, input_browse), 0, 1)
+        self.output_path = QLineEdit()
+        output_browse = QPushButton("Browse")
+        output_browse.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        output_browse.setToolTip("Choose where to export the normalized setlist or preset.")
+        output_browse.clicked.connect(self.browse_output)
+        layout.addWidget(
+            _label("Output file", "The .hls or .hlx file written when Export is pressed."),
+            1,
+            0,
+        )
+        layout.addWidget(_path_row(self.output_path, output_browse), 1, 1)
         self.device = QComboBox()
         self.device.currentIndexChanged.connect(self.device_changed)
         layout.addWidget(
-            _label("Device", "The audio processor profile used by this workflow."), 1, 0
+            _label("Device", "The audio processor profile used by this workflow."), 2, 0
         )
-        layout.addWidget(self.device, 1, 1)
+        layout.addWidget(self.device, 2, 1)
         help_button = QPushButton("Help")
         help_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogHelpButton))
         help_button.setToolTip("Open the guided MatchPatch usage instructions.")
@@ -459,6 +495,24 @@ class MainWindow(QMainWindow):
             self.input_path.setText(path)
             self.load_assignments()
 
+    def browse_output(self) -> None:
+        suffix = Path(self.input_path.text()).suffix.lower()
+        file_filter = (
+            f"Helix {suffix} (*{suffix})" if suffix in {".hls", ".hlx"} else "Patches (*.hls *.hlx)"
+        )
+        dialog = QFileDialog(self, "Choose output file")
+        dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setNameFilter(file_filter)
+        dialog.setLabelText(QFileDialog.DialogLabel.Accept, "Select")
+        path = dialog.selectedFiles()[0] if dialog.exec() and dialog.selectedFiles() else ""
+        if path:
+            if suffix in {".hls", ".hlx"} and Path(path).suffix.lower() != suffix:
+                self.show_error(f"Output file must use the {suffix} extension")
+                return
+            self.output_path.setText(path)
+
     def show_help(self) -> None:
         HelpDialog(self).exec()
 
@@ -519,10 +573,16 @@ class MainWindow(QMainWindow):
         self.backend_changed()
 
     def load_assignments(self) -> None:
+        self._discard_completed_export()
         self.preset_snapshot_positions.clear()
         self._clear_bad_lufs_highlights()
         self.presets.hide()
         path = Path(self.input_path.text())
+        if (
+            self.output_path.text().strip()
+            and Path(self.output_path.text()).suffix.lower() != path.suffix.lower()
+        ):
+            self.output_path.clear()
         is_single_preset = path.suffix.lower() == ".hlx"
         self.single_slot.setVisible(is_single_preset)
         self.preset_table.setVisible(not is_single_preset)
@@ -567,7 +627,7 @@ class MainWindow(QMainWindow):
     def start_normalization(self) -> None:
         try:
             args = apply_config(parse_args(self._build_argv()))
-            request = request_from_args(args)
+            request = replace(request_from_args(args), defer_export=True)
             if not self._confirm_automation_overwrites(request):
                 return
         except Exception as exc:  # noqa: BLE001
@@ -575,7 +635,8 @@ class MainWindow(QMainWindow):
             return
 
         self.start_button.setEnabled(False)
-        self.cancel_button.setEnabled(True)
+        self.start_cancel_stack.setCurrentWidget(self.cancel_button)
+        self._discard_completed_export()
         self.log.clear()
         self.log_entries.clear()
         self.preset_snapshot_positions.clear()
@@ -590,6 +651,7 @@ class MainWindow(QMainWindow):
         self._log("Normalization started", "info")
         self._log(f"Backend: {getattr(request, 'backend', 'unknown')}", "info")
         self._start_busy_phase()
+        self.completed_request = request
         self.worker = NormalizationWorker(request, self)
         self.worker.progress.connect(self.update_progress)
         self.worker.import_requested.connect(self.confirm_import)
@@ -607,7 +669,7 @@ class MainWindow(QMainWindow):
         profile = get_device_profile(request.device)
         handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
         input_path = request.input_path.resolve()
-        for postfix, description in (("_measurement", "measurement"), ("_adjusted", "adjusted")):
+        for postfix, description in (("_measurement", "measurement"),):
             output_path = handler.automation_output_path(input_path, postfix)
             if not output_path.exists():
                 continue
@@ -627,7 +689,7 @@ class MainWindow(QMainWindow):
     def update_progress(self, event: ProgressEvent) -> None:
         if event.phase:
             self._set_phase(event.phase)
-            self.progress_group.hide()
+            self._hide_progress()
             if event.phase in {
                 "completed",
                 "waiting_for_measurement_import",
@@ -653,7 +715,7 @@ class MainWindow(QMainWindow):
             self.preset_progress.setRange(0, total)
             self.preset_progress.setValue(value)
         elif event.kind == "measurement_completed":
-            self.progress_group.hide()
+            self._hide_progress()
 
         if event.lufs is not None:
             if event.device_patch:
@@ -695,6 +757,12 @@ class MainWindow(QMainWindow):
         if progress_was_hidden:
             self._schedule_resize_for_content()
 
+    def _hide_progress(self) -> None:
+        if self.progress_group.isHidden():
+            return
+        self.progress_group.hide()
+        self._schedule_resize_for_content()
+
     def confirm_import(self, request: ImportRequest) -> None:
         self._stop_busy_phase()
         answer = QMessageBox.question(
@@ -709,10 +777,61 @@ class MainWindow(QMainWindow):
     def normalization_completed(self, result: NormalizationResult) -> None:
         self._stop_busy_phase()
         self._set_phase("completed")
-        if result.retained_csv_path is not None:
+        if (
+            result.retained_csv_path is not None
+            and self.completed_request is not None
+            and self.completed_request.keep_temp
+        ):
             self.retained_csv.setText(str(result.retained_csv_path))
             self.retained_csv_pane.show()
-        self._log(f"Output: {result.output_path}", "success")
+        self.completed_result = result
+        self.export_button.setEnabled(result.retained_csv_path is not None)
+        self._log("Measurement completed; choose an output file and press Export", "success")
+
+    def export_output(self) -> None:
+        request = self.completed_request
+        result = self.completed_result
+        if request is None or result is None or result.retained_csv_path is None:
+            self.show_error("Run normalization before exporting an output file")
+            return
+
+        output_path = Path(self.output_path.text().strip())
+        if not self.output_path.text().strip():
+            self.show_error("Choose an output file before exporting")
+            return
+
+        try:
+            profile = get_device_profile(request.device)
+            handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+            handler.validate_output(request.input_path, output_path)
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return
+
+        if output_path.exists():
+            answer = QMessageBox.question(
+                self,
+                "Overwrite output file",
+                f"The output file already exists:\n{output_path}\n\nOverwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        try:
+            export_adjusted_file(
+                request,
+                result.retained_csv_path,
+                output_path,
+                on_progress=self.update_progress,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return
+
+        self._set_phase("completed")
+        self._log(f"Output: {output_path.resolve()}", "success")
 
     def show_error(self, message: str) -> None:
         self._stop_busy_phase()
@@ -728,8 +847,22 @@ class MainWindow(QMainWindow):
     def worker_finished(self) -> None:
         self._stop_busy_phase(self._processing_dot_color)
         self.start_button.setEnabled(True)
-        self.cancel_button.setEnabled(False)
+        self.start_cancel_stack.setCurrentWidget(self.start_button)
         self.worker = None
+
+    def _discard_completed_export(self) -> None:
+        if (
+            self.completed_request is not None
+            and not self.completed_request.keep_temp
+            and self.completed_result is not None
+            and self.completed_result.temp_dir is not None
+        ):
+            shutil.rmtree(self.completed_result.temp_dir, ignore_errors=True)
+        self.completed_request = None
+        self.completed_result = None
+        self.export_button.setEnabled(False)
+        self.retained_csv.clear()
+        self.retained_csv_pane.hide()
 
     def cancel_normalization(self) -> None:
         if self.worker is not None and self._confirm_cancellation():
@@ -756,6 +889,7 @@ class MainWindow(QMainWindow):
             self.worker.cancel()
         if self.worker is not None:
             self.worker.wait()
+        self._discard_completed_export()
         super().closeEvent(event)
         QApplication.quit()
 
@@ -1108,7 +1242,7 @@ class MainWindow(QMainWindow):
         self.busy_animation.stop()
         self.processing_dot_effect.setOpacity(1.0)
         self._set_processing_dot(color == PROCESSING_DOT_GREEN, color)
-        self.progress_group.hide()
+        self._hide_progress()
 
     def _set_processing_dot(self, green: bool, color: str | None = None) -> None:
         self._processing_dot_green = green

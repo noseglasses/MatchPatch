@@ -40,6 +40,7 @@ class NormalizationRequest:
     reference_di: Path
     output_path: Path | None = None
     automation: bool = True
+    defer_export: bool = False
     preset_set: str | None = None
     limit: int | None = None
     keep_temp: bool = False
@@ -66,7 +67,7 @@ class NormalizationRequest:
 
 @dataclass(frozen=True)
 class NormalizationResult:
-    output_path: Path
+    output_path: Path | None
     temp_dir: Path | None
     retained_csv_path: Path | None = None
 
@@ -104,7 +105,11 @@ def normalize_presets(
             raise ValueError("--output must not be specified with --automation")
 
         measurement_path = handler.automation_output_path(input_path, "_measurement")
-        output_path = handler.automation_output_path(input_path, "_adjusted")
+        output_path = (
+            None
+            if request.defer_export
+            else handler.automation_output_path(input_path, "_adjusted")
+        )
         _emit(on_progress, ProgressEvent("phase", phase="preparing_measurement"))
         handler.create_measurement_file(input_path, measurement_path)
         _emit(on_progress, ProgressEvent("phase", phase="waiting_for_measurement_import"))
@@ -162,20 +167,24 @@ def normalize_presets(
                 f"Windows analysis wrote {measured_rows} rows for {len(preset_ids)} presets"
             )
 
-        _emit(on_progress, ProgressEvent("phase", phase="applying", message="Applying adjustments"))
-        handler.apply_analysis_csv(
-            input_path,
-            output_path,
-            csv_path,
-            request.ignore_bad_lufs,
-            request.target_lufs,
-            request.policy,
-        )
+        if output_path is not None:
+            _emit(
+                on_progress,
+                ProgressEvent("phase", phase="applying", message="Applying adjustments"),
+            )
+            handler.apply_analysis_csv(
+                input_path,
+                output_path,
+                csv_path,
+                request.ignore_bad_lufs,
+                request.target_lufs,
+                request.policy,
+            )
         success = True
     finally:
-        if not request.keep_temp and success:
+        if not request.keep_temp and success and not request.defer_export:
             shutil.rmtree(temp_dir, ignore_errors=True)
-        else:
+        elif not request.defer_export:
             _emit(
                 on_progress,
                 ProgressEvent(
@@ -187,10 +196,18 @@ def normalize_presets(
 
     _emit(
         on_progress,
-        ProgressEvent("phase", phase="completed", message="Gain-adjusted patch file written"),
+        ProgressEvent(
+            "phase",
+            phase="completed",
+            message=(
+                "Measurement completed; ready to export"
+                if request.defer_export
+                else "Gain-adjusted patch file written"
+            ),
+        ),
     )
 
-    if request.automation:
+    if request.automation and output_path is not None:
         _emit(on_progress, ProgressEvent("phase", phase="waiting_for_adjusted_import"))
         _confirm(
             confirm_import,
@@ -199,8 +216,35 @@ def normalize_presets(
 
     return NormalizationResult(
         output_path,
-        temp_dir if request.keep_temp or not success else None,
-        csv_path if request.keep_temp or not success else None,
+        temp_dir if request.keep_temp or not success or request.defer_export else None,
+        csv_path if request.keep_temp or not success or request.defer_export else None,
+    )
+
+
+def export_adjusted_file(
+    request: NormalizationRequest,
+    csv_path: Path,
+    output_path: Path,
+    *,
+    on_progress: ProgressCallback | None = None,
+    get_profile: ProfileProvider = get_device_profile,
+) -> None:
+    profile = get_profile(request.device)
+    handler = profile.create_patch_file_handler(PROJECT_DIR)
+    log_setter = getattr(handler, "set_log_callback", None)
+    if log_setter is not None:
+        log_setter(lambda message: _emit(on_progress, ProgressEvent("log", message=message)))
+    input_path = request.input_path.resolve()
+    output_path = output_path.resolve()
+    handler.validate_input(input_path)
+    handler.validate_output(input_path, output_path)
+    handler.apply_analysis_csv(
+        input_path,
+        output_path,
+        csv_path,
+        request.ignore_bad_lufs,
+        request.target_lufs,
+        request.policy,
     )
 
 

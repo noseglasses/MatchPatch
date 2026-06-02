@@ -42,6 +42,19 @@ def app():
     yield instance
 
 
+def _request(**kwargs) -> NormalizationRequest:
+    values = dict(
+        device="helix",
+        input_path=Path("input.hls"),
+        backend="loopback",
+        windows_python=str(DEFAULT_WINDOWS_PYTHON),
+        reference_di=DEFAULT_REFERENCE_DI,
+        automation=False,
+    )
+    values.update(kwargs)
+    return NormalizationRequest(**values)
+
+
 def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     window = MainWindow()
 
@@ -65,6 +78,14 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert {"Help", "About"} <= {
         button.text() for button in window.general.findChildren(QPushButton)
     }
+    browse_buttons = {
+        button.toolTip(): button
+        for button in window.general.findChildren(QPushButton)
+        if button.text() == "Browse"
+    }
+    input_browse = browse_buttons["Choose the Helix setlist or preset file to normalize."]
+    output_browse = browse_buttons["Choose where to export the normalized setlist or preset."]
+    assert input_browse.icon().pixmap(16, 16).toImage() != output_browse.icon().pixmap(16, 16).toImage()
     assert window.log_level.currentText() == "Info"
     assert window.device_stack.count() == 1
     assert window.device_panels["helix"].audio_group.isEnabled()
@@ -76,8 +97,12 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     progress_index = window.content.layout().indexOf(window.progress_group)
     button_layout = window.content.layout().itemAt(progress_index - 1).layout()
     assert button_layout is not None
-    assert button_layout.indexOf(window.start_button) >= 0
-    assert button_layout.indexOf(window.cancel_button) >= 0
+    assert button_layout.indexOf(window.start_cancel_stack) >= 0
+    assert button_layout.indexOf(window.export_button) >= 0
+    assert window.start_cancel_stack.currentWidget() is window.start_button
+    assert window.start_button.height() == window.export_button.height()
+    assert window.cancel_button.height() == window.export_button.height()
+    assert window.start_cancel_stack.height() == window.export_button.height()
     assert window.progress_group.layout().itemAt(0).widget() is window.current
     assert window.progress_group.layout().itemAt(2).widget() is window.preset_progress
     assert window.progress_group.isHidden()
@@ -119,6 +144,25 @@ def test_window_shrinks_when_advanced_settings_are_folded(app) -> None:
     app.processEvents()
 
     assert window.height() < expanded_height
+
+    window.close()
+
+
+def test_window_shrinks_when_progress_is_hidden(app) -> None:
+    window = MainWindow()
+    window.show()
+    app.processEvents()
+    window._resize_to_initial_content()
+    app.processEvents()
+    initial_height = window.height()
+
+    window._show_indeterminate_progress("Preparing measurement...")
+    app.processEvents()
+    assert window.height() > initial_height
+
+    window._stop_busy_phase()
+    app.processEvents()
+    assert window.height() == initial_height
 
     window.close()
 
@@ -234,6 +278,7 @@ def test_log_section_and_busy_indicator(monkeypatch, app) -> None:
     assert resize_calls == [True]
     window._stop_busy_phase()
     assert window.progress_group.isHidden()
+    assert resize_calls == [True, True]
     assert window.busy_animation.state() == QAbstractAnimation.State.Stopped
     assert window.processing_dot_effect.opacity() == 1.0
     assert not window._processing_dot_green
@@ -626,7 +671,7 @@ def test_bad_lufs_row_highlight_is_reset_for_new_input_and_measurement(monkeypat
     window.update_progress(ProgressEvent("log", message="[GAIN] 02B Clean | bad LUFS"))
     monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
     monkeypatch.setattr(main_window, "apply_config", lambda args: args)
-    monkeypatch.setattr(main_window, "request_from_args", lambda args: object())
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: _request())
     monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
     window.start_normalization()
     assert window.preset_table.item(0, 0).background().style() == Qt.BrushStyle.NoBrush
@@ -694,16 +739,130 @@ def test_retained_csv_path_and_colored_timestamped_log_are_displayed(app) -> Non
     window.close()
 
 
-def test_completion_logs_output_without_redundant_popup(tmp_path, monkeypatch, app) -> None:
+def test_completion_enables_export_without_redundant_popup(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     popups = []
     monkeypatch.setattr(QMessageBox, "information", lambda *args: popups.append(args))
 
-    window.normalization_completed(NormalizationResult(tmp_path / "adjusted.hls", None))
+    window.normalization_completed(
+        NormalizationResult(None, tmp_path, tmp_path / "lufs_analysis.csv")
+    )
 
     assert popups == []
-    assert "adjusted.hls" in window.log.toHtml()
+    assert window.export_button.isEnabled()
+    assert "press Export" in window.log.toHtml()
 
+    window.close()
+
+
+def test_new_input_clears_output_with_different_extension(app) -> None:
+    window = MainWindow()
+    window.output_path.setText("/tmp/output.hls")
+    window.input_path.setText("/tmp/input.hlx")
+
+    window.load_assignments()
+
+    assert window.output_path.text() == ""
+    window.close()
+
+
+def test_output_browse_uses_file_selection_dialog(monkeypatch, app) -> None:
+    window = MainWindow()
+    window.input_path.setText("/tmp/input.hls")
+    dialogs = []
+
+    class FileDialog:
+        class Option:
+            DontUseNativeDialog = object()
+
+        class AcceptMode:
+            AcceptOpen = object()
+
+        class FileMode:
+            AnyFile = object()
+
+        class DialogLabel:
+            Accept = object()
+
+        def __init__(self, parent, title):
+            self.parent = parent
+            self.title = title
+            self.settings = []
+            dialogs.append(self)
+
+        def setOption(self, option):
+            self.settings.append(("option", option))
+
+        def setAcceptMode(self, mode):
+            self.settings.append(("accept_mode", mode))
+
+        def setFileMode(self, mode):
+            self.settings.append(("file_mode", mode))
+
+        def setNameFilter(self, file_filter):
+            self.settings.append(("name_filter", file_filter))
+
+        def setLabelText(self, label, text):
+            self.settings.append(("label", label, text))
+
+        @staticmethod
+        def exec():
+            return True
+
+        @staticmethod
+        def selectedFiles():
+            return ["/tmp/output.hls"]
+
+    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
+
+    window.browse_output()
+
+    assert window.output_path.text() == "/tmp/output.hls"
+    assert dialogs[0].settings == [
+        ("option", FileDialog.Option.DontUseNativeDialog),
+        ("accept_mode", FileDialog.AcceptMode.AcceptOpen),
+        ("file_mode", FileDialog.FileMode.AnyFile),
+        ("name_filter", "Helix .hls (*.hls)"),
+        ("label", FileDialog.DialogLabel.Accept, "Select"),
+    ]
+    window.close()
+
+
+def test_export_prompts_before_overwriting_existing_output(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    output_path = tmp_path / "output.hls"
+    output_path.touch()
+    csv_path = tmp_path / "lufs_analysis.csv"
+    exported = []
+    prompts = []
+
+    class Handler:
+        @staticmethod
+        def validate_output(input_path, selected_output_path):
+            assert selected_output_path == output_path
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    window.completed_request = _request(input_path=tmp_path / "input.hls")
+    window.completed_result = NormalizationResult(None, tmp_path, csv_path)
+    window.output_path.setText(str(output_path))
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    monkeypatch.setattr(
+        main_window, "export_adjusted_file", lambda *args, **kwargs: exported.append(args)
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: prompts.append(args) or QMessageBox.StandardButton.No,
+    )
+
+    window.export_output()
+
+    assert len(prompts) == 1
+    assert exported == []
     window.close()
 
 
@@ -712,8 +871,8 @@ def test_automation_overwrite_confirmation_only_prompts_for_existing_files(
 ) -> None:
     window = MainWindow()
     input_path = tmp_path / "input.hls"
-    adjusted_path = tmp_path / "input_adjusted.hls"
-    adjusted_path.touch()
+    measurement_path = tmp_path / "input_measurement.hls"
+    measurement_path.touch()
     prompts = []
 
     class Handler:
@@ -742,8 +901,8 @@ def test_automation_overwrite_confirmation_only_prompts_for_existing_files(
 
     assert window._confirm_automation_overwrites(request)
     assert len(prompts) == 1
-    assert "adjusted" in prompts[0][2]
-    assert str(adjusted_path) in prompts[0][2]
+    assert "measurement" in prompts[0][2]
+    assert str(measurement_path) in prompts[0][2]
 
     window.close()
 
@@ -783,7 +942,7 @@ def test_normalization_does_not_start_when_overwrite_is_declined(
 
     assert window.worker is None
     assert window.start_button.isEnabled()
-    assert not window.cancel_button.isEnabled()
+    assert window.start_cancel_stack.currentWidget() is window.start_button
     assert window.phase.text() == "Ready"
 
     window.close()
@@ -854,7 +1013,7 @@ def test_worker_import_confirmation_blocks_until_answered(app) -> None:
 
 def test_worker_thread_exits_without_processing_gui_events(monkeypatch, app) -> None:
     window = MainWindow()
-    request = object()
+    request = _request()
     monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
     monkeypatch.setattr(main_window, "apply_config", lambda args: args)
     monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
@@ -883,7 +1042,7 @@ def test_worker_completion_drains_queued_progress_updates(monkeypatch, app) -> N
     window.show()
     monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
     monkeypatch.setattr(main_window, "apply_config", lambda args: args)
-    monkeypatch.setattr(main_window, "request_from_args", lambda args: object())
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: _request())
 
     def emit_progress(*args, on_progress, **kwargs):
         for snapshot in range(1, 13):
