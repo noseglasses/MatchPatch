@@ -126,6 +126,7 @@ class DeviceProfile(ABC):
     name: str
     display_name: str
     snapshot_count: int = 4
+    max_snapshot_count: int | None = None
 
     @abstractmethod
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
@@ -142,3 +143,19 @@ class DeviceProfile(ABC):
     @abstractmethod
     def create_controller(self, options: SteeringOptions) -> DeviceController:
         """Open the transport used to select presets and snapshots."""
+
+
+def validate_snapshot_count(profile: DeviceProfile, snapshot_count: int) -> None:
+    if not isinstance(snapshot_count, int) or isinstance(snapshot_count, bool):
+        raise ValueError("Configured measured snapshot count must be an integer")
+
+    if snapshot_count < 1:
+        raise ValueError("Configured measured snapshot count must be at least 1")
+
+    max_snapshot_count = getattr(profile, "max_snapshot_count", None)
+
+    if max_snapshot_count is not None and snapshot_count > max_snapshot_count:
+        raise ValueError(
+            f"Configured measured snapshot count for {profile.display_name} "
+            f"must not exceed {max_snapshot_count}"
+        )

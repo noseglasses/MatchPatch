@@ -11,7 +11,7 @@ from pathlib import Path
 
 from matchpatch.analysis import AnalysisOptions
 from matchpatch.devices import get_device_profile
-from matchpatch.devices.base import DeviceProfile, NormalizationPolicy
+from matchpatch.devices.base import DeviceProfile, NormalizationPolicy, validate_snapshot_count
 from matchpatch.progress import ProgressEvent
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -88,6 +88,7 @@ def normalize_presets(
     make_temp_dir: TempDirFactory | None = None,
 ) -> NormalizationResult:
     profile = get_profile(request.device)
+    validate_snapshot_count(profile, request.policy.snapshot_count)
     handler = profile.create_patch_file_handler(PROJECT_DIR)
     log_setter = getattr(handler, "set_log_callback", None)
     if log_setter is not None:

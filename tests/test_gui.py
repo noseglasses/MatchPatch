@@ -87,6 +87,8 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.preset_table.verticalHeader().isHidden()
     assert not window.preset_table.wordWrap()
     assert window.preset_table_note.text() == "Only non-empty presets are listed."
+    assert window.snapshot_count_input.value() == 4
+    assert window.snapshot_count_input.maximum() == 8
 
     window.close()
 
@@ -409,6 +411,9 @@ target_lufs = -18.0
 
 [devices.helix.audio]
 device = "Configured Audio"
+
+[policy]
+measured_snapshots = 6
 """,
         encoding="utf-8",
     )
@@ -418,6 +423,8 @@ device = "Configured Audio"
 
     assert window.backend.currentText() == "hardware"
     assert window.target_lufs.text() == "-18.0"
+    assert window.snapshot_count_input.value() == 6
+    assert window.preset_table.columnCount() == 15
     assert window.device_panels["helix"].audio_device.text() == "Configured Audio"
     assert window.device_panels["helix"].audio_group.isEnabled()
 
@@ -559,6 +566,29 @@ def test_snapshot_names_are_preloaded_and_bad_lufs_is_marked(app) -> None:
         window.preset_table.item(0, column).background().color().name() == "#fee2e2"
         for column in range(window.preset_table.columnCount())
     )
+
+    window.close()
+
+
+def test_snapshot_count_widget_redraws_columns_and_preserves_loaded_names(app) -> None:
+    window = MainWindow()
+    window.preset_table.insertRow(0)
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("One", "Two", "Three", "Four", "Five", "Six"))
+
+    window.snapshot_count_input.setValue(6)
+
+    assert window.snapshot_count == 6
+    assert window.preset_table.columnCount() == 15
+    assert window.preset_table.item(0, 13).text() == "Six"
+    argv = window._build_argv()
+    assert argv[argv.index("--snapshot-count") + 1] == "6"
+
+    window.snapshot_count_input.setValue(2)
+    window.snapshot_count_input.setValue(6)
+
+    assert window.preset_table.item(0, 13).text() == "Six"
 
     window.close()
 

@@ -19,7 +19,7 @@ from typing import cast
 from matchpatch.analysis import AnalysisOptions
 from matchpatch.config import Config, config_value, load_config, parse_channel_mapping, prefer
 from matchpatch.devices import get_device_profile
-from matchpatch.devices.base import NormalizationPolicy
+from matchpatch.devices.base import NormalizationPolicy, validate_snapshot_count
 from matchpatch.progress import ProgressEvent
 from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_presets
 
@@ -42,8 +42,18 @@ def _mapping_argument(value: object | None) -> str | None:
 
 
 def _normalization_policy(config: Config, args: argparse.Namespace) -> NormalizationPolicy:
+    profile = get_device_profile(args.device)
     policy = NormalizationPolicy(
-        snapshot_count=config_value(config, "policy", "measured_snapshots", default=4),
+        snapshot_count=cast(
+            int,
+            prefer(
+                args.snapshot_count,
+                config,
+                "policy",
+                "measured_snapshots",
+                default=getattr(profile, "snapshot_count", 4),
+            ),
+        ),
         solo_regex=cast(
             str,
             prefer(
@@ -70,8 +80,7 @@ def _normalization_policy(config: Config, args: argparse.Namespace) -> Normaliza
         gain_deadband_db=config_value(config, "policy", "gain_deadband_db", default=0.25),
     )
 
-    if policy.snapshot_count < 1:
-        raise ValueError("Configured measured snapshot count must be at least 1")
+    validate_snapshot_count(profile, policy.snapshot_count)
     try:
         re.compile(policy.solo_regex)
     except re.error as exc:
@@ -345,6 +354,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--target-lufs", type=float)
     parser.add_argument("--solo-regex")
     parser.add_argument("--solo-gain-bump-db", type=float)
+    parser.add_argument("--snapshot-count", type=int)
     parser.add_argument(
         "--backend",
         choices=["hardware", "loopback", "simulated"],

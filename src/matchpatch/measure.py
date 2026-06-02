@@ -27,6 +27,7 @@ from matchpatch.devices.base import (
     DeviceController,
     DeviceProfile,
     SteeringOptions,
+    validate_snapshot_count,
 )
 from matchpatch.progress import ProgressEvent
 
@@ -226,7 +227,10 @@ def measure_presets(
     on_progress: Callable[[ProgressEvent], None] | None = None,
     log_output: bool = True,
 ) -> None:
-    measured_snapshots = snapshot_count if snapshot_count is not None else profile.snapshot_count
+    measured_snapshots = (
+        snapshot_count if snapshot_count is not None else getattr(profile, "snapshot_count", 4)
+    )
+    validate_snapshot_count(profile, measured_snapshots)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     handler = profile.create_patch_file_handler(Path.cwd())
     _emit_progress(
@@ -425,7 +429,12 @@ def measure(args: argparse.Namespace) -> None:
         ProgressEvent("measurement_preparation", message="Loading reference DI audio..."),
     )
     reference = load_reference_audio(Path(args.reference_di), sample_rate)
-    snapshot_count = getattr(args, "snapshot_count", None) or profile.snapshot_count
+    requested_snapshot_count = getattr(args, "snapshot_count", None)
+    snapshot_count = (
+        requested_snapshot_count
+        if requested_snapshot_count is not None
+        else getattr(profile, "snapshot_count", 4)
+    )
     analysis_options = getattr(args, "analysis_options", AnalysisOptions())
     log_output = not getattr(args, "progress_jsonl", False)
 
@@ -548,6 +557,7 @@ def add_hardware_arguments(parser: argparse.ArgumentParser) -> None:
 
 def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     config = load_config(args.config)
+    profile = get_device_profile(args.device)
     device_audio = ("devices", args.device, "audio")
     device_steering = ("devices", args.device, "steering")
     args.backend = args.backend or config_value(config, "normalize", "backend", default="hardware")
@@ -622,8 +632,8 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
         else config_value(config, "policy", "measured_snapshots")
     )
 
-    if args.snapshot_count is not None and args.snapshot_count < 1:
-        raise ValueError("Configured measured snapshot count must be at least 1")
+    if args.snapshot_count is not None:
+        validate_snapshot_count(profile, args.snapshot_count)
 
     args.analysis_options = AnalysisOptions(
         window_seconds=(

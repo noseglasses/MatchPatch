@@ -179,6 +179,37 @@ def test_apply_config_rejects_invalid_snapshot_count(tmp_path) -> None:
         )
 
 
+def test_apply_config_cli_snapshot_count_overrides_toml(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[policy]\nmeasured_snapshots = 3\n", encoding="utf-8")
+
+    args = normalize.apply_config(
+        normalize.parse_args(
+            [
+                "--config",
+                str(config_path),
+                "--device",
+                "helix",
+                "-i",
+                "input.hls",
+                "--snapshot-count",
+                "6",
+            ]
+        )
+    )
+
+    assert args.policy.snapshot_count == 6
+
+
+def test_apply_config_rejects_snapshot_count_above_device_limit() -> None:
+    with pytest.raises(ValueError, match="must not exceed 8"):
+        normalize.apply_config(
+            normalize.parse_args(
+                ["--device", "helix", "-i", "input.hls", "--snapshot-count", "9"]
+            )
+        )
+
+
 def test_apply_config_rejects_invalid_solo_regex(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text("[policy]\nsolo_regex = '('\n", encoding="utf-8")

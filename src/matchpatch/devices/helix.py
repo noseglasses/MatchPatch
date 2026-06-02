@@ -301,6 +301,7 @@ class HelixMidiController(DeviceController):
 class HelixDeviceProfile(DeviceProfile):
     name = "helix"
     display_name = "Line 6 Helix"
+    max_snapshot_count = 8
 
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
         return HelixPatchFileHandler(project_dir)

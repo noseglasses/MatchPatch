@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QStackedWidget,
     QStyle,
     QTableWidget,
@@ -407,6 +408,14 @@ class MainWindow(QMainWindow):
             _label("Target LUFS", "Desired loudness used to calculate snapshot gain corrections."),
             self.target_lufs,
         )
+        self.snapshot_count_input = QSpinBox()
+        self.snapshot_count_input.setRange(1, 8)
+        self.snapshot_count_input.setValue(self.snapshot_count)
+        self.snapshot_count_input.valueChanged.connect(self._snapshot_count_changed)
+        form.addRow(
+            _label("Snapshots", "Number of snapshots to measure and normalize."),
+            self.snapshot_count_input,
+        )
         self.keep_temp = QCheckBox()
         form.addRow(
             _label(
@@ -501,7 +510,9 @@ class MainWindow(QMainWindow):
         self.target_lufs.setText(str(args.target_lufs))
         self.solo_gain_bump_db.setText(str(args.policy.solo_gain_bump_db))
         self.solo_regex.setText(args.policy.solo_regex)
-        self._configure_snapshot_columns(args.policy.snapshot_count)
+        profile = get_device_profile(args.device)
+        self.snapshot_count_input.setMaximum(getattr(profile, "max_snapshot_count", None) or 999)
+        self.snapshot_count_input.setValue(args.policy.snapshot_count)
         panel = self.device_panels.get(args.device)
         if panel is not None:
             panel.populate(args)
@@ -768,6 +779,7 @@ class MainWindow(QMainWindow):
         argv.extend(["--target-lufs", self.target_lufs.text()])
         argv.extend(["--solo-gain-bump-db", self.solo_gain_bump_db.text()])
         argv.extend(["--solo-regex", self.solo_regex.text()])
+        argv.extend(["--snapshot-count", str(self.snapshot_count_input.value())])
         if self.keep_temp.isChecked():
             argv.append("--keep-temp")
         preset_set = self._selected_preset_set()
@@ -906,6 +918,11 @@ class MainWindow(QMainWindow):
                     item.setToolTip(tooltip)
             for row in range(self.preset_table.rowCount()):
                 self._clear_preset_adjustments(row)
+                self._refresh_snapshot_names(row)
+
+    def _snapshot_count_changed(self, snapshot_count: int) -> None:
+        if hasattr(self, "preset_table"):
+            self._configure_snapshot_columns(snapshot_count)
 
     @contextmanager
     def _sorting_paused(self) -> Iterator[None]:
@@ -946,10 +963,23 @@ class MainWindow(QMainWindow):
             self._clear_bad_lufs_highlight(row)
 
     def _set_snapshot_names(self, row: int, snapshot_names: tuple[str, ...]) -> None:
+        name_item = self.preset_table.item(row, 2)
+        if name_item is not None:
+            name_item.setData(Qt.ItemDataRole.UserRole, snapshot_names)
+        self._refresh_snapshot_names(row)
+
+    def _refresh_snapshot_names(self, row: int) -> None:
+        name_item = self.preset_table.item(row, 2)
+        snapshot_names = name_item.data(Qt.ItemDataRole.UserRole) if name_item is not None else ()
+        snapshot_names = snapshot_names if isinstance(snapshot_names, tuple) else ()
         try:
             solo_pattern = re.compile(self.solo_regex.text())
         except re.error:
             solo_pattern = None
+        for column in range(3, self.preset_table.columnCount(), 2):
+            item = self.preset_table.item(row, column)
+            if item is not None:
+                self._set_snapshot_name(item, "", False)
         for snapshot, name in enumerate(snapshot_names[: self.snapshot_count]):
             item = self.preset_table.item(row, 3 + snapshot * 2)
             if item is not None:

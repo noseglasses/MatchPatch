@@ -647,6 +647,30 @@ def test_worker_parse_args_rejects_invalid_snapshot_count(monkeypatch) -> None:
         parse_args()
 
 
+def test_worker_parse_args_rejects_snapshot_count_above_device_limit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "measure",
+            "measure",
+            "--device",
+            "helix",
+            "--preset-ids",
+            "1",
+            "--csv",
+            "results.csv",
+            "--reference-di",
+            "reference.wav",
+            "--snapshot-count",
+            "9",
+        ],
+    )
+
+    with pytest.raises(ValueError, match="must not exceed 8"):
+        parse_args()
+
+
 def test_worker_main_dispatches_devices_and_legacy_helix_backend(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr("matchpatch.measure.list_devices", lambda: calls.append("devices"))
