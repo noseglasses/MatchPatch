@@ -103,6 +103,8 @@ loads `~/.config/matchpatch/config.toml` automatically when it exists. Pass
 `--config PATH` to use a different file. Command-line options override the file;
 the `MATCHPATCH_BACKEND`, `MATCHPATCH_WINDOWS_PYTHON`, and
 `MATCHPATCH_REFERENCE_DI` environment variables override matching file values.
+Use `--snapshot-count N` to override `policy.measured_snapshots` for one run.
+Line 6 Helix supports between `1` and `8` measured snapshots; the default is `4`.
 
 ```toml
 [normalize]
@@ -175,6 +177,17 @@ as played and therefore sound one semitone lower:
 - 12th fret on the B string;
 - 15th fret on the B string;
 - 15th fret on the high E string, ringing out.
+
+```text
+    1      &      2      &      3      &      4      &
+e|------------------------------------------------15~~~~|
+B|----------------------------12------15----------------|
+G|--------------------12--------------------------------|
+D|------7------9----------------------------------------|
+A|------7------9----------------------------------------|
+E|-0.-0-5------7----------------------------------------|
+    PM-- PM-
+```
 
 Tailor the DI measurement track to the player's style. For instruments other
 than guitar, use a track designed for that instrument's dynamics and frequency
