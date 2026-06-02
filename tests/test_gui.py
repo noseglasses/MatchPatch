@@ -153,7 +153,7 @@ def test_single_preset_layout_shrinks_to_its_instruction_label(app) -> None:
     assert window.height() < setlist_height
     assert window.preset_hint.height() == window.preset_hint.sizeHint().height()
     assert window.preset_hint.text() == (
-        "Choose the temporary Helix slot used during measurement."
+        "Enter the temporary Helix slot used during measurement."
     )
 
     window.close()
@@ -477,6 +477,8 @@ def test_gui_always_requests_bad_lufs_tolerance(app) -> None:
     window = MainWindow()
 
     assert not hasattr(window, "ignore_bad_lufs")
+    assert not hasattr(window, "limit")
+    assert "--limit" not in window._build_argv()
     assert "--ignore-bad-lufs" not in window._build_argv()
     assert "--no-ignore-bad-lufs" not in window._build_argv()
 

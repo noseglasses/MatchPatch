@@ -39,7 +39,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QStackedWidget,
     QStyle,
     QTableWidget,
@@ -227,13 +226,6 @@ class MainWindow(QMainWindow):
         self.unselect_all_button.clicked.connect(lambda: self.set_all_presets_checked(False))
         selection_buttons.addWidget(self.select_all_button)
         selection_buttons.addWidget(self.unselect_all_button)
-        self.limit = QSpinBox()
-        self.limit.setRange(0, 128)
-        self.limit.setSpecialValueText("All")
-        selection_buttons.addWidget(
-            _label("Preset limit", "Optionally process only the first selected presets.")
-        )
-        selection_buttons.addWidget(self.limit)
         selection_buttons.addStretch()
         layout.addLayout(selection_buttons)
         layout.addWidget(self.preset_table)
@@ -492,7 +484,7 @@ class MainWindow(QMainWindow):
 
         if path.suffix.lower() == ".hlx":
             self.preset_table.setRowCount(0)
-            self.preset_hint.setText("Choose the temporary Helix slot used during measurement.")
+            self.preset_hint.setText("Enter the temporary Helix slot used during measurement.")
             self.presets.updateGeometry()
             self._schedule_resize_for_content()
             return
@@ -689,9 +681,6 @@ class MainWindow(QMainWindow):
         argv.extend(["--solo-regex", self.solo_regex.text()])
         if self.keep_temp.isChecked():
             argv.append("--keep-temp")
-        if self.limit.value():
-            argv.extend(["--limit", str(self.limit.value())])
-
         preset_set = self._selected_preset_set()
         if preset_set:
             argv.extend(["--preset-set", preset_set])
