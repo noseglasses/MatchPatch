@@ -138,7 +138,14 @@ gain_deadband_db = 0.25
 window_seconds = 3.0
 interval_seconds = 0.1
 minimum_valid_lufs = -100.0
+pre_roll_seconds = 1.0
+post_roll_seconds = 1.0
+round_trip_latency_seconds = 0.02
 ```
+
+Hardware measurement sends silent pre-roll and post-roll around the reference DI,
+then trims the recording by the configured round-trip latency before analysis.
+`post_roll_seconds` must be at least as large as `round_trip_latency_seconds`.
 
 Helix defaults:
 

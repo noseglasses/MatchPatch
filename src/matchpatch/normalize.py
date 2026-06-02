@@ -135,6 +135,15 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
         *device_steering,
         "measurement_wait_seconds",
     )
+    args.pre_roll = prefer(args.pre_roll, config, "analysis", "pre_roll_seconds", default=1.0)
+    args.post_roll = prefer(args.post_roll, config, "analysis", "post_roll_seconds", default=1.0)
+    args.round_trip_latency = prefer(
+        args.round_trip_latency,
+        config,
+        "analysis",
+        "round_trip_latency_seconds",
+        default=0.02,
+    )
     args.policy = _normalization_policy(config, args)
     args.analysis_options = _analysis_options(config)
     return args
@@ -214,6 +223,9 @@ def run_windows_analysis(
         "--preset-wait": getattr(args, "preset_wait", None),
         "--snapshot-wait": getattr(args, "snapshot_wait", None),
         "--measurement-wait": getattr(args, "measurement_wait", None),
+        "--pre-roll": getattr(args, "pre_roll", None),
+        "--post-roll": getattr(args, "post_roll", None),
+        "--round-trip-latency": getattr(args, "round_trip_latency", None),
         "--snapshot-count": getattr(args, "policy", NormalizationPolicy()).snapshot_count,
         "--analysis-window": getattr(args, "analysis_options", AnalysisOptions()).window_seconds,
         "--analysis-interval": getattr(
@@ -353,6 +365,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--preset-wait", type=float)
     parser.add_argument("--snapshot-wait", type=float)
     parser.add_argument("--measurement-wait", type=float)
+    parser.add_argument("--pre-roll", type=float)
+    parser.add_argument("--post-roll", type=float)
+    parser.add_argument("--round-trip-latency", type=float)
     parser.add_argument("--timeout", type=float)
     return parser.parse_args(argv)
 
@@ -381,6 +396,9 @@ def request_from_args(args: argparse.Namespace) -> NormalizationRequest:
         preset_wait=args.preset_wait,
         snapshot_wait=args.snapshot_wait,
         measurement_wait=args.measurement_wait,
+        pre_roll=args.pre_roll,
+        post_roll=args.post_roll,
+        round_trip_latency=args.round_trip_latency,
         simulate_fail_presets=args.simulate_fail_presets,
         timeout=args.timeout,
         policy=args.policy,

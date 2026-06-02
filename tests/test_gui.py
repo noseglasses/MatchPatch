@@ -41,11 +41,11 @@ def app():
     yield instance
 
 
-def test_main_window_starts_with_registry_device_and_loopback(app) -> None:
+def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     window = MainWindow()
 
     assert window.device.currentData() == "helix"
-    assert window.backend.currentText() == "loopback"
+    assert window.backend.currentText() == "hardware"
     assert window.general.title() == "General"
     assert not window.advanced.is_expanded()
     assert window.advanced.content.isHidden()

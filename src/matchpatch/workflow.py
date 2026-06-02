@@ -56,6 +56,9 @@ class NormalizationRequest:
     preset_wait: float | None = None
     snapshot_wait: float | None = None
     measurement_wait: float | None = None
+    pre_roll: float | None = None
+    post_roll: float | None = None
+    round_trip_latency: float | None = None
     simulate_fail_presets: str | None = None
     policy: NormalizationPolicy = NormalizationPolicy()
     analysis_options: AnalysisOptions = AnalysisOptions()

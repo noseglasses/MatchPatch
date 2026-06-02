@@ -352,7 +352,7 @@ def resolve_audio_config(args: argparse.Namespace, profile: DeviceProfile) -> Au
     from matchpatch.audio import AudioConfig
 
     defaults = profile.default_audio_routing()
-    return AudioConfig(
+    config = AudioConfig(
         device=args.audio_device if args.audio_device is not None else defaults.device,
         sample_rate=args.sample_rate if args.sample_rate is not None else defaults.sample_rate,
         input_mapping=(
@@ -362,7 +362,25 @@ def resolve_audio_config(args: argparse.Namespace, profile: DeviceProfile) -> Au
             args.output_mapping if args.output_mapping is not None else defaults.output_mapping
         ),
         blocksize=args.blocksize,
+        pre_roll_seconds=getattr(args, "pre_roll", 1.0),
+        post_roll_seconds=getattr(args, "post_roll", 1.0),
+        round_trip_latency_seconds=getattr(args, "round_trip_latency", 0.02),
     )
+
+    if (
+        min(
+            config.pre_roll_seconds,
+            config.post_roll_seconds,
+            config.round_trip_latency_seconds,
+        )
+        < 0
+    ):
+        raise ValueError("Audio pre-roll, post-roll, and round-trip latency must not be negative")
+
+    if config.round_trip_latency_seconds > config.post_roll_seconds:
+        raise ValueError("Audio post-roll must be at least as long as round-trip latency")
+
+    return config
 
 
 def resolve_steering_options(
@@ -560,6 +578,21 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
         if args.measurement_wait is not None
         else config_value(config, *device_steering, "measurement_wait_seconds")
     )
+    args.pre_roll = (
+        args.pre_roll
+        if args.pre_roll is not None
+        else config_value(config, "analysis", "pre_roll_seconds", default=1.0)
+    )
+    args.post_roll = (
+        args.post_roll
+        if args.post_roll is not None
+        else config_value(config, "analysis", "post_roll_seconds", default=1.0)
+    )
+    args.round_trip_latency = (
+        args.round_trip_latency
+        if args.round_trip_latency is not None
+        else config_value(config, "analysis", "round_trip_latency_seconds", default=0.02)
+    )
     args.snapshot_count = (
         args.snapshot_count
         if args.snapshot_count is not None
@@ -618,6 +651,9 @@ def parse_args() -> argparse.Namespace:
     measure_parser.add_argument("--analysis-window", type=float)
     measure_parser.add_argument("--analysis-interval", type=float)
     measure_parser.add_argument("--minimum-valid-lufs", type=float)
+    measure_parser.add_argument("--pre-roll", type=float)
+    measure_parser.add_argument("--post-roll", type=float)
+    measure_parser.add_argument("--round-trip-latency", type=float)
     measure_parser.add_argument("--progress-jsonl", action="store_true")
     add_hardware_arguments(measure_parser)
 

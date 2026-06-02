@@ -20,6 +20,9 @@ class AudioConfig:
     input_mapping: tuple[int, int]
     output_mapping: tuple[int, int]
     blocksize: int = 0
+    pre_roll_seconds: float = 1.0
+    post_roll_seconds: float = 1.0
+    round_trip_latency_seconds: float = 0.02
 
 
 def _matches_device(device: dict[str, Any], query: str) -> bool:
@@ -59,6 +62,27 @@ def record_processed_audio(
     config: AudioConfig,
 ) -> np.ndarray:
     device = resolve_audio_device(config.device)
+    pre_roll_frames = round(config.pre_roll_seconds * config.sample_rate)
+    post_roll_frames = round(config.post_roll_seconds * config.sample_rate)
+    latency_frames = round(config.round_trip_latency_seconds * config.sample_rate)
+
+    if min(pre_roll_frames, post_roll_frames, latency_frames) < 0:
+        raise ValueError("Audio pre-roll, post-roll, and round-trip latency must not be negative")
+
+    if latency_frames > post_roll_frames:
+        raise ValueError("Audio post-roll must be at least as long as round-trip latency")
+
+    reference = np.asarray(reference_audio)
+
+    if reference.ndim != 2 or reference.shape[0] == 0:
+        raise ValueError("Reference audio must contain frames and one or more channels")
+
+    silence_shape = (pre_roll_frames + post_roll_frames, reference.shape[1])
+    silence = np.zeros(silence_shape, dtype=reference.dtype)
+    playback = np.concatenate(
+        [silence[:pre_roll_frames], reference, silence[pre_roll_frames:]],
+        axis=0,
+    )
 
     sd.check_input_settings(
         device=device,
@@ -73,8 +97,8 @@ def record_processed_audio(
         samplerate=config.sample_rate,
     )
 
-    return sd.playrec(
-        reference_audio,
+    recorded = sd.playrec(
+        playback,
         samplerate=config.sample_rate,
         channels=len(config.input_mapping),
         dtype="float32",
@@ -84,3 +108,6 @@ def record_processed_audio(
         device=(device, device),
         blocksize=config.blocksize,
     )
+    aligned_start = pre_roll_frames + latency_frames
+    aligned_end = aligned_start + reference.shape[0]
+    return recorded[aligned_start:aligned_end]

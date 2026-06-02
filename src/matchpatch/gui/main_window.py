@@ -316,7 +316,7 @@ class MainWindow(QMainWindow):
         content = QWidget()
         form = QFormLayout(content)
         self.backend = QComboBox()
-        self.backend.addItems(["loopback", "simulated", "hardware"])
+        self.backend.addItems(["hardware", "loopback", "simulated"])
         self.backend.currentTextChanged.connect(self.backend_changed)
         form.addRow(
             _label("Backend", "Select loopback for testing or hardware for a connected device."),
@@ -429,7 +429,7 @@ class MainWindow(QMainWindow):
         try:
             config = load_config(self.config_path.text().strip() or None)
             self.backend.setCurrentText(
-                config_value(config, "normalize", "backend", default="loopback")
+                config_value(config, "normalize", "backend", default="hardware")
             )
             args = apply_config(parse_args(self._base_argv("placeholder.hls")))
         except Exception as exc:  # noqa: BLE001
@@ -506,6 +506,7 @@ class MainWindow(QMainWindow):
         self.retained_csv_pane.hide()
         self._set_phase("starting")
         self._log("Normalization started", "info")
+        self._log(f"Backend: {getattr(request, 'backend', 'unknown')}", "info")
         self._start_busy_phase()
         self.worker_thread = QThread(self)
         self.worker = NormalizationWorker(request)

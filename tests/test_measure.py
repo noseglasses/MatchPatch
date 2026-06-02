@@ -375,6 +375,9 @@ def test_resolve_audio_config_uses_defaults_and_overrides(monkeypatch) -> None:
     assert config.input_mapping == (1, 2)
     assert config.output_mapping == (7, 8)
     assert config.blocksize == 128
+    assert config.pre_roll_seconds == 1.0
+    assert config.post_roll_seconds == 1.0
+    assert config.round_trip_latency_seconds == 0.02
 
 
 def worker_args(**overrides):
@@ -394,6 +397,9 @@ def worker_args(**overrides):
         "preset_wait": None,
         "snapshot_wait": None,
         "measurement_wait": None,
+        "pre_roll": 1.0,
+        "post_roll": 1.0,
+        "round_trip_latency": 0.02,
         "simulate_fail_presets": [],
     }
     values.update(overrides)
@@ -562,6 +568,9 @@ measured_snapshots = 2
 
 [analysis]
 window_seconds = 1.5
+pre_roll_seconds = 1.5
+post_roll_seconds = 2.0
+round_trip_latency_seconds = 0.03
 """,
         encoding="utf-8",
     )
@@ -591,6 +600,9 @@ window_seconds = 1.5
     assert args.blocksize == 64
     assert args.snapshot_count == 2
     assert args.analysis_options.window_seconds == 1.5
+    assert args.pre_roll == 1.5
+    assert args.post_roll == 2.0
+    assert args.round_trip_latency == 0.03
 
 
 def test_worker_parse_args_rejects_invalid_snapshot_count(monkeypatch) -> None:

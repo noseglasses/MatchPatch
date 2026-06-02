@@ -126,6 +126,9 @@ gain_deadband_db = 0.1
 window_seconds = 2.0
 interval_seconds = 0.2
 minimum_valid_lufs = -90.0
+pre_roll_seconds = 1.5
+post_roll_seconds = 2.0
+round_trip_latency_seconds = 0.03
 """,
         encoding="utf-8",
     )
@@ -159,6 +162,9 @@ minimum_valid_lufs = -90.0
     assert args.policy.snapshot_count == 3
     assert args.policy.solo_regex == "lead"
     assert args.analysis_options.window_seconds == 2.0
+    assert args.pre_roll == 1.5
+    assert args.post_roll == 2.0
+    assert args.round_trip_latency == 0.03
 
 
 def test_apply_config_rejects_invalid_snapshot_count(tmp_path) -> None:
@@ -202,6 +208,9 @@ def test_run_windows_analysis_builds_worker_command(tmp_path, monkeypatch) -> No
         input_mapping="1,2",
         output_mapping=None,
         simulate_fail_presets="6,7",
+        pre_roll=1.5,
+        post_roll=2.0,
+        round_trip_latency=0.03,
         timeout=12.0,
     )
     calls = []
@@ -225,6 +234,13 @@ def test_run_windows_analysis_builds_worker_command(tmp_path, monkeypatch) -> No
     assert command[audio_index : audio_index + 2] == ["--audio-device", "Helix"]
     failure_index = command.index("--simulate-fail-presets")
     assert command[failure_index : failure_index + 2] == ["--simulate-fail-presets", "6,7"]
+    assert command[command.index("--pre-roll") : command.index("--pre-roll") + 2] == [
+        "--pre-roll",
+        1.5,
+    ]
+    assert command[
+        command.index("--round-trip-latency") : command.index("--round-trip-latency") + 2
+    ] == ["--round-trip-latency", 0.03]
     assert timeout == 12.0
 
 
