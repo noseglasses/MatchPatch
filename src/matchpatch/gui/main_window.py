@@ -105,12 +105,22 @@ PHASE_ICON = {
     "cancelling": QStyle.StandardPixmap.SP_MessageBoxWarning,
     "normalization_cancelled_by_user": QStyle.StandardPixmap.SP_MessageBoxWarning,
 }
+IN_PROGRESS_PHASES = {
+    "starting",
+    "preparing_measurement",
+    "waiting_for_measurement_import",
+    "measuring",
+    "applying",
+    "waiting_for_adjusted_import",
+    "cancelling",
+}
 
 
 def _phase_text(phase: str) -> str:
     if phase == "normalization_cancelled_by_user":
         return "Normalization cancelled by user"
-    return phase.replace("_", " ").title()
+    text = phase.replace("_", " ").title()
+    return f"{text}..." if phase in IN_PROGRESS_PHASES else text
 
 
 class MainWindow(QMainWindow):

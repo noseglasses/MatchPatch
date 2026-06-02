@@ -211,11 +211,11 @@ def test_progress_statuses_include_suitable_icons(monkeypatch, app) -> None:
     assert window.phase.text() == "Ready"
     assert not window.phase_icon.pixmap().isNull()
     window.update_progress(ProgressEvent("phase", phase="measuring"))
-    assert window.phase.text() == "Measuring"
+    assert window.phase.text() == "Measuring..."
     assert not window.phase_icon.pixmap().isNull()
     assert window.progress_group.isHidden()
     window.update_progress(ProgressEvent("phase", phase="waiting_for_measurement_import"))
-    assert window.phase.text() == "Waiting For Measurement Import"
+    assert window.phase.text() == "Waiting For Measurement Import..."
     assert window.progress_group.isHidden()
     window.update_progress(ProgressEvent("phase", phase="measuring"))
     window.normalization_completed(NormalizationResult(Path("adjusted.hls"), None))
@@ -227,6 +227,26 @@ def test_progress_statuses_include_suitable_icons(monkeypatch, app) -> None:
     assert not window.phase_icon.pixmap().isNull()
 
     window.close()
+
+
+@pytest.mark.parametrize(
+    ("phase", "text"),
+    [
+        ("ready", "Ready"),
+        ("starting", "Starting..."),
+        ("preparing_measurement", "Preparing Measurement..."),
+        ("waiting_for_measurement_import", "Waiting For Measurement Import..."),
+        ("measuring", "Measuring..."),
+        ("applying", "Applying..."),
+        ("waiting_for_adjusted_import", "Waiting For Adjusted Import..."),
+        ("completed", "Completed"),
+        ("error", "Error"),
+        ("cancelling", "Cancelling..."),
+        ("normalization_cancelled_by_user", "Normalization cancelled by user"),
+    ],
+)
+def test_phase_text_marks_in_progress_statuses(phase, text) -> None:
+    assert main_window._phase_text(phase) == text
 
 
 def test_preset_progress_shows_current_preset_and_snapshot_names(app) -> None:
@@ -830,7 +850,7 @@ def test_cancel_button_requests_cancellation_when_confirmation_is_accepted(
     window.cancel_normalization()
 
     worker.cancel.assert_called_once_with()
-    assert window.phase.text() == "Cancelling"
+    assert window.phase.text() == "Cancelling..."
 
     window.worker = None
     window.close()
