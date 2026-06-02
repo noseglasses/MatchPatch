@@ -765,9 +765,11 @@ class MainWindow(QMainWindow):
             header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
             header.setStretchLastSection(False)
             checkbox_width = self.style().pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth)
-            header.setMinimumSectionSize(checkbox_width)
+            checkbox_spacing = self.style().pixelMetric(QStyle.PixelMetric.PM_CheckBoxLabelSpacing)
+            selection_width = checkbox_width + checkbox_spacing * 2
+            header.setMinimumSectionSize(selection_width)
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-            self.preset_table.setColumnWidth(0, checkbox_width)
+            self.preset_table.setColumnWidth(0, selection_width)
             self.preset_table.setColumnWidth(1, 52)
             self.preset_table.setColumnWidth(2, 120)
             for column in range(3, len(labels), 2):
