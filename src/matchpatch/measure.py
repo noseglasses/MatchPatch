@@ -229,6 +229,10 @@ def measure_presets(
     measured_snapshots = snapshot_count if snapshot_count is not None else profile.snapshot_count
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     handler = profile.create_patch_file_handler(Path.cwd())
+    _emit_progress(
+        on_progress,
+        ProgressEvent("measurement_preparation", message="Analyzing reference DI loudness..."),
+    )
     reference_lufs = analyze_audio(reference, sample_rate, analysis_options).short_term_lufs
     _emit_progress(
         on_progress,
@@ -415,10 +419,14 @@ def measure(args: argparse.Namespace) -> None:
     profile = get_device_profile(args.device)
     defaults = profile.default_audio_routing()
     sample_rate = args.sample_rate if args.sample_rate is not None else defaults.sample_rate
+    on_progress = getattr(args, "on_progress", None)
+    _emit_progress(
+        on_progress,
+        ProgressEvent("measurement_preparation", message="Loading reference DI audio..."),
+    )
     reference = load_reference_audio(Path(args.reference_di), sample_rate)
     snapshot_count = getattr(args, "snapshot_count", None) or profile.snapshot_count
     analysis_options = getattr(args, "analysis_options", AnalysisOptions())
-    on_progress = getattr(args, "on_progress", None)
     log_output = not getattr(args, "progress_jsonl", False)
 
     if args.backend == "loopback":
@@ -459,9 +467,19 @@ def measure(args: argparse.Namespace) -> None:
 
     from matchpatch.audio import prepare_audio_config
 
+    _emit_progress(
+        on_progress,
+        ProgressEvent(
+            "measurement_preparation", message="Resolving and validating audio device..."
+        ),
+    )
     audio_config = prepare_audio_config(resolve_audio_config(args, profile))
     steering_options = resolve_steering_options(args, profile)
 
+    _emit_progress(
+        on_progress,
+        ProgressEvent("measurement_preparation", message="Opening processor MIDI output..."),
+    )
     with profile.create_controller(steering_options) as controller:
         measure_presets(
             profile,

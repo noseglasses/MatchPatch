@@ -281,13 +281,11 @@ class MainWindow(QMainWindow):
         meter_layout.setContentsMargins(0, 0, 0, 0)
         meter_layout.setHorizontalSpacing(8)
         meter_layout.setVerticalSpacing(2)
-        self.measured_loudness_label = QLabel("Measured:")
         self.measured_loudness_reading = QLabel()
-        meter_layout.addWidget(self.measured_loudness_label, 0, 0)
-        meter_layout.addWidget(self.measured_loudness_reading, 0, 1)
-        meter_layout.addWidget(self.measured_loudness, 0, 2)
-        meter_layout.addWidget(self.loudness_scale, 1, 2)
-        meter_layout.setColumnStretch(2, 1)
+        meter_layout.addWidget(self.measured_loudness_reading, 0, 0)
+        meter_layout.addWidget(self.measured_loudness, 0, 1)
+        meter_layout.addWidget(self.loudness_scale, 1, 1)
+        meter_layout.setColumnStretch(1, 1)
         layout.addWidget(self.current)
         layout.addWidget(meters)
         layout.addWidget(self.preset_progress)
@@ -620,12 +618,11 @@ class MainWindow(QMainWindow):
                 self._stop_busy_phase()
             else:
                 self._start_busy_phase()
+            if event.phase == "measuring":
+                self._show_indeterminate_progress(event.message or "Preparing measurement...")
 
-        if event.device_patch:
-            text = self._preset_progress_text(event)
-            if event.snapshot is not None:
-                text += self._snapshot_progress_text(event)
-            self.current.setText(text)
+        if event.kind == "measurement_preparation":
+            self._show_indeterminate_progress(event.message or "Preparing measurement...")
 
         if event.preset_total and event.snapshot_total and event.preset_index:
             progress_was_hidden = self.progress_group.isHidden()
@@ -641,6 +638,11 @@ class MainWindow(QMainWindow):
             self.progress_group.hide()
 
         if event.lufs is not None:
+            if event.device_patch:
+                text = self._preset_progress_text(event)
+                if event.snapshot is not None:
+                    text += self._snapshot_progress_text(event)
+                self.current.setText(text)
             target_lufs = self._target_lufs()
             self.measured_loudness.set_loudness(
                 event.lufs,
@@ -666,6 +668,14 @@ class MainWindow(QMainWindow):
         else:
             level = "error" if event.kind in {"error_log", "preset_failed"} else "debug"
         self._log(message, level)
+
+    def _show_indeterminate_progress(self, message: str) -> None:
+        progress_was_hidden = self.progress_group.isHidden()
+        self.current.setText(message)
+        self.preset_progress.setRange(0, 0)
+        self.progress_group.show()
+        if progress_was_hidden:
+            self._schedule_resize_for_content()
 
     def confirm_import(self, request: ImportRequest) -> None:
         self._stop_busy_phase()
@@ -1070,6 +1080,7 @@ class MainWindow(QMainWindow):
 
     def _reset_loudness_bars(self) -> None:
         target_lufs = self._target_lufs()
+        self.current.clear()
         self.measured_loudness.reset_loudness(target_lufs)
         waiting_text = f"waiting for signal (target {target_lufs:.1f} LUFS)"
         self.measured_loudness_reading.setText(waiting_text)

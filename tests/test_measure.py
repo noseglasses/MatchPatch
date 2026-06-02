@@ -79,6 +79,7 @@ def test_measure_presets_emits_structured_progress(tmp_path) -> None:
     )
 
     assert [event.kind for event in events] == [
+        "measurement_preparation",
         "reference_loudness",
         "preset_started",
         "snapshot_started",
@@ -87,11 +88,12 @@ def test_measure_presets_emits_structured_progress(tmp_path) -> None:
         "snapshot_completed",
         "measurement_completed",
     ]
-    assert events[0].reference_lufs is not None
-    assert events[1].device_patch == "01A"
-    assert events[3].snapshot == 1
-    assert events[3].reference_lufs == events[0].reference_lufs
-    assert events[3].lufs is not None
+    assert events[0].message == "Analyzing reference DI loudness..."
+    assert events[1].reference_lufs is not None
+    assert events[2].device_patch == "01A"
+    assert events[4].snapshot == 1
+    assert events[4].reference_lufs == events[1].reference_lufs
+    assert events[4].lufs is not None
 
 
 class FakePatchFileHandler(PatchFileHandler):
@@ -445,6 +447,7 @@ def test_measure_dispatches_stateful_simulator_without_audio_module(monkeypatch)
 
 def test_measure_configures_hardware_backend(monkeypatch) -> None:
     calls = []
+    events = []
     controller = SimpleNamespace(__enter__=lambda self: self, __exit__=lambda *args: None)
 
     class ContextController:
@@ -470,10 +473,22 @@ def test_measure_configures_hardware_backend(monkeypatch) -> None:
         ),
     )
 
-    measure(worker_args(backend="hardware", audio_device="processor", sample_rate=44100))
+    measure(
+        worker_args(
+            backend="hardware",
+            audio_device="processor",
+            sample_rate=44100,
+            on_progress=events.append,
+        )
+    )
 
     assert calls[0] == ("prepared", "processor")
     assert isinstance(calls[1][-1], HardwareBackend)
+    assert [event.message for event in events] == [
+        "Loading reference DI audio...",
+        "Resolving and validating audio device...",
+        "Opening processor MIDI output...",
+    ]
 
 
 def fake_sounddevice():

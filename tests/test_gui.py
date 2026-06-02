@@ -213,7 +213,14 @@ def test_progress_statuses_include_suitable_icons(monkeypatch, app) -> None:
     window.update_progress(ProgressEvent("phase", phase="measuring"))
     assert window.phase.text() == "Measuring..."
     assert not window.phase_icon.pixmap().isNull()
-    assert window.progress_group.isHidden()
+    assert not window.progress_group.isHidden()
+    assert window.current.text() == "Preparing measurement..."
+    assert window.preset_progress.minimum() == 0
+    assert window.preset_progress.maximum() == 0
+    window.update_progress(
+        ProgressEvent("measurement_preparation", message="Loading reference DI audio...")
+    )
+    assert window.current.text() == "Loading reference DI audio..."
     window.update_progress(ProgressEvent("phase", phase="waiting_for_measurement_import"))
     assert window.phase.text() == "Waiting For Measurement Import..."
     assert window.progress_group.isHidden()
@@ -249,7 +256,7 @@ def test_phase_text_marks_in_progress_statuses(phase, text) -> None:
     assert main_window._phase_text(phase) == text
 
 
-def test_preset_progress_shows_current_preset_and_snapshot_names(app) -> None:
+def test_preset_progress_shows_most_recently_measured_preset_and_snapshot_names(app) -> None:
     window = MainWindow()
     window.preset_table.insertRow(0)
     window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
@@ -263,13 +270,51 @@ def test_preset_progress_shows_current_preset_and_snapshot_names(app) -> None:
             device_patch="02B",
             preset_index=1,
             preset_total=1,
+            snapshot=1,
+            snapshot_total=4,
+        )
+    )
+
+    assert window.current.text() == ""
+    assert not window.progress_group.isHidden()
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="02B",
+            preset_index=1,
+            preset_total=1,
+            snapshot=1,
+            snapshot_total=4,
+            lufs=-18.0,
+        )
+    )
+
+    assert window.current.text() == "Preset 02B: Lead, snapshot 1/4: Rhythm"
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_started",
+            device_patch="02B",
+            preset_index=1,
+            preset_total=1,
             snapshot=2,
             snapshot_total=4,
         )
     )
 
+    assert window.current.text() == "Preset 02B: Lead, snapshot 1/4: Rhythm"
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="02B",
+            preset_index=1,
+            preset_total=1,
+            snapshot=2,
+            snapshot_total=4,
+            lufs=-17.0,
+        )
+    )
+
     assert window.current.text() == "Preset 02B: Lead, snapshot 2/4: Solo"
-    assert not window.progress_group.isHidden()
     window.update_progress(ProgressEvent("measurement_completed"))
     assert window.progress_group.isHidden()
 
@@ -303,7 +348,7 @@ def test_progress_shows_measured_loudness_relative_to_target(app) -> None:
         == measured_text_color
     )
     assert window.loudness_scale.sizeHint().height() == 24
-    assert window.measured_loudness_label.text() == "Measured:"
+    assert not hasattr(window, "measured_loudness_label")
 
     window.close()
 
