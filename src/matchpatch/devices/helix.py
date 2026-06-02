@@ -143,8 +143,8 @@ class HelixPatchFileHandler(PatchFileHandler):
         zero_based = preset_id - 1
         return f"{zero_based // 4 + 1:02d}{'ABCD'[zero_based % 4]}"
 
-    def create_reamp_file(self, input_path: Path, output_path: Path) -> None:
-        self._run("-i", input_path, "-o", output_path, "--reamp")
+    def create_measurement_file(self, input_path: Path, output_path: Path) -> None:
+        self._run("-i", input_path, "-o", output_path, "--measurement")
 
     def apply_analysis_csv(
         self,

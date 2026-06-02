@@ -25,7 +25,7 @@ class ImportRequest:
 
     @property
     def message(self) -> str:
-        description = "reamp" if self.kind == "reamp" else "adjusted"
+        description = "measurement" if self.kind == "measurement" else "adjusted"
         return (
             f"Please import this {description} file into {self.device_display_name}:\n{self.path}"
         )
@@ -102,14 +102,14 @@ def normalize_presets(
         if request.output_path is not None:
             raise ValueError("--output must not be specified with --automation")
 
-        reamp_path = handler.automation_output_path(input_path, "_reamp")
+        measurement_path = handler.automation_output_path(input_path, "_measurement")
         output_path = handler.automation_output_path(input_path, "_adjusted")
-        _emit(on_progress, ProgressEvent("phase", phase="preparing_reamp"))
-        handler.create_reamp_file(input_path, reamp_path)
-        _emit(on_progress, ProgressEvent("phase", phase="waiting_for_reamp_import"))
+        _emit(on_progress, ProgressEvent("phase", phase="preparing_measurement"))
+        handler.create_measurement_file(input_path, measurement_path)
+        _emit(on_progress, ProgressEvent("phase", phase="waiting_for_measurement_import"))
         _confirm(
             confirm_import,
-            ImportRequest("reamp", profile.display_name, reamp_path),
+            ImportRequest("measurement", profile.display_name, measurement_path),
         )
     else:
         if request.output_path is None:

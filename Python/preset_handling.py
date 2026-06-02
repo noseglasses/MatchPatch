@@ -922,7 +922,7 @@ def warn_non_xlr_output_conversion(preset_index, preset, dsp_name, output_name, 
         f'"{get_preset_name(preset)}" '
         f"{dsp_name}.{output_name} was "
         f"{output_label(current_output)}, not XLR; "
-        "converting final output to USB 1/2 for reamping.",
+        "converting final output to USB 1/2 for measurement.",
         file=sys.stderr,
     )
 
@@ -972,7 +972,7 @@ def convert_json_text(text, mode):
 
                 current_input = input_block.get("@input")
 
-                if mode == "reamp" and current_input == INPUT_MULTI:
+                if mode == "measurement" and current_input == INPUT_MULTI:
                     input_block["@input"] = INPUT_USB_3_4
                     input_changes += 1
 
@@ -985,7 +985,7 @@ def convert_json_text(text, mode):
         for dsp_name, output_name, output_block in get_final_output_blocks(preset):
             current_output = output_block.get("@output")
 
-            if mode == "reamp":
+            if mode == "measurement":
                 if current_output == OUTPUT_USB_1_2:
                     continue
 
@@ -1220,7 +1220,9 @@ def main():
 
     mode_group = parser.add_mutually_exclusive_group(required=True)
 
-    mode_group.add_argument("-r", "--reamp", action="store_true", help=("Convert Multi/XLR -> USB"))
+    mode_group.add_argument(
+        "-r", "--measurement", action="store_true", help=("Convert Multi/XLR -> USB")
+    )
 
     mode_group.add_argument("-s", "--stage", action="store_true", help=("Convert USB -> Multi/XLR"))
 
@@ -1259,13 +1261,13 @@ def main():
 
         require_compatible_output_path(args.input, args.output)
 
-        mode = "reamp" if args.reamp else "stage" if args.stage else "adjust-gain"
+        mode = "measurement" if args.measurement else "stage" if args.stage else "adjust-gain"
 
         modified_json_text = json_text
         input_changes = 0
         output_changes = 0
 
-        if args.reamp or args.stage:
+        if args.measurement or args.stage:
             (modified_json_text, input_changes, output_changes) = convert_json_text(json_text, mode)
 
         gain_deltas = None
@@ -1289,7 +1291,7 @@ def main():
         (modified_json_text, snapshot_changes, gain_changes) = process_json_structure(
             modified_json_text,
             gain_deltas,
-            args.reamp or args.stage or args.adjust_gain,
+            args.measurement or args.stage or args.adjust_gain,
             args.ignore_bad_lufs,
             args.snapshot_count,
             args.solo_regex,

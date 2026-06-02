@@ -34,7 +34,9 @@ def test_patch_file_validation_and_automation_path(tmp_path) -> None:
     with pytest.raises(ValueError, match=r"\.hlx"):
         handler.validate_output(Path("preset.hlx"), Path("result.hls"))
 
-    assert handler.automation_output_path(Path("preset.hlx"), "_reamp") == Path("preset_reamp.hlx")
+    assert handler.automation_output_path(Path("preset.hlx"), "_measurement") == Path(
+        "preset_measurement.hlx"
+    )
 
 
 def test_parse_and_format_patch_ids(tmp_path) -> None:
@@ -73,7 +75,7 @@ def test_select_preset_ids_for_setlists_and_presets(tmp_path) -> None:
         handler.select_preset_ids(Path("one.hlx"), assignments, None)
 
 
-def test_list_assignments_and_reamp_delegate_to_legacy_script(tmp_path, monkeypatch) -> None:
+def test_list_assignments_and_measurement_delegate_to_legacy_script(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
     calls = []
     payload = [
@@ -94,8 +96,8 @@ def test_list_assignments_and_reamp_delegate_to_legacy_script(tmp_path, monkeypa
     assert handler.list_assignments(Path("set.hls")) == [
         PatchAssignment(1, "01A", "Clean", ("Rhythm", "Solo"))
     ]
-    handler.create_reamp_file(Path("set.hls"), Path("reamp.hls"))
-    assert calls[1][0] == ("-i", Path("set.hls"), "-o", Path("reamp.hls"), "--reamp")
+    handler.create_measurement_file(Path("set.hls"), Path("measurement.hls"))
+    assert calls[1][0] == ("-i", Path("set.hls"), "-o", Path("measurement.hls"), "--measurement")
 
 
 def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> None:
@@ -126,7 +128,7 @@ def test_legacy_script_runner_forwards_captured_output_to_logger(tmp_path, monke
         ),
     )
 
-    handler._run("--reamp")
+    handler._run("--measurement")
 
     assert messages == ["first", "second"]
 

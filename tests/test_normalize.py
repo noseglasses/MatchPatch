@@ -15,7 +15,7 @@ from matchpatch.devices.base import PatchAssignment
 class FakeHandler:
     def __init__(self) -> None:
         self.applied = []
-        self.reamped = []
+        self.measurement_files = []
 
     def validate_input(self, input_path: Path) -> None:
         return None
@@ -26,8 +26,8 @@ class FakeHandler:
     def automation_output_path(self, input_path: Path, postfix: str) -> Path:
         return input_path.with_name(input_path.stem + postfix + input_path.suffix)
 
-    def create_reamp_file(self, input_path: Path, output_path: Path) -> None:
-        self.reamped.append((input_path, output_path))
+    def create_measurement_file(self, input_path: Path, output_path: Path) -> None:
+        self.measurement_files.append((input_path, output_path))
 
     def parse_patch_set(self, value: str) -> list[int]:
         return [int(item) for item in value.split(",")]
@@ -431,7 +431,9 @@ def write_analysis_csv(args, preset_ids, csv_path) -> None:
             writer.writerow({"Preset": preset_id, "DevicePatch": f"patch-{preset_id}"})
 
 
-def test_main_automation_reamps_confirms_and_keeps_temp(tmp_path, monkeypatch) -> None:
+def test_main_automation_creates_measurement_file_confirms_and_keeps_temp(
+    tmp_path, monkeypatch
+) -> None:
     handler = FakeHandler()
     input_path = tmp_path / "input.hls"
     reference = tmp_path / "reference.wav"
@@ -460,7 +462,7 @@ def test_main_automation_reamps_confirms_and_keeps_temp(tmp_path, monkeypatch) -
         ]
     )
 
-    assert handler.reamped == [(input_path.resolve(), tmp_path / "input_reamp.hls")]
+    assert handler.measurement_files == [(input_path.resolve(), tmp_path / "input_measurement.hls")]
     assert len(confirmations) == 2
     assert handler.applied[0][1] == tmp_path / "input_adjusted.hls"
     assert work_dir.exists()

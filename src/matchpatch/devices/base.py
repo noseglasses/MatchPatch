@@ -102,8 +102,8 @@ class PatchFileHandler(ABC):
         """Format a numeric preset ID for logs and CSV output."""
 
     @abstractmethod
-    def create_reamp_file(self, input_path: Path, output_path: Path) -> None:
-        """Rewrite a patch file for processor USB reamping."""
+    def create_measurement_file(self, input_path: Path, output_path: Path) -> None:
+        """Rewrite a patch file for processor USB measurement."""
 
     @abstractmethod
     def apply_analysis_csv(
@@ -133,7 +133,7 @@ class DeviceProfile(ABC):
 
     @abstractmethod
     def default_audio_routing(self) -> AudioRouting:
-        """Return the processor's USB reamping channel defaults."""
+        """Return the processor's USB measurement channel defaults."""
 
     @abstractmethod
     def default_steering_options(self) -> SteeringOptions:

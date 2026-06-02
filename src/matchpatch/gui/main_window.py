@@ -66,7 +66,7 @@ from matchpatch.gui.snapshot_header import SnapshotHeader
 from matchpatch.gui.worker import NormalizationWorker
 from matchpatch.normalize import apply_config, parse_args, request_from_args
 from matchpatch.progress import ProgressEvent
-from matchpatch.workflow import ImportRequest, NormalizationResult
+from matchpatch.workflow import ImportRequest, NormalizationRequest, NormalizationResult
 
 GAIN_CORRECTION_PATTERN = re.compile(
     r"^\[GAIN\] (?P<patch>\d{2}[A-D]) (?P<label>.*?) \| "
@@ -90,8 +90,8 @@ LOUDNESS_SCALE = 10
 PHASE_ICON = {
     "ready": QStyle.StandardPixmap.SP_DialogApplyButton,
     "starting": QStyle.StandardPixmap.SP_MediaPlay,
-    "preparing_reamp": QStyle.StandardPixmap.SP_BrowserReload,
-    "waiting_for_reamp_import": QStyle.StandardPixmap.SP_MediaPause,
+    "preparing_measurement": QStyle.StandardPixmap.SP_BrowserReload,
+    "waiting_for_measurement_import": QStyle.StandardPixmap.SP_MediaPause,
     "measuring": QStyle.StandardPixmap.SP_ComputerIcon,
     "applying": QStyle.StandardPixmap.SP_BrowserReload,
     "completed": QStyle.StandardPixmap.SP_DialogApplyButton,
@@ -267,8 +267,8 @@ class MainWindow(QMainWindow):
         meter_layout.setContentsMargins(0, 0, 0, 0)
         meter_layout.setHorizontalSpacing(8)
         meter_layout.setVerticalSpacing(2)
-        self.reference_loudness_label = QLabel("Reference")
-        self.measured_loudness_label = QLabel("Measured")
+        self.reference_loudness_label = QLabel("Reference:")
+        self.measured_loudness_label = QLabel("Measured:")
         self.reference_loudness_reading = QLabel()
         self.measured_loudness_reading = QLabel()
         meter_layout.addWidget(self.reference_loudness_label, 0, 0)
@@ -386,7 +386,7 @@ class MainWindow(QMainWindow):
         reference_browse.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
         )
-        reference_browse.setToolTip("Choose the clean DI WAV used for reamping measurements.")
+        reference_browse.setToolTip("Choose the clean DI WAV used for evaluation measurements.")
         reference_browse.clicked.connect(self.browse_reference)
         form.addRow(
             _label("Reference DI", "Clean guitar DI WAV replayed through each preset."),
@@ -543,6 +543,8 @@ class MainWindow(QMainWindow):
         try:
             args = apply_config(parse_args(self._build_argv()))
             request = request_from_args(args)
+            if not self._confirm_automation_overwrites(request):
+                return
         except Exception as exc:  # noqa: BLE001
             self.show_error(str(exc))
             return
@@ -573,13 +575,37 @@ class MainWindow(QMainWindow):
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
+    def _confirm_automation_overwrites(self, request: NormalizationRequest) -> bool:
+        if not getattr(request, "automation", False):
+            return True
+
+        profile = get_device_profile(request.device)
+        handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+        input_path = request.input_path.resolve()
+        for postfix, description in (("_measurement", "measurement"), ("_adjusted", "adjusted")):
+            output_path = handler.automation_output_path(input_path, postfix)
+            if not output_path.exists():
+                continue
+
+            answer = QMessageBox.question(
+                self,
+                "Overwrite generated file",
+                f"The {description} file already exists:\n{output_path}\n\nOverwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
+
+        return True
+
     def update_progress(self, event: ProgressEvent) -> None:
         if event.phase:
             self._set_phase(event.phase)
             self.progress_group.hide()
             if event.phase in {
                 "completed",
-                "waiting_for_reamp_import",
+                "waiting_for_measurement_import",
                 "waiting_for_adjusted_import",
             }:
                 self._stop_busy_phase()

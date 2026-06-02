@@ -161,6 +161,9 @@ normalize. Patch levels react differently to palm-muted attacks, chords, and
 sustained notes, especially when compression or gain staging varies between
 presets.
 
+Bundled reference tracks live under `audio/reference-di/`. The shorter
+Strandberg track is the default.
+
 The current reference track is intended for a guitarist playing various
 genres, mainly rock. The guitar is tuned to E-flat; the notes below are written
 as played and therefore sound one semitone lower:
@@ -185,7 +188,7 @@ range.
 | `.hlx` | Helix preset | Contains one preset and requires one `-S` slot during measurement |
 | `.json` | Unpacked Helix data | Supported by selected legacy utilities |
 
-Keep backups of original processor files. Generated reamp files are meant for
+Keep backups of original processor files. Generated measurement files are meant for
 measurement, not stage use.
 
 ## Command-Line Interface
@@ -207,7 +210,7 @@ Run the guided hardware workflow:
 matchpatch normalize --device helix -a -i setlist_original.hls
 ```
 
-MatchPatch creates a reamp file, pauses while you import it into the Helix,
+MatchPatch creates a measurement file, pauses while you import it into the Helix,
 measures the presets, and creates the adjusted file.
 
 For a single `.hlx` preset, specify the temporary Helix slot:

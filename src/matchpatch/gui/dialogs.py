@@ -51,7 +51,7 @@ class AboutDialog(QDialog):
             f'<p><a href="{PROJECT_URL}">{PROJECT_URL}</a></p>'
             "<p>Copyright © 2026 MatchPatch contributors.</p>"
             "<p>Open source software released under the MIT License.</p>"
-            "<p>Keep backups of original processor files. Generated reamp files are "
+            "<p>Keep backups of original processor files. Generated measurement files are "
             "intended for measurement workflows.</p>"
         )
         details.setOpenExternalLinks(True)
@@ -82,7 +82,7 @@ class HelpDialog(QDialog):
             "<li>Expand <b>Advanced</b> and use its tabs to change preset selection, "
             "device settings, miscellaneous policy values, or inspect the log.</li>"
             "<li>Start normalization and follow the import dialogs for generated "
-            "reamp and adjusted files.</li>"
+            "measurement and adjusted files.</li>"
             "</ol>"
             "<h3>Progress</h3>"
             "<p>A pulsing green dot in the window footer means MatchPatch is working. "

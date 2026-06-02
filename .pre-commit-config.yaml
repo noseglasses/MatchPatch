@@ -7,12 +7,11 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^Reaper/
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
-        exclude: ^doc/assets/matchmatch-logo\.png$
+        exclude: ^(audio/reference-di/|doc/assets/matchmatch-logo\.png$)
 
   - repo: local
     hooks:

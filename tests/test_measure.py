@@ -115,7 +115,7 @@ class FakePatchFileHandler(PatchFileHandler):
     def format_patch_id(self, preset_id: int) -> str:
         return f"patch-{preset_id}"
 
-    def create_reamp_file(self, input_path: Path, output_path: Path) -> None:
+    def create_measurement_file(self, input_path: Path, output_path: Path) -> None:
         return None
 
     def apply_analysis_csv(

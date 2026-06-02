@@ -28,8 +28,9 @@ DEFAULT_WINDOWS_PYTHON = PROJECT_DIR / ".venv-windows" / "Scripts" / "python.exe
 PROCESS_REAP_TIMEOUT_SECONDS = 1.0
 DEFAULT_REFERENCE_DI = (
     PROJECT_DIR
-    / "Reaper"
-    / "Referenz_Gitarre_DI_Strandberg_Boden_Fusion_Bridge_Humbucker_short.wav"
+    / "audio"
+    / "reference-di"
+    / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
 )
 
 
@@ -412,8 +413,8 @@ def _cli_confirm_import(request: ImportRequest) -> bool:
 
 
 def _cli_progress(event: ProgressEvent) -> None:
-    if event.phase == "preparing_reamp":
-        print("Creating reamp file")
+    if event.phase == "preparing_measurement":
+        print("Creating measurement file")
     elif event.phase == "applying":
         print("Applying gain adjustments")
     elif event.kind == "temp_retained":

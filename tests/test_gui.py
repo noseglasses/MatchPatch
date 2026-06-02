@@ -214,8 +214,8 @@ def test_progress_statuses_include_suitable_icons(monkeypatch, app) -> None:
     assert window.phase.text() == "Measuring"
     assert not window.phase_icon.pixmap().isNull()
     assert window.progress_group.isHidden()
-    window.update_progress(ProgressEvent("phase", phase="waiting_for_reamp_import"))
-    assert window.phase.text() == "Waiting For Reamp Import"
+    window.update_progress(ProgressEvent("phase", phase="waiting_for_measurement_import"))
+    assert window.phase.text() == "Waiting For Measurement Import"
     assert window.progress_group.isHidden()
     window.update_progress(ProgressEvent("phase", phase="measuring"))
     window.normalization_completed(NormalizationResult(Path("adjusted.hls"), None))
@@ -276,8 +276,8 @@ def test_progress_shows_reference_and_measured_loudness_relative_to_target(app) 
     )
     assert window.reference_loudness.palette().color(QPalette.ColorRole.Text) == QColor("#ffffff")
     assert window.loudness_scale.sizeHint().height() == 24
-    assert window.reference_loudness_label.text() == "Reference"
-    assert window.measured_loudness_label.text() == "Measured"
+    assert window.reference_loudness_label.text() == "Reference:"
+    assert window.measured_loudness_label.text() == "Measured:"
 
     window.close()
 
@@ -560,6 +560,88 @@ def test_completion_logs_output_without_redundant_popup(tmp_path, monkeypatch, a
     window.close()
 
 
+def test_automation_overwrite_confirmation_only_prompts_for_existing_files(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hls"
+    adjusted_path = tmp_path / "input_adjusted.hls"
+    adjusted_path.touch()
+    prompts = []
+
+    class Handler:
+        @staticmethod
+        def automation_output_path(path, postfix):
+            return path.with_name(path.stem + postfix + path.suffix)
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    request = NormalizationRequest(
+        device="helix",
+        input_path=input_path,
+        backend="loopback",
+        windows_python=str(DEFAULT_WINDOWS_PYTHON),
+        reference_di=DEFAULT_REFERENCE_DI,
+    )
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: prompts.append(args) or QMessageBox.StandardButton.Yes,
+    )
+
+    assert window._confirm_automation_overwrites(request)
+    assert len(prompts) == 1
+    assert "adjusted" in prompts[0][2]
+    assert str(adjusted_path) in prompts[0][2]
+
+    window.close()
+
+
+def test_normalization_does_not_start_when_overwrite_is_declined(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hls"
+    measurement_path = tmp_path / "input_measurement.hls"
+    measurement_path.touch()
+
+    class Handler:
+        @staticmethod
+        def automation_output_path(path, postfix):
+            return path.with_name(path.stem + postfix + path.suffix)
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    request = NormalizationRequest(
+        device="helix",
+        input_path=input_path,
+        backend="loopback",
+        windows_python=str(DEFAULT_WINDOWS_PYTHON),
+        reference_di=DEFAULT_REFERENCE_DI,
+    )
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
+
+    window.start_normalization()
+
+    assert window.worker is None
+    assert window.start_button.isEnabled()
+    assert not window.cancel_button.isEnabled()
+    assert window.phase.text() == "Ready"
+
+    window.close()
+
+
 def test_cancellation_sets_status_without_redundant_popup(monkeypatch, app) -> None:
     window = MainWindow()
     popups = []
@@ -598,7 +680,9 @@ def test_worker_import_confirmation_blocks_until_answered(app) -> None:
     worker.import_requested.connect(requests.append)
     thread = threading.Thread(
         target=lambda: answers.append(
-            worker._confirm_import(ImportRequest("reamp", "Line 6 Helix", Path("reamp.hls")))
+            worker._confirm_import(
+                ImportRequest("measurement", "Line 6 Helix", Path("measurement.hls"))
+            )
         )
     )
     thread.start()
