@@ -9,7 +9,7 @@ from html import escape
 from pathlib import Path
 from typing import Iterator
 
-from PySide6.QtCore import QThread, QTimer
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, QThread, QTimer
 from PySide6.QtGui import QBrush, QCloseEvent, QColor, QIcon, Qt
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -103,9 +104,6 @@ class MainWindow(QMainWindow):
         self.snapshot_count = 4
         self.preset_snapshot_positions: dict[str, int] = {}
         self.log_entries: list[tuple[str, str, str]] = []
-        self.busy_timer = QTimer(self)
-        self.busy_timer.setInterval(500)
-        self.busy_timer.timeout.connect(self._toggle_busy_indicator)
         self._processing_dot_green = False
 
         content = QWidget()
@@ -270,10 +268,19 @@ class MainWindow(QMainWindow):
         self.phase_icon.setFixedSize(16, 16)
         self.phase = QLabel()
         self.processing_dot = QLabel()
-        self.processing_dot.setFixedSize(10, 10)
+        self.processing_dot.setFixedSize(14, 14)
         self.processing_dot.setToolTip(
-            "Grey when idle; blinks green while MatchPatch is processing."
+            "Grey when idle; pulses green while MatchPatch is processing."
         )
+        self.processing_dot_effect = QGraphicsOpacityEffect(self.processing_dot)
+        self.processing_dot.setGraphicsEffect(self.processing_dot_effect)
+        self.busy_animation = QPropertyAnimation(self.processing_dot_effect, b"opacity", self)
+        self.busy_animation.setDuration(2000)
+        self.busy_animation.setLoopCount(-1)
+        self.busy_animation.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self.busy_animation.setKeyValueAt(0.0, 0.2)
+        self.busy_animation.setKeyValueAt(0.5, 1.0)
+        self.busy_animation.setKeyValueAt(1.0, 0.2)
         self._set_processing_dot(False)
         footer = self.statusBar()
         footer.addWidget(self.phase_icon)
@@ -943,22 +950,20 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._resize_to_initial_content)
 
     def _start_busy_phase(self) -> None:
-        if not self.busy_timer.isActive():
+        if self.busy_animation.state() != QAbstractAnimation.State.Running:
             self._set_processing_dot(True)
-            self.busy_timer.start()
-
-    def _toggle_busy_indicator(self) -> None:
-        self._set_processing_dot(not self._processing_dot_green)
+            self.busy_animation.start()
 
     def _stop_busy_phase(self) -> None:
-        self.busy_timer.stop()
+        self.busy_animation.stop()
+        self.processing_dot_effect.setOpacity(1.0)
         self._set_processing_dot(False)
         self.progress_group.hide()
 
     def _set_processing_dot(self, green: bool) -> None:
         self._processing_dot_green = green
         color = PROCESSING_DOT_GREEN if green else PROCESSING_DOT_GREY
-        self.processing_dot.setStyleSheet(f"background-color: {color}; border-radius: 5px;")
+        self.processing_dot.setStyleSheet(f"background-color: {color}; border-radius: 7px;")
 
     def _preset_progress_text(self, event: ProgressEvent) -> str:
         row = self._preset_row(event.device_patch or "")

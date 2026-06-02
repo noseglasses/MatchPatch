@@ -85,7 +85,7 @@ class HelpDialog(QDialog):
             "reamp and adjusted files.</li>"
             "</ol>"
             "<h3>Progress</h3>"
-            "<p>A blinking green dot in the window footer means MatchPatch is working. "
+            "<p>A pulsing green dot in the window footer means MatchPatch is working. "
             "The dot is grey while MatchPatch is idle. While presets are measured, "
             "a determinate progress pane shows the current preset and snapshot.</p>"
             "<h3>Temporary files</h3>"

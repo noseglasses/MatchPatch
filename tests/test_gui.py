@@ -11,7 +11,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QAbstractAnimation, QPoint
 from PySide6.QtGui import QCloseEvent, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -102,11 +102,9 @@ def test_log_section_and_busy_indicator(app) -> None:
     assert window.log_section is window.log
     window._start_busy_phase()
     assert window.progress_group.isHidden()
-    assert window.busy_timer.isActive()
-    assert window._processing_dot_green
-    window._toggle_busy_indicator()
-    assert not window._processing_dot_green
-    window._toggle_busy_indicator()
+    assert window.busy_animation.state() == QAbstractAnimation.State.Running
+    assert window.busy_animation.duration() == 2000
+    assert window.busy_animation.loopCount() == -1
     assert window._processing_dot_green
     window.update_progress(
         ProgressEvent(
@@ -118,11 +116,12 @@ def test_log_section_and_busy_indicator(app) -> None:
         )
     )
     assert not window.progress_group.isHidden()
-    assert window.busy_timer.isActive()
+    assert window.busy_animation.state() == QAbstractAnimation.State.Running
     assert window.preset_progress.maximum() == 8
     window._stop_busy_phase()
     assert window.progress_group.isHidden()
-    assert not window.busy_timer.isActive()
+    assert window.busy_animation.state() == QAbstractAnimation.State.Stopped
+    assert window.processing_dot_effect.opacity() == 1.0
     assert not window._processing_dot_green
 
     window.close()
