@@ -9,7 +9,16 @@ from html import escape
 from pathlib import Path
 from typing import Iterator
 
-from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, QThread, QTimer
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QCoreApplication,
+    QEasingCurve,
+    QEvent,
+    QPropertyAnimation,
+    QSize,
+    QThread,
+    QTimer,
+)
 from PySide6.QtGui import QBrush, QCloseEvent, QColor, QIcon, Qt
 from PySide6.QtWidgets import (
     QApplication,
@@ -94,7 +103,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("MatchPatch")
         self.setWindowIcon(QIcon(str(ASSETS_DIR / "matchmatch-icon.png")))
-        self.setMinimumSize(620, 480)
+        self.setMinimumWidth(620)
         screen = QApplication.primaryScreen()
         available_height = screen.availableGeometry().height() if screen is not None else 800
         self.resize(820, min(760, max(560, available_height - 100)))
@@ -180,7 +189,8 @@ class MainWindow(QMainWindow):
         content = QWidget()
         layout = QVBoxLayout(content)
         self.preset_hint = QLabel("Choose an .hls or .hlx file.")
-        self.preset_table = QTableWidget()
+        self.preset_hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.preset_table = ContentHeightTableWidget()
         self.preset_table.setHorizontalHeader(SnapshotHeader(self.preset_table))
         self.preset_table.verticalHeader().hide()
         self.preset_table.setWordWrap(False)
@@ -191,6 +201,12 @@ class MainWindow(QMainWindow):
         self.preset_table.itemChanged.connect(self._preset_item_changed)
         self.preset_table.setSortingEnabled(True)
         self.preset_table.setMinimumHeight(160)
+        self.preset_table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
+        self.preset_table.model().rowsInserted.connect(self._preset_table_size_changed)
+        self.preset_table.model().rowsRemoved.connect(self._preset_table_size_changed)
+        self.preset_table.model().modelReset.connect(self._preset_table_size_changed)
         self.preset_table_note = QLabel("Only non-empty presets are listed.")
         self.single_slot = QLineEdit()
         self.single_slot.setPlaceholderText("Temporary slot, for example 12A")
@@ -311,11 +327,14 @@ class MainWindow(QMainWindow):
     def _build_advanced(self) -> CollapsibleSection:
         content = QWidget()
         layout = QVBoxLayout(content)
-        self.advanced_tabs = QTabWidget()
+        self.advanced_tabs = CurrentPageHeightTabWidget()
         self.advanced_tabs.addTab(self._build_presets(), "Presets")
         self.advanced_tabs.addTab(self._build_device_settings(), "Device")
         self.advanced_tabs.addTab(self._build_misc(), "Misc")
         self.advanced_tabs.addTab(self._build_log(), "Log")
+        self.advanced_tabs.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
         self.advanced_tabs.currentChanged.connect(self._schedule_resize_for_content)
         layout.addWidget(self.advanced_tabs)
         self.advanced = CollapsibleSection("Advanced", content)
@@ -468,10 +487,14 @@ class MainWindow(QMainWindow):
         self.preset_table_note.setVisible(not is_single_preset)
         self.select_all_button.setVisible(not is_single_preset)
         self.unselect_all_button.setVisible(not is_single_preset)
+        self.presets.updateGeometry()
+        self._schedule_resize_for_content()
 
         if path.suffix.lower() == ".hlx":
             self.preset_table.setRowCount(0)
             self.preset_hint.setText("Choose the temporary Helix slot used during measurement.")
+            self.presets.updateGeometry()
+            self._schedule_resize_for_content()
             return
 
         try:
@@ -939,15 +962,34 @@ class MainWindow(QMainWindow):
         chrome_height = self.height() - viewport.height()
         hint = self.content.sizeHint()
         height = hint.height() + chrome_height + 4
-        if self.advanced.is_expanded() and self.advanced_tabs.currentWidget() is self.presets:
-            height = available.height()
         self.resize(
             min(max(820, hint.width() + chrome_width + 4), available.width()),
             min(height, available.height()),
         )
 
     def _schedule_resize_for_content(self) -> None:
-        QTimer.singleShot(0, self._resize_to_initial_content)
+        for widget in (
+            self.presets,
+            self.advanced_tabs,
+            self.advanced.content,
+            self.advanced,
+            self.content,
+        ):
+            layout = widget.layout()
+            if layout is not None:
+                layout.invalidate()
+            widget.updateGeometry()
+        QTimer.singleShot(0, self._resize_to_content_when_settled)
+
+    def _resize_to_content_when_settled(self) -> None:
+        for _ in range(3):
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+        self._resize_to_initial_content()
+
+    def _preset_table_size_changed(self) -> None:
+        self.preset_table.updateGeometry()
+        self.presets.updateGeometry()
+        self._schedule_resize_for_content()
 
     def _start_busy_phase(self) -> None:
         if self.busy_animation.state() != QAbstractAnimation.State.Running:
@@ -981,6 +1023,45 @@ class MainWindow(QMainWindow):
             return text
         name = self.preset_table.item(row, 3 + (event.snapshot - 1) * 2)
         return f"{text}: {name.text()}" if name and name.text() else text
+
+
+class CurrentPageHeightTabWidget(QTabWidget):
+    """Size vertically for the selected page instead of the tallest page."""
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        current = self.currentWidget()
+        if current is not None:
+            hint.setHeight(current.sizeHint().height() + self.tabBar().sizeHint().height())
+        return hint
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        current = self.currentWidget()
+        if current is not None:
+            hint.setHeight(
+                current.minimumSizeHint().height() + self.tabBar().minimumSizeHint().height()
+            )
+        return hint
+
+
+class ContentHeightTableWidget(QTableWidget):
+    """Grow with preset rows until an internal scrollbar is more useful."""
+
+    MAX_VISIBLE_ROWS = 12
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        visible_rows = min(self.rowCount(), self.MAX_VISIBLE_ROWS)
+        rows_height = sum(self.rowHeight(row) for row in range(visible_rows))
+        frame_height = self.frameWidth() * 2
+        hint.setHeight(
+            max(
+                self.minimumHeight(),
+                self.horizontalHeader().sizeHint().height() + rows_height + frame_height,
+            )
+        )
+        return hint
 
 
 def _path_row(field: QLineEdit, button: QPushButton) -> QWidget:

@@ -92,6 +92,69 @@ def test_initial_window_size_avoids_scrollbar_for_collapsed_layout(app) -> None:
     app.processEvents()
 
     assert not window.scroll_area.verticalScrollBar().isVisible()
+    chrome_height = window.height() - window.scroll_area.viewport().height()
+    assert window.height() == window.content.sizeHint().height() + chrome_height + 4
+
+    window.close()
+
+
+def test_window_shrinks_when_advanced_settings_are_folded(app) -> None:
+    window = MainWindow()
+    window.show()
+    app.processEvents()
+
+    window.advanced.set_expanded(True)
+    app.processEvents()
+    expanded_height = window.height()
+    window.advanced.set_expanded(False)
+    app.processEvents()
+
+    assert window.height() < expanded_height
+
+    window.close()
+
+
+def test_advanced_and_preset_panes_follow_their_content_height(app) -> None:
+    window = MainWindow()
+    initial_table_height = window.preset_table.sizeHint().height()
+    for row in range(20):
+        window.preset_table.insertRow(row)
+    app.processEvents()
+
+    assert window.preset_table.sizeHint().height() > initial_table_height
+    assert window.preset_table.sizeHint().height() == (
+        window.preset_table.horizontalHeader().sizeHint().height()
+        + sum(
+            window.preset_table.rowHeight(row)
+            for row in range(window.preset_table.MAX_VISIBLE_ROWS)
+        )
+        + window.preset_table.frameWidth() * 2
+    )
+    presets_height = window.advanced_tabs.sizeHint().height()
+    window.advanced_tabs.setCurrentWidget(window.device_settings)
+    app.processEvents()
+
+    assert window.advanced_tabs.sizeHint().height() != presets_height
+
+    window.close()
+
+
+def test_single_preset_layout_shrinks_to_its_instruction_label(app) -> None:
+    window = MainWindow()
+    window.show()
+    window.advanced.set_expanded(True)
+    app.processEvents()
+    setlist_height = window.height()
+
+    window.input_path.setText("/tmp/example.hlx")
+    window.load_assignments()
+    app.processEvents()
+
+    assert window.height() < setlist_height
+    assert window.preset_hint.height() == window.preset_hint.sizeHint().height()
+    assert window.preset_hint.text() == (
+        "Choose the temporary Helix slot used during measurement."
+    )
 
     window.close()
 
