@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOptionHeader, QWidget
 class SnapshotHeader(QHeaderView):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(Qt.Orientation.Horizontal, parent)
+        self.setSectionsClickable(True)
         self.setMinimumHeight(48)
 
     def sizeHint(self) -> QSize:
