@@ -147,6 +147,7 @@ class MainWindow(QMainWindow):
         self.device_panels: dict[str, HelixSettingsPanel] = {}
         self.snapshot_count = 4
         self.preset_snapshot_positions: dict[str, int] = {}
+        self._adjusted_presets: set[str] = set()
         self.log_entries: list[tuple[str, str, str]] = []
         self._processing_dot_green = False
 
@@ -491,9 +492,26 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(
             self, "Choose patch file", filter="Patches (*.hls *.hlx)"
         )
-        if path:
-            self.input_path.setText(path)
-            self.load_assignments()
+        if not path or path == self.input_path.text():
+            return
+        if not self._confirm_discard_preset_adjustments():
+            return
+        self.input_path.setText(path)
+        self.load_assignments()
+
+    def _confirm_discard_preset_adjustments(self) -> bool:
+        if not self._adjusted_presets:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Discard preset adjustments",
+            "The preset table contains adjustments from the last normalization run. "
+            "Opening another preset or setlist file will discard them.\n\n"
+            "Open the new file anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     def browse_output(self) -> None:
         suffix = Path(self.input_path.text()).suffix.lower()
@@ -593,6 +611,7 @@ class MainWindow(QMainWindow):
         self._schedule_resize_for_content()
 
         if path.suffix.lower() == ".hlx":
+            self._adjusted_presets.clear()
             self.preset_table.setRowCount(0)
             self.preset_hint.setText("Enter the temporary Helix slot used during measurement.")
             self.presets.show()
@@ -605,6 +624,7 @@ class MainWindow(QMainWindow):
             handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
             handler.validate_input(path)
             with self._sorting_paused():
+                self._adjusted_presets.clear()
                 self.preset_table.setRowCount(0)
                 for assignment in handler.list_assignments(path):
                     row = self.preset_table.rowCount()
@@ -641,6 +661,7 @@ class MainWindow(QMainWindow):
         self.log_entries.clear()
         self.preset_snapshot_positions.clear()
         self._clear_bad_lufs_highlights()
+        self._adjusted_presets.clear()
         with self._sorting_paused():
             for row in range(self.preset_table.rowCount()):
                 self._clear_preset_adjustments(row)
@@ -999,6 +1020,7 @@ class MainWindow(QMainWindow):
             font.setPointSize(max(font.pointSize(), QApplication.font().pointSize(), 9) + 5)
             adjustment_item.setFont(font)
             self._set_bad_lufs_highlight(row)
+            self._adjusted_presets.add(match["patch"])
             self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
             return
 
@@ -1008,6 +1030,7 @@ class MainWindow(QMainWindow):
             adjustment,
             float(match["delta"]),
         )
+        self._adjusted_presets.add(match["patch"])
         self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
 
     def _configure_snapshot_columns(self, snapshot_count: int) -> None:
@@ -1068,6 +1091,9 @@ class MainWindow(QMainWindow):
             self.preset_table.setSortingEnabled(sorting_enabled)
 
     def _clear_preset_adjustments(self, row: int) -> None:
+        patch = self.preset_table.item(row, 1)
+        if patch is not None:
+            self._adjusted_presets.discard(patch.text())
         self._clear_bad_lufs_highlight(row)
         for column in range(3, self.preset_table.columnCount(), 2):
             name = self.preset_table.item(row, column)

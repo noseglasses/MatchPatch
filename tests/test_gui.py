@@ -16,6 +16,7 @@ from PySide6.QtGui import QCloseEvent, QColor, QPalette, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QHeaderView,
     QLabel,
     QMenuBar,
@@ -581,6 +582,69 @@ def test_gain_log_updates_preset_correction_columns(app) -> None:
         == QHeaderView.ResizeMode.Interactive
         for column in range(1, window.preset_table.columnCount())
     )
+
+    window.close()
+
+
+def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, app) -> None:
+    window = MainWindow()
+    window.input_path.setText("/tmp/original.hls")
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window.update_progress(
+        ProgressEvent("log", message="[GAIN] 02B Solo | 0.0 dB -> 1.0 dB (Delta: +1.0 dB)")
+    )
+    prompts = []
+    answers = iter([QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: ("/tmp/new.hlx", ""),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: prompts.append(args) or next(answers),
+    )
+
+    window.browse_input()
+
+    assert window.input_path.text() == "/tmp/original.hls"
+    assert window.preset_table.item(0, 4).text() == "+1.0"
+
+    window.browse_input()
+
+    assert window.input_path.text() == "/tmp/new.hlx"
+    assert window.preset_table.rowCount() == 0
+    assert not window._adjusted_presets
+    assert len(prompts) == 2
+    assert prompts[0][1] == "Discard preset adjustments"
+
+    window.close()
+
+
+def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -> None:
+    window = MainWindow()
+    window.input_path.setText("/tmp/original.hls")
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: ("/tmp/new.hlx", ""),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: pytest.fail("clean preset table should not prompt"),
+    )
+
+    window.browse_input()
+
+    assert window.input_path.text() == "/tmp/new.hlx"
 
     window.close()
 

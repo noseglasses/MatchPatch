@@ -180,6 +180,23 @@ def normalize_presets(
                 request.target_lufs,
                 request.policy,
             )
+        elif request.defer_export:
+            preview_path = temp_dir / f"{input_path.stem}_preview{input_path.suffix}"
+            _emit(
+                on_progress,
+                ProgressEvent("phase", phase="applying", message="Calculating adjustments"),
+            )
+            try:
+                handler.apply_analysis_csv(
+                    input_path,
+                    preview_path,
+                    csv_path,
+                    request.ignore_bad_lufs,
+                    request.target_lufs,
+                    request.policy,
+                )
+            finally:
+                preview_path.unlink(missing_ok=True)
         success = True
     finally:
         if not request.keep_temp and success and not request.defer_export:

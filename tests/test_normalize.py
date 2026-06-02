@@ -462,7 +462,16 @@ def write_analysis_csv(args, preset_ids, csv_path) -> None:
 
 
 def test_gui_style_workflow_defers_adjusted_file_export(tmp_path) -> None:
-    handler = FakeHandler()
+    class PreviewHandler(FakeHandler):
+        def set_log_callback(self, callback) -> None:
+            self.log_callback = callback
+
+        def apply_analysis_csv(self, *args) -> None:
+            super().apply_analysis_csv(*args)
+            args[1].touch()
+            self.log_callback("[GAIN] patch-1 Clean | stable at 0.0 dB (Delta: +0.0 dB)")
+
+    handler = PreviewHandler()
     input_path = tmp_path / "input.hls"
     reference = tmp_path / "reference.wav"
     work_dir = tmp_path / "work"
@@ -470,6 +479,7 @@ def test_gui_style_workflow_defers_adjusted_file_export(tmp_path) -> None:
     reference.touch()
     work_dir.mkdir()
     confirmations = []
+    events = []
 
     result = normalize_presets(
         NormalizationRequest(
@@ -483,13 +493,21 @@ def test_gui_style_workflow_defers_adjusted_file_export(tmp_path) -> None:
         run_analysis=lambda request, preset_ids, csv_path, callback: write_analysis_csv(
             request, preset_ids, csv_path
         ),
+        on_progress=events.append,
         confirm_import=lambda request: confirmations.append(request.kind) or True,
         get_profile=lambda device: FakeProfile(handler),
         make_temp_dir=lambda: work_dir,
     )
 
     assert confirmations == ["measurement"]
-    assert handler.applied == []
+    assert len(handler.applied) == 1
+    assert handler.applied[0][0:3] == (
+        input_path.resolve(),
+        work_dir / "input_preview.hls",
+        work_dir / "lufs_analysis.csv",
+    )
+    assert not (work_dir / "input_preview.hls").exists()
+    assert any(event.kind == "log" and event.message.startswith("[GAIN]") for event in events)
     assert result.output_path is None
     assert result.temp_dir == work_dir
     assert result.retained_csv_path == work_dir / "lufs_analysis.csv"
