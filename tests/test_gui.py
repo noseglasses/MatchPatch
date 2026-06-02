@@ -50,12 +50,16 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.general.title() == "General"
     assert not window.advanced.is_expanded()
     assert window.advanced.content.isHidden()
-    assert [window.advanced_tabs.tabText(index) for index in range(4)] == [
-        "Presets",
+    assert [window.advanced_tabs.tabText(index) for index in range(3)] == [
         "Device",
         "Misc",
         "Log",
     ]
+    assert window.presets.title() == "Presets"
+    assert window.presets.isHidden()
+    assert window.content.layout().indexOf(window.presets) == (
+        window.content.layout().indexOf(window.advanced) + 1
+    )
     assert not window.findChildren(QMenuBar)
     assert "Setlist/Preset file" in [label.text() for label in window.general.findChildren(QLabel)]
     assert {"Help", "About"} <= {
@@ -66,6 +70,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.device_panels["helix"].audio_group.isEnabled()
     assert window.progress_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
     assert not window.statusBar().isHidden()
+    assert not window.statusBar().isSizeGripEnabled()
     assert window.phase.parent() is window.statusBar()
     assert window.processing_dot.parent() is window.statusBar()
     progress_index = window.content.layout().indexOf(window.progress_group)
@@ -118,6 +123,7 @@ def test_window_shrinks_when_advanced_settings_are_folded(app) -> None:
 
 def test_advanced_and_preset_panes_follow_their_content_height(app) -> None:
     window = MainWindow()
+    initial_presets_height = window.presets.sizeHint().height()
     initial_table_height = window.preset_table.sizeHint().height()
     for row in range(20):
         window.preset_table.insertRow(row)
@@ -132,29 +138,58 @@ def test_advanced_and_preset_panes_follow_their_content_height(app) -> None:
         )
         + window.preset_table.frameWidth() * 2
     )
-    presets_height = window.advanced_tabs.sizeHint().height()
-    window.advanced_tabs.setCurrentWidget(window.device_settings)
+    assert window.presets.sizeHint().height() > initial_presets_height
+    device_height = window.advanced_tabs.sizeHint().height()
+    window.advanced_tabs.setCurrentIndex(1)
     app.processEvents()
 
-    assert window.advanced_tabs.sizeHint().height() != presets_height
+    assert window.advanced_tabs.sizeHint().height() != device_height
 
     window.close()
 
 
-def test_single_preset_layout_shrinks_to_its_instruction_label(app) -> None:
+def test_single_preset_load_displays_presets_panel_with_instruction_label(app) -> None:
     window = MainWindow()
     window.show()
-    window.advanced.set_expanded(True)
     app.processEvents()
-    setlist_height = window.height()
 
     window.input_path.setText("/tmp/example.hlx")
     window.load_assignments()
     app.processEvents()
 
-    assert window.height() < setlist_height
+    assert not window.presets.isHidden()
+    assert window.preset_table.isHidden()
+    assert not window.single_slot.isHidden()
     assert window.preset_hint.height() == window.preset_hint.sizeHint().height()
     assert window.preset_hint.text() == ("Enter the temporary Helix slot used during measurement.")
+
+    window.close()
+
+
+def test_setlist_load_displays_presets_panel(monkeypatch, app) -> None:
+    window = MainWindow()
+
+    class Handler:
+        @staticmethod
+        def validate_input(path):
+            return None
+
+        @staticmethod
+        def list_assignments(path):
+            return []
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(root):
+            return Handler()
+
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    window.input_path.setText("/tmp/example.hls")
+    window.load_assignments()
+
+    assert not window.presets.isHidden()
+    assert not window.preset_table.isHidden()
+    assert window.preset_hint.text() == "Select the presets to normalize."
 
     window.close()
 
@@ -734,6 +769,11 @@ def test_cancellation_sets_status_without_redundant_popup(monkeypatch, app) -> N
     assert popups == []
     assert window.phase.text() == "Normalization cancelled by user"
     assert "Normalization cancelled by user" in window.log.toHtml()
+    assert main_window.PROCESSING_DOT_RED in window.processing_dot.styleSheet()
+
+    window.worker_finished()
+
+    assert main_window.PROCESSING_DOT_RED in window.processing_dot.styleSheet()
 
     window.close()
 

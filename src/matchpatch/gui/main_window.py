@@ -84,6 +84,7 @@ GAIN_BAD_LUFS_PATTERN = re.compile(
 BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
+PROCESSING_DOT_RED = "#dc2626"
 LOUDNESS_MINIMUM = -60.0
 LOUDNESS_MAXIMUM = 0.0
 LOUDNESS_SCALE = 10
@@ -150,6 +151,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(content)
         layout.addWidget(self._build_inputs())
         layout.addWidget(self._build_advanced())
+        layout.addWidget(self._build_presets())
         self.start_button = QPushButton("Start normalization")
         self.start_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         self.start_button.setToolTip("Start the guided preset-normalization workflow.")
@@ -209,8 +211,8 @@ class MainWindow(QMainWindow):
         layout.setColumnStretch(1, 1)
         return group
 
-    def _build_presets(self) -> QWidget:
-        content = QWidget()
+    def _build_presets(self) -> QGroupBox:
+        content = QGroupBox("Presets")
         layout = QVBoxLayout(content)
         self.preset_hint = QLabel("Choose an .hls or .hlx file.")
         self.preset_hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
@@ -233,8 +235,9 @@ class MainWindow(QMainWindow):
         self.single_slot = QLineEdit()
         self.single_slot.setPlaceholderText("Temporary slot, for example 12A")
         self.single_slot.hide()
-        layout.addWidget(self.preset_hint)
-        selection_buttons = QHBoxLayout()
+        preset_header = QHBoxLayout()
+        preset_header.addWidget(self.preset_hint)
+        preset_header.addStretch()
         self.select_all_button = QPushButton("Select all")
         self.select_all_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
@@ -247,14 +250,14 @@ class MainWindow(QMainWindow):
         )
         self.unselect_all_button.setToolTip("Exclude every preset in this setlist.")
         self.unselect_all_button.clicked.connect(lambda: self.set_all_presets_checked(False))
-        selection_buttons.addWidget(self.select_all_button)
-        selection_buttons.addWidget(self.unselect_all_button)
-        selection_buttons.addStretch()
-        layout.addLayout(selection_buttons)
+        preset_header.addWidget(self.select_all_button)
+        preset_header.addWidget(self.unselect_all_button)
+        layout.addLayout(preset_header)
         layout.addWidget(self.preset_table)
         layout.addWidget(self.preset_table_note)
         layout.addWidget(self.single_slot)
         self.presets = content
+        content.hide()
         return content
 
     def _build_device_settings(self) -> QWidget:
@@ -315,7 +318,7 @@ class MainWindow(QMainWindow):
         self.processing_dot = QLabel()
         self.processing_dot.setFixedSize(14, 14)
         self.processing_dot.setToolTip(
-            "Grey when idle; pulses green while MatchPatch is processing."
+            "Grey when idle; pulses green while processing; red when a measurement was cancelled."
         )
         self.processing_dot_effect = QGraphicsOpacityEffect(self.processing_dot)
         self.processing_dot.setGraphicsEffect(self.processing_dot_effect)
@@ -328,6 +331,7 @@ class MainWindow(QMainWindow):
         self.busy_animation.setKeyValueAt(1.0, 0.2)
         self._set_processing_dot(False)
         footer = self.statusBar()
+        footer.setSizeGripEnabled(False)
         footer.addWidget(self.phase_icon)
         footer.addWidget(self.phase)
         footer.addPermanentWidget(self.processing_dot)
@@ -357,7 +361,6 @@ class MainWindow(QMainWindow):
         content = QWidget()
         layout = QVBoxLayout(content)
         self.advanced_tabs = CurrentPageHeightTabWidget()
-        self.advanced_tabs.addTab(self._build_presets(), "Presets")
         self.advanced_tabs.addTab(self._build_device_settings(), "Device")
         self.advanced_tabs.addTab(self._build_misc(), "Misc")
         self.advanced_tabs.addTab(self._build_log(), "Log")
@@ -507,6 +510,7 @@ class MainWindow(QMainWindow):
     def load_assignments(self) -> None:
         self.preset_snapshot_positions.clear()
         self._clear_bad_lufs_highlights()
+        self.presets.hide()
         path = Path(self.input_path.text())
         is_single_preset = path.suffix.lower() == ".hlx"
         self.single_slot.setVisible(is_single_preset)
@@ -520,6 +524,7 @@ class MainWindow(QMainWindow):
         if path.suffix.lower() == ".hlx":
             self.preset_table.setRowCount(0)
             self.preset_hint.setText("Enter the temporary Helix slot used during measurement.")
+            self.presets.show()
             self.presets.updateGeometry()
             self._schedule_resize_for_content()
             return
@@ -545,6 +550,8 @@ class MainWindow(QMainWindow):
             return
 
         self.preset_hint.setText("Select the presets to normalize.")
+        self.presets.show()
+        self._schedule_resize_for_content()
 
     def start_normalization(self) -> None:
         try:
@@ -703,12 +710,12 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "MatchPatch error", message)
 
     def normalization_cancelled(self) -> None:
-        self._stop_busy_phase()
+        self._stop_busy_phase(PROCESSING_DOT_RED)
         self._set_phase("normalization_cancelled_by_user")
         self._log("Normalization cancelled by user", "warning")
 
     def worker_finished(self) -> None:
-        self._stop_busy_phase()
+        self._stop_busy_phase(self._processing_dot_color)
         self.start_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.worker = None
@@ -1067,15 +1074,16 @@ class MainWindow(QMainWindow):
             self._set_processing_dot(True)
             self.busy_animation.start()
 
-    def _stop_busy_phase(self) -> None:
+    def _stop_busy_phase(self, color: str = PROCESSING_DOT_GREY) -> None:
         self.busy_animation.stop()
         self.processing_dot_effect.setOpacity(1.0)
-        self._set_processing_dot(False)
+        self._set_processing_dot(color == PROCESSING_DOT_GREEN, color)
         self.progress_group.hide()
 
-    def _set_processing_dot(self, green: bool) -> None:
+    def _set_processing_dot(self, green: bool, color: str | None = None) -> None:
         self._processing_dot_green = green
-        color = PROCESSING_DOT_GREEN if green else PROCESSING_DOT_GREY
+        color = color or (PROCESSING_DOT_GREEN if green else PROCESSING_DOT_GREY)
+        self._processing_dot_color = color
         self.processing_dot.setStyleSheet(f"background-color: {color}; border-radius: 7px;")
 
     def _reset_loudness_bars(self) -> None:
