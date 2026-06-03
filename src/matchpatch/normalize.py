@@ -152,8 +152,8 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
         *device_steering,
         "measurement_wait_seconds",
     )
-    args.pre_roll = prefer(args.pre_roll, config, "analysis", "pre_roll_seconds", default=1.0)
-    args.post_roll = prefer(args.post_roll, config, "analysis", "post_roll_seconds", default=1.0)
+    args.pre_roll = prefer(args.pre_roll, config, "analysis", "pre_roll_seconds", default=0.2)
+    args.post_roll = prefer(args.post_roll, config, "analysis", "post_roll_seconds", default=0.1)
     args.round_trip_latency = prefer(
         args.round_trip_latency,
         config,

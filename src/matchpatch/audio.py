@@ -20,8 +20,8 @@ class AudioConfig:
     input_mapping: tuple[int, int]
     output_mapping: tuple[int, int]
     blocksize: int = 0
-    pre_roll_seconds: float = 1.0
-    post_roll_seconds: float = 1.0
+    pre_roll_seconds: float = 0.2
+    post_roll_seconds: float = 0.1
     round_trip_latency_seconds: float = 0.02
 
 

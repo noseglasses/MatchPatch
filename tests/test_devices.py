@@ -17,6 +17,8 @@ def test_helix_profile_defines_processor_boundaries() -> None:
     assert routing.input_mapping == (1, 2)
     assert routing.output_mapping == (3, 4)
     assert steering.output == "Helix"
+    assert steering.snapshot_wait_seconds == 0.2
+    assert steering.measurement_wait_seconds == 0.1
     assert profile.snapshot_count == 4
     assert profile.max_snapshot_count == 8
     assert handler.parse_patch_set("01A,02B") == [1, 6]

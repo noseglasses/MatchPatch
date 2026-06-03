@@ -124,8 +124,8 @@ blocksize = 0
 output = "Helix"
 channel = 0
 preset_wait_seconds = 0.5
-snapshot_wait_seconds = 0.05
-measurement_wait_seconds = 0.5
+snapshot_wait_seconds = 0.2
+measurement_wait_seconds = 0.1
 
 [policy]
 measured_snapshots = 4
@@ -140,8 +140,8 @@ gain_deadband_db = 0.25
 window_seconds = 3.0
 interval_seconds = 0.1
 minimum_valid_lufs = -100.0
-pre_roll_seconds = 1.0
-post_roll_seconds = 1.0
+pre_roll_seconds = 0.2
+post_roll_seconds = 0.1
 round_trip_latency_seconds = 0.02
 ```
 

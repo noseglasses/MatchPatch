@@ -187,8 +187,6 @@ def test_simulated_backend_tracks_state_and_modifies_audio() -> None:
 
     assert backend.steering_events == [
         ("preset", 1),
-        ("snapshot", 2),
-        ("snapshot", 1),
         ("snapshot", 1),
         ("snapshot", 2),
     ]
@@ -236,7 +234,7 @@ def test_simulated_backend_validates_state_and_injected_failures() -> None:
         backend.reapply_snapshot(2)
 
     backend.reapply_snapshot(1)
-    assert backend.steering_events == [("preset", 1), ("snapshot", 1), ("snapshot", 1)]
+    assert backend.steering_events == [("preset", 1), ("snapshot", 1)]
 
 
 def test_parse_worker_lists_and_channels() -> None:
@@ -358,6 +356,7 @@ def test_resolve_steering_options_uses_defaults_and_overrides() -> None:
     assert options.channel == 4
     assert options.preset_wait_seconds == 0.5
     assert options.snapshot_wait_seconds == 0.2
+    assert options.measurement_wait_seconds == 0.1
 
 
 def test_resolve_audio_config_uses_defaults_and_overrides(monkeypatch) -> None:
@@ -381,8 +380,8 @@ def test_resolve_audio_config_uses_defaults_and_overrides(monkeypatch) -> None:
     assert config.input_mapping == (1, 2)
     assert config.output_mapping == (7, 8)
     assert config.blocksize == 128
-    assert config.pre_roll_seconds == 1.0
-    assert config.post_roll_seconds == 1.0
+    assert config.pre_roll_seconds == 0.2
+    assert config.post_roll_seconds == 0.1
     assert config.round_trip_latency_seconds == 0.02
 
 
@@ -403,8 +402,8 @@ def worker_args(**overrides):
         "preset_wait": None,
         "snapshot_wait": None,
         "measurement_wait": None,
-        "pre_roll": 1.0,
-        "post_roll": 1.0,
+        "pre_roll": 0.2,
+        "post_roll": 0.1,
         "round_trip_latency": 0.02,
         "simulate_fail_presets": [],
     }

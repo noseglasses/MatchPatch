@@ -357,7 +357,6 @@ class HelixMidiController(DeviceController):
         time.sleep(self.options.snapshot_wait_seconds)
 
     def reapply_snapshot(self, snapshot: int) -> None:
-        self.activate_snapshot(2 if snapshot == 1 else 1)
         self.activate_snapshot(snapshot)
 
 
@@ -384,8 +383,8 @@ class HelixDeviceProfile(DeviceProfile):
             output="Helix",
             channel=0,
             preset_wait_seconds=0.5,
-            snapshot_wait_seconds=0.05,
-            measurement_wait_seconds=0.5,
+            snapshot_wait_seconds=0.2,
+            measurement_wait_seconds=0.1,
         )
 
     def create_controller(self, options: SteeringOptions) -> DeviceController:

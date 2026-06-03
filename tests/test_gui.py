@@ -97,6 +97,46 @@ def _mock_single_hlx_handler(
     monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
 
 
+class _FakeSaveChangesMessageBox:
+    StandardButton = QMessageBox.StandardButton
+    ButtonRole = QMessageBox.ButtonRole
+    next_click = QMessageBox.StandardButton.Cancel
+    instances = []
+
+    def __init__(self, parent=None):
+        self.parent = parent
+        self.title = ""
+        self.text = ""
+        self.buttons = []
+        self.default_button = None
+        self._clicked_button = None
+        _FakeSaveChangesMessageBox.instances.append(self)
+
+    def setWindowTitle(self, title):
+        self.title = title
+
+    def setText(self, text):
+        self.text = text
+
+    def addButton(self, button, role=None):
+        button_ref = object()
+        self.buttons.append((button, role, button_ref))
+        return button_ref
+
+    def setDefaultButton(self, button):
+        self.default_button = button
+
+    def exec(self):
+        for button, _role, button_ref in self.buttons:
+            if button == self.next_click:
+                self._clicked_button = button_ref
+                break
+        return 0
+
+    def clickedButton(self):
+        return self._clicked_button
+
+
 def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     window = MainWindow()
 
@@ -840,6 +880,8 @@ measured_snapshots = 6
     assert window.snapshot_count_input.value() == 6
     assert window.preset_table.columnCount() == 15
     assert window.device_panels["helix"].audio_device.text() == "Configured Audio"
+    assert window.device_panels["helix"].snapshot_wait.text() == "0.2"
+    assert window.device_panels["helix"].measurement_wait.text() == "0.1"
     assert window.device_panels["helix"].audio_group.isEnabled()
 
     window.close()
@@ -1347,24 +1389,22 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
     window.update_progress(
         ProgressEvent("log", message="[GAIN] 02B Solo | 0.0 dB -> 1.0 dB (Delta: +1.0 dB)")
     )
-    prompts = []
     answers = iter([QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Discard])
     monkeypatch.setattr(
         QFileDialog,
         "getOpenFileName",
         lambda *args, **kwargs: ("/tmp/new.hlx", ""),
     )
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *args: prompts.append(args) or next(answers),
-    )
+    monkeypatch.setattr(main_window, "QMessageBox", _FakeSaveChangesMessageBox)
+    _FakeSaveChangesMessageBox.instances = []
 
+    _FakeSaveChangesMessageBox.next_click = next(answers)
     window.browse_input()
 
     assert window.input_path.text() == "/tmp/original.hls"
     assert window.preset_table.item(0, 4).text() == "+1.0"
 
+    _FakeSaveChangesMessageBox.next_click = next(answers)
     window.browse_input()
 
     assert window.input_path.text() == "/tmp/new.hlx"
@@ -1372,8 +1412,16 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
     assert window.preset_table.item(0, 1).text() == ""
     assert window.preset_table.item(0, 2).text() == "New"
     assert not window._adjusted_presets
+    prompts = _FakeSaveChangesMessageBox.instances
     assert len(prompts) == 2
-    assert prompts[0][1] == "Discard preset table changes"
+    assert prompts[0].title == "Save changes"
+    assert prompts[0].text == (
+        "The preset table contains changes. Save them before opening another preset or setlist "
+        "file?"
+    )
+    assert QMessageBox.StandardButton.Discard in [
+        button for button, _role, _ref in prompts[0].buttons
+    ]
 
     window.close()
 
@@ -1934,11 +1982,33 @@ def test_worker_import_confirmation_blocks_until_answered(app) -> None:
     assert answers == [True]
 
 
-def test_hardware_normalization_checks_device_before_starting(monkeypatch, app) -> None:
+def test_hardware_normalization_skips_backend_check(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(backend="hardware")
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(
+        gui_worker,
+        "check_windows_hardware",
+        lambda request: (_ for _ in ()).throw(AssertionError("unexpected hardware check")),
+    )
+    monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
+
+    window.start_normalization()
+
+    assert window.worker is not None
+    assert window.hardware_check_overlay.isHidden()
+    window.worker_finished()
+    window.close()
+
+
+def test_startup_backend_check_reports_unavailable_hardware(monkeypatch, app) -> None:
     window = MainWindow()
     request = _request(backend="hardware")
     popups = []
     checks = []
+    monkeypatch.setattr(window, "_backend_check_enabled", lambda: True)
     monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
     monkeypatch.setattr(main_window, "apply_config", lambda args: args)
     monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
@@ -1950,7 +2020,7 @@ def test_hardware_normalization_checks_device_before_starting(monkeypatch, app) 
     )
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
 
-    window.start_normalization()
+    window._check_backend_on_startup()
 
     for _ in range(100):
         app.processEvents()
@@ -1964,6 +2034,39 @@ def test_hardware_normalization_checks_device_before_starting(monkeypatch, app) 
     assert len(popups) == 1
     assert popups[0][1] == "Error"
     assert "No suitable device connected" in popups[0][2]
+    assert window.worker is None
+    assert window.hardware_check_worker is None
+    assert window.hardware_check_overlay.isHidden()
+
+    window.close()
+
+
+def test_switching_to_hardware_checks_backend(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(backend="hardware")
+    checks = []
+    monkeypatch.setattr(window, "_backend_check_enabled", lambda: True)
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(
+        gui_worker,
+        "check_windows_hardware",
+        lambda checked_request: checks.append(checked_request),
+    )
+
+    window.backend.setCurrentText("loopback")
+    window.backend.setCurrentText("hardware")
+
+    for _ in range(100):
+        app.processEvents()
+        if checks and window.hardware_check_worker is None:
+            break
+        time.sleep(0.01)
+
+    assert len(checks) == 1
+    assert checks[0].backend == "hardware"
+    assert checks[0].defer_export
     assert window.worker is None
     assert window.hardware_check_worker is None
     assert window.hardware_check_overlay.isHidden()

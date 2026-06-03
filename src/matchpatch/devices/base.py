@@ -71,7 +71,7 @@ class DeviceController(ABC):
 
     @abstractmethod
     def reapply_snapshot(self, snapshot: int) -> None:
-        """Select a snapshot after forcing its state to be reloaded."""
+        """Select a processor snapshot by its one-based numeric ID."""
 
 
 class PatchFileHandler(ABC):

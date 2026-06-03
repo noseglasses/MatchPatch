@@ -132,8 +132,6 @@ class SimulatedHardwareBackend:
         if snapshot < 1 or snapshot > self.snapshot_count:
             raise ValueError(f"Invalid simulated snapshot: {snapshot}")
 
-        reload_snapshot = 2 if snapshot == 1 and self.snapshot_count > 1 else 1
-        self.steering_events.append(("snapshot", reload_snapshot))
         self.steering_events.append(("snapshot", snapshot))
         self.active_snapshot = snapshot
 
@@ -376,8 +374,8 @@ def resolve_audio_config(args: argparse.Namespace, profile: DeviceProfile) -> Au
             args.output_mapping if args.output_mapping is not None else defaults.output_mapping
         ),
         blocksize=args.blocksize,
-        pre_roll_seconds=getattr(args, "pre_roll", 1.0),
-        post_roll_seconds=getattr(args, "post_roll", 1.0),
+        pre_roll_seconds=getattr(args, "pre_roll", 0.2),
+        post_roll_seconds=getattr(args, "post_roll", 0.1),
         round_trip_latency_seconds=getattr(args, "round_trip_latency", 0.02),
     )
 
@@ -644,12 +642,12 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     args.pre_roll = (
         getattr(args, "pre_roll", None)
         if getattr(args, "pre_roll", None) is not None
-        else config_value(config, "analysis", "pre_roll_seconds", default=1.0)
+        else config_value(config, "analysis", "pre_roll_seconds", default=0.2)
     )
     args.post_roll = (
         getattr(args, "post_roll", None)
         if getattr(args, "post_roll", None) is not None
-        else config_value(config, "analysis", "post_roll_seconds", default=1.0)
+        else config_value(config, "analysis", "post_roll_seconds", default=0.1)
     )
     args.round_trip_latency = (
         getattr(args, "round_trip_latency", None)

@@ -108,10 +108,10 @@ class HelixSettingsPanel(QWidget):
         self.steering_channel.setValue(args.steering_channel or 0)
         self.preset_wait.setText(_text(args.preset_wait if args.preset_wait is not None else 0.5))
         self.snapshot_wait.setText(
-            _text(args.snapshot_wait if args.snapshot_wait is not None else 0.05)
+            _text(args.snapshot_wait if args.snapshot_wait is not None else 0.2)
         )
         self.measurement_wait.setText(
-            _text(args.measurement_wait if args.measurement_wait is not None else 0.5)
+            _text(args.measurement_wait if args.measurement_wait is not None else 0.1)
         )
 
     def append_arguments(self, argv: list[str]) -> None:

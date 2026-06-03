@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import re
 import shutil
 import tempfile
@@ -244,6 +245,7 @@ class MainWindow(QMainWindow):
         self._custom_adjustments: CustomAdjustments = {}
         self.log_entries: list[tuple[str, str, str]] = []
         self._processing_dot_green = False
+        self._loading_defaults = False
 
         self.input_path = QLineEdit()
         self.output_path = QLineEdit()
@@ -270,6 +272,7 @@ class MainWindow(QMainWindow):
         self.load_defaults()
         self._refresh_file_actions()
         QTimer.singleShot(0, self._resize_to_initial_content)
+        QTimer.singleShot(0, self._check_backend_on_startup)
 
     def _build_hardware_check_overlay(self) -> None:
         overlay = QWidget(self)
@@ -887,7 +890,12 @@ class MainWindow(QMainWindow):
         )
         if not path or path == self.input_path.text():
             return
-        if not self._confirm_discard_preset_table_changes():
+        if (
+            self._preset_table_has_unsaved_changes()
+            and not self._prompt_save_or_discard_preset_table_changes(
+                "opening another preset or setlist file"
+            )
+        ):
             return
         self._preset_load_discard_confirmed = True
         self.input_path.setText(path)
@@ -1216,6 +1224,11 @@ class MainWindow(QMainWindow):
         self.load_defaults()
 
     def backend_changed(self) -> None:
+        self._refresh_backend_tooltip()
+        if not self._loading_defaults:
+            self._check_selected_backend_availability()
+
+    def _refresh_backend_tooltip(self) -> None:
         if self.backend.currentText() == "loopback":
             self.device_settings.setToolTip(
                 "Audio and MIDI settings are editable but unused by the loopback backend."
@@ -1229,15 +1242,23 @@ class MainWindow(QMainWindow):
 
         try:
             config = load_config(self.config_path.text().strip() or None)
-            self.backend.setCurrentText(
-                config_value(config, "normalize", "backend", default="hardware")
-            )
+            self._loading_defaults = True
+            try:
+                self.backend.setCurrentText(
+                    config_value(config, "normalize", "backend", default="hardware")
+                )
+            finally:
+                self._loading_defaults = False
             args = apply_config(parse_args(self._base_argv("placeholder.hls")))
         except Exception as exc:  # noqa: BLE001
             self.show_error(str(exc))
             return
 
-        self.backend.setCurrentText(args.backend)
+        self._loading_defaults = True
+        try:
+            self.backend.setCurrentText(args.backend)
+        finally:
+            self._loading_defaults = False
         self.reference_di.setText(str(args.reference_di))
         self.custom_adjustments_path.setText(
             str(args.custom_adjustments_file) if args.custom_adjustments_file else ""
@@ -1251,7 +1272,29 @@ class MainWindow(QMainWindow):
         panel = self.device_panels.get(args.device)
         if panel is not None:
             panel.populate(args)
-        self.backend_changed()
+        self._refresh_backend_tooltip()
+
+    def _backend_check_enabled(self) -> bool:
+        return os.getenv("QT_QPA_PLATFORM", "").lower() != "offscreen"
+
+    def _check_backend_on_startup(self) -> None:
+        self._check_selected_backend_availability()
+
+    def _backend_check_request(self) -> NormalizationRequest | None:
+        try:
+            args = apply_config(parse_args(self._base_argv("placeholder.hls")))
+            return replace(request_from_args(args), defer_export=True)
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return None
+
+    def _check_selected_backend_availability(self) -> None:
+        if not self._backend_check_enabled() or self.backend.currentText() != "hardware":
+            return
+
+        request = self._backend_check_request()
+        if request is not None:
+            self._start_hardware_check(request)
 
     def load_assignments(self) -> None:
         path = Path(self.input_path.text())
@@ -1259,7 +1302,10 @@ class MainWindow(QMainWindow):
             not self._preset_load_discard_confirmed
             and self._loaded_input_path
             and str(path) != self._loaded_input_path
-            and not self._confirm_discard_preset_table_changes()
+            and self._preset_table_has_unsaved_changes()
+            and not self._prompt_save_or_discard_preset_table_changes(
+                "opening another preset or setlist file"
+            )
         ):
             self.input_path.setText(self._loaded_input_path)
             return
@@ -1395,9 +1441,6 @@ class MainWindow(QMainWindow):
             args = apply_config(parse_args(self._build_argv()))
             request = replace(request_from_args(args), defer_export=True)
             self._custom_adjustments = self._load_custom_adjustments(request)
-            if request.backend == "hardware":
-                self._start_hardware_check(request)
-                return
         except Exception as exc:  # noqa: BLE001
             self.show_error(str(exc))
             return
@@ -1447,7 +1490,7 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def _start_hardware_check(self, request: NormalizationRequest) -> None:
-        if self.hardware_check_worker is not None:
+        if self.hardware_check_worker is not None or self.worker is not None:
             return
 
         self.start_button.setEnabled(False)
@@ -1455,19 +1498,17 @@ class MainWindow(QMainWindow):
         self._set_phase("starting")
         self._log("Checking backend availability", "info")
         self.hardware_check_worker = HardwareCheckWorker(request, self)
-        self.hardware_check_worker.completed.connect(
-            lambda checked_request=request: self._hardware_check_completed(checked_request)
-        )
+        self.hardware_check_worker.completed.connect(self._hardware_check_completed)
         self.hardware_check_worker.failed.connect(self._hardware_check_failed)
         self.hardware_check_worker.finished.connect(self._hardware_check_finished)
         self.hardware_check_worker.finished.connect(self.hardware_check_worker.deleteLater)
         self.hardware_check_worker.start()
 
-    def _hardware_check_completed(self, request: NormalizationRequest) -> None:
+    def _hardware_check_completed(self) -> None:
         self._hide_hardware_check_overlay()
         self.start_button.setEnabled(True)
+        self._set_phase("ready")
         self._log("Backend availability check completed", "success")
-        self._start_normalization_request(request)
 
     def _hardware_check_failed(self, detail: str) -> None:
         self._hide_hardware_check_overlay()
@@ -1759,11 +1800,19 @@ class MainWindow(QMainWindow):
             self.start_button.setEnabled(bool(self._loaded_input_path) and self.worker is None)
 
     def _prompt_save_before_normalization(self) -> bool:
+        result = self._prompt_save_or_discard_preset_table_changes("starting normalization")
+        if result == "discard":
+            self._discard_preset_table_changes()
+            return True
+        return bool(result)
+
+    def _prompt_save_or_discard_preset_table_changes(self, action: str) -> bool | str:
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Save changes")
-        dialog.setText("The preset table contains changes. Save them before starting normalization?")
+        dialog.setText(f"The preset table contains changes. Save them before {action}?")
         save_button = dialog.addButton(QMessageBox.StandardButton.Save)
         save_as_button = dialog.addButton("Save As", QMessageBox.ButtonRole.AcceptRole)
+        discard_button = dialog.addButton(QMessageBox.StandardButton.Discard)
         dialog.addButton(QMessageBox.StandardButton.Cancel)
         dialog.setDefaultButton(save_button)
         dialog.exec()
@@ -1772,7 +1821,16 @@ class MainWindow(QMainWindow):
             return self.save_active_file()
         if clicked is save_as_button:
             return self.save_active_file_as()
+        if clicked is discard_button:
+            return "discard"
         return False
+
+    def _discard_preset_table_changes(self) -> None:
+        self._preset_load_discard_confirmed = True
+        try:
+            self.load_assignments()
+        finally:
+            self._preset_load_discard_confirmed = False
 
     def _confirm_overwrite(self, output_path: Path) -> bool:
         if not output_path.exists():

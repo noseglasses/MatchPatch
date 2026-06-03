@@ -391,10 +391,10 @@ def test_midi_controller_sends_program_and_snapshot_messages(monkeypatch) -> Non
 
     assert sent[:3] == [
         ("program_change", {"channel": 2, "program": 5}),
-        ("control_change", {"channel": 2, "control": 69, "value": 1}),
         ("control_change", {"channel": 2, "control": 69, "value": 0}),
+        ("control_change", {"channel": 2, "control": 69, "value": 1}),
     ]
-    assert sleeps == [0.5, 0.05, 0.05, 0.05, 0.05]
+    assert sleeps == [0.5, 0.05, 0.05]
     assert sent[-1] == "closed"
 
 
