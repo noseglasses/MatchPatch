@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import math
 import re
@@ -100,6 +101,7 @@ GAIN_BAD_LUFS_PATTERN = re.compile(
 BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
 HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
 HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
+PRESET_TABLE_CSV_DELIMITER = "|"
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
 PROCESSING_DOT_RED = "#dc2626"
@@ -284,6 +286,25 @@ class MainWindow(QMainWindow):
         self.preset_table.model().rowsRemoved.connect(self._preset_table_size_changed)
         self.preset_table.model().modelReset.connect(self._preset_table_size_changed)
         self.preset_table_note = QLabel("Only non-empty presets are listed.")
+        self.save_csv_button = QPushButton()
+        self.save_csv_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        )
+        self.save_csv_button.setToolTip("Save the preset table as pipe-delimited CSV.")
+        self.save_csv_button.clicked.connect(self.save_preset_table_csv)
+        self.load_csv_button = QPushButton()
+        self.load_csv_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
+        )
+        self.load_csv_button.setToolTip("Load preset-table content from pipe-delimited CSV.")
+        self.load_csv_button.clicked.connect(self.load_preset_table_csv)
+        csv_button_size = max(
+            self.save_csv_button.sizeHint().height(),
+            self.load_csv_button.sizeHint().height(),
+        )
+        for button in (self.save_csv_button, self.load_csv_button):
+            button.setFixedSize(csv_button_size, csv_button_size)
+            button.setEnabled(False)
         self.single_slot = QLineEdit()
         self.single_slot.setPlaceholderText("Temporary slot, for example 12A")
         self.single_slot.hide()
@@ -312,7 +333,12 @@ class MainWindow(QMainWindow):
         preset_header.addWidget(self.unselect_all_button)
         layout.addLayout(preset_header)
         layout.addWidget(self.preset_table)
-        layout.addWidget(self.preset_table_note)
+        preset_table_note_row = QHBoxLayout()
+        preset_table_note_row.addWidget(self.preset_table_note)
+        preset_table_note_row.addStretch()
+        preset_table_note_row.addWidget(self.load_csv_button)
+        preset_table_note_row.addWidget(self.save_csv_button)
+        layout.addLayout(preset_table_note_row)
         layout.addWidget(self.single_slot)
         self.presets = content
         content.hide()
@@ -565,6 +591,213 @@ class MainWindow(QMainWindow):
                 return
             self.output_path.setText(path)
 
+    def save_preset_table_csv(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save preset table CSV",
+            filter="Preset table CSV (*.csv)",
+        )
+        if not path:
+            return
+
+        csv_path = Path(path)
+        if csv_path.suffix.lower() != ".csv":
+            csv_path = csv_path.with_suffix(".csv")
+
+        try:
+            with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
+                writer = csv.writer(csv_file, delimiter=PRESET_TABLE_CSV_DELIMITER)
+                writer.writerow(self._preset_table_csv_headers())
+                for row in range(self.preset_table.rowCount()):
+                    writer.writerow(self._preset_table_csv_row(row))
+        except OSError as exc:
+            self.show_error(f"Could not save preset table CSV: {exc}")
+            return
+
+        self._log(f"Preset table CSV saved: {csv_path}", "success")
+
+    def load_preset_table_csv(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load preset table CSV",
+            filter="Preset table CSV (*.csv)",
+        )
+        if not path:
+            return
+
+        try:
+            with self._sorting_paused():
+                accepted, errors = self._load_preset_table_csv(Path(path))
+        except OSError as exc:
+            self.show_error(f"Could not load preset table CSV: {exc}")
+            return
+
+        for error in errors:
+            self._log(error, "error")
+        if errors:
+            QMessageBox.critical(self, "Preset table CSV errors", "\n".join(errors))
+        self._log(f"Preset table CSV loaded: {path} ({accepted} row(s) applied)", "success")
+
+    def _load_preset_table_csv(self, path: Path) -> tuple[int, list[str]]:
+        errors: list[str] = []
+        accepted = 0
+        headers = self._preset_table_csv_headers()
+        current_rows = {
+            item.text(): row
+            for row in range(self.preset_table.rowCount())
+            if (item := self.preset_table.item(row, 1)) is not None
+        }
+
+        with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
+            reader = csv.reader(csv_file, delimiter=PRESET_TABLE_CSV_DELIMITER)
+            for line_number, row in enumerate(reader, start=1):
+                if line_number == 1 and row == headers:
+                    continue
+                if not row or all(not cell for cell in row):
+                    continue
+                parsed = self._parse_preset_table_csv_row(
+                    row,
+                    line_number,
+                    headers,
+                    current_rows,
+                    errors,
+                )
+                if parsed is None:
+                    continue
+                table_row, preset_name, snapshot_names, adjustments = parsed
+                self._apply_preset_table_csv_row(
+                    table_row,
+                    preset_name,
+                    snapshot_names,
+                    adjustments,
+                )
+                accepted += 1
+
+        return accepted, errors
+
+    def _parse_preset_table_csv_row(
+        self,
+        row: list[str],
+        line_number: int,
+        headers: list[str],
+        current_rows: dict[str, int],
+        errors: list[str],
+    ) -> tuple[int, str, list[str], list[tuple[str, float]]] | None:
+        expected_columns = len(headers)
+        if len(row) != expected_columns:
+            errors.append(
+                f"Line {line_number}: expected {expected_columns} columns, got {len(row)}."
+            )
+            return None
+
+        preset_id = row[0]
+        table_row = current_rows.get(preset_id)
+        if table_row is None:
+            errors.append(
+                f"Line {line_number}: preset ID {preset_id!r} is not listed in the current table."
+            )
+            return None
+
+        preset_name = row[1]
+        try:
+            self._validate_helix_name(preset_name, self._preset_name_max_length())
+        except ValueError as exc:
+            errors.append(f"Line {line_number}: preset name is invalid: {exc}.")
+            return None
+
+        snapshot_names: list[str] = []
+        adjustments: list[tuple[str, float]] = []
+        for snapshot_index in range(self.snapshot_count):
+            name = row[2 + snapshot_index * 2]
+            adjustment_text = row[3 + snapshot_index * 2]
+            try:
+                self._validate_helix_name(name, self._snapshot_name_max_length())
+            except ValueError as exc:
+                errors.append(
+                    f"Line {line_number}: snapshot {snapshot_index + 1} name is invalid: {exc}."
+                )
+                return None
+            try:
+                adjustment = float(adjustment_text)
+            except ValueError:
+                errors.append(
+                    f"Line {line_number}: snapshot {snapshot_index + 1} adjustment "
+                    f"is not a floating point number: {adjustment_text!r}."
+                )
+                return None
+            if not math.isfinite(adjustment):
+                errors.append(
+                    f"Line {line_number}: snapshot {snapshot_index + 1} adjustment "
+                    f"is not finite: {adjustment_text!r}."
+                )
+                return None
+            snapshot_names.append(name)
+            adjustments.append((adjustment_text, adjustment))
+
+        return table_row, preset_name, snapshot_names, adjustments
+
+    def _apply_preset_table_csv_row(
+        self,
+        row: int,
+        preset_name: str,
+        snapshot_names: list[str],
+        adjustments: list[tuple[str, float]],
+    ) -> None:
+        preset_item = self.preset_table.item(row, 2)
+        if preset_item is None:
+            preset_item = QTableWidgetItem()
+            self.preset_table.setItem(row, 2, preset_item)
+        preset_item.setText(preset_name)
+        preset_item.setData(Qt.ItemDataRole.UserRole, tuple(snapshot_names))
+        for snapshot_index, (adjustment_text, adjustment) in enumerate(adjustments):
+            name_item = self.preset_table.item(row, 3 + snapshot_index * 2)
+            adjustment_item = self.preset_table.item(row, 4 + snapshot_index * 2)
+            if name_item is None:
+                name_item = QTableWidgetItem()
+                self.preset_table.setItem(row, 3 + snapshot_index * 2, name_item)
+            if adjustment_item is None:
+                adjustment_item = QTableWidgetItem()
+                self.preset_table.setItem(row, 4 + snapshot_index * 2, adjustment_item)
+            self._set_snapshot_name(
+                name_item,
+                snapshot_names[snapshot_index],
+                self._is_solo_snapshot_name(snapshot_names[snapshot_index]),
+            )
+            self._set_adjustment_value(adjustment_item, adjustment_text, adjustment)
+
+        patch_item = self.preset_table.item(row, 1)
+        if patch_item is not None:
+            self._adjusted_presets.add(patch_item.text())
+
+    def _preset_table_csv_headers(self) -> list[str]:
+        headers = ["preset_id", "preset_name"]
+        for snapshot in range(1, self.snapshot_count + 1):
+            headers.extend([f"snapshot_{snapshot}_name", f"snapshot_{snapshot}_adjustment"])
+        return headers
+
+    def _preset_table_csv_row(self, row: int) -> list[str]:
+        values = [
+            self.preset_table.item(row, 1).text() if self.preset_table.item(row, 1) else "",
+            self.preset_table.item(row, 2).text() if self.preset_table.item(row, 2) else "",
+        ]
+        for column in range(3, self.preset_table.columnCount(), 2):
+            name = self.preset_table.item(row, column)
+            adjustment = self.preset_table.item(row, column + 1)
+            values.extend(
+                [
+                    name.text() if name is not None else "",
+                    adjustment.text() if adjustment is not None else "",
+                ]
+            )
+        return values
+
+    def _is_solo_snapshot_name(self, name: str) -> bool:
+        try:
+            solo_pattern = re.compile(self.solo_regex.text())
+        except re.error:
+            return False
+        return solo_pattern.search(name) is not None
+
     def show_help(self) -> None:
         HelpDialog(self).exec()
 
@@ -640,6 +873,9 @@ class MainWindow(QMainWindow):
         self.single_slot.setVisible(is_single_preset)
         self.preset_table.setVisible(not is_single_preset)
         self.preset_table_note.setVisible(not is_single_preset)
+        self.load_csv_button.setVisible(not is_single_preset)
+        self.save_csv_button.setVisible(not is_single_preset)
+        self._set_preset_csv_buttons_enabled(False)
         self.select_all_button.setVisible(not is_single_preset)
         self.unselect_all_button.setVisible(not is_single_preset)
         self.manual_adjustments.setVisible(not is_single_preset)
@@ -650,6 +886,7 @@ class MainWindow(QMainWindow):
         if path.suffix.lower() == ".hlx":
             self._adjusted_presets.clear()
             self.preset_table.setRowCount(0)
+            self._set_preset_csv_buttons_enabled(False)
             self.preset_hint.setText("Enter the temporary Helix slot used during measurement.")
             self.presets.show()
             self.presets.updateGeometry()
@@ -679,8 +916,15 @@ class MainWindow(QMainWindow):
             return
 
         self.preset_hint.setText("Select the presets to normalize.")
+        self._set_preset_csv_buttons_enabled(self.preset_table.rowCount() > 0)
         self.presets.show()
         self._schedule_resize_for_content()
+
+    def _set_preset_csv_buttons_enabled(self, enabled: bool) -> None:
+        if hasattr(self, "load_csv_button"):
+            self.load_csv_button.setEnabled(enabled)
+        if hasattr(self, "save_csv_button"):
+            self.save_csv_button.setEnabled(enabled)
 
     def _load_metadata(self) -> None:
         path = Path(self.input_path.text())

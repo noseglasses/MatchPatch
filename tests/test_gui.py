@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -119,6 +120,12 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.preset_table.verticalHeader().isHidden()
     assert not window.preset_table.wordWrap()
     assert window.preset_table_note.text() == "Only non-empty presets are listed."
+    assert not window.load_csv_button.isEnabled()
+    assert not window.save_csv_button.isEnabled()
+    assert window.load_csv_button.text() == ""
+    assert window.save_csv_button.text() == ""
+    assert window.load_csv_button.width() == window.load_csv_button.height()
+    assert window.save_csv_button.width() == window.save_csv_button.height()
     assert window.snapshot_count_input.value() == 4
     assert window.snapshot_count_input.maximum() == 8
 
@@ -251,6 +258,51 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
     assert window.preset_hint.text() == "Select the presets to normalize."
     assert '"file_type": "hls"' in window.metadata_text.toPlainText()
     assert '"name": "Set"' in window.metadata_text.toPlainText()
+
+    window.close()
+
+
+def test_setlist_load_enables_preset_table_csv_buttons(monkeypatch, app, tmp_path) -> None:
+    window = MainWindow()
+    path = tmp_path / "example.hls"
+    path.write_text("{}", encoding="utf-8")
+
+    class Handler:
+        @staticmethod
+        def validate_input(path):
+            return None
+
+        @staticmethod
+        def list_assignments(path):
+            return [
+                SimpleNamespace(
+                    device_patch="02B",
+                    name="Song",
+                    snapshot_names=("Clean", "Solo"),
+                )
+            ]
+
+        @staticmethod
+        def metadata(path):
+            return {"file_type": "hls"}
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(root):
+            return Handler()
+
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    window.input_path.setText(str(path))
+    window.load_assignments()
+
+    assert window.load_csv_button.isEnabled()
+    assert window.save_csv_button.isEnabled()
+
+    window.input_path.setText(str(tmp_path / "single.hlx"))
+    window.load_assignments()
+
+    assert not window.load_csv_button.isEnabled()
+    assert not window.save_csv_button.isEnabled()
 
     window.close()
 
@@ -566,6 +618,95 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(app) -> 
     assert adjustments.gain_deltas["02B"][0] == 1.5
     window.preset_table.item(0, 2).setText("Invalid%")
     assert window.preset_table.item(0, 2).text() == "Invalid"
+
+    window.close()
+
+
+def test_preset_table_csv_save_uses_pipe_delimiter(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    window.snapshot_count_input.setValue(2)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song, Part 1"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Clean, bright", "Solo"))
+    window._set_adjustment_value(window.preset_table.item(0, 4), "+1.5", 1.5)
+    window._set_adjustment_value(window.preset_table.item(0, 6), "-2.0", -2.0)
+    csv_path = tmp_path / "preset-table"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(csv_path), ""),
+    )
+
+    window.save_preset_table_csv()
+
+    assert (tmp_path / "preset-table.csv").read_text(encoding="utf-8").splitlines() == [
+        "preset_id|preset_name|snapshot_1_name|snapshot_1_adjustment|"
+        "snapshot_2_name|snapshot_2_adjustment",
+        "02B|Song, Part 1|Clean, bright|+1.5|Solo|-2.0",
+    ]
+    assert "Preset table CSV saved" in window.log.toHtml()
+
+    window.close()
+
+
+def test_preset_table_csv_load_applies_valid_rows_and_reports_line_errors(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    window.snapshot_count_input.setValue(2)
+    for row, (patch, name) in enumerate((("02B", "Song"), ("01A", "Other"))):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked)
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(patch))
+        window.preset_table.setItem(row, 2, QTableWidgetItem(name))
+        window._clear_preset_adjustments(row)
+
+    csv_path = tmp_path / "preset-table.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "preset_id|preset_name|snapshot_1_name|snapshot_1_adjustment|"
+                "snapshot_2_name|snapshot_2_adjustment",
+                "02B|Song 2|Clean!|+1.5|Solo|-2.0",
+                "99A|Missing|Clean|0|Solo|0",
+                "01A|Invalid%|Clean|0|Solo|0",
+                "01A|Other|Clean|nan|Solo|0",
+                "01A|Other 2|Clean|0|Solo|+3.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    popups = []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(csv_path), ""),
+    )
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
+
+    window.load_preset_table_csv()
+
+    assert window.preset_table.item(0, 2).text() == "Song 2"
+    assert window.preset_table.item(0, 3).text() == "Clean!"
+    assert window.preset_table.item(0, 4).text() == "+1.5"
+    assert window.preset_table.item(0, 5).text() == "Solo"
+    assert window.preset_table.item(0, 6).text() == "-2.0"
+    assert window.preset_table.item(1, 2).text() == "Other 2"
+    assert window.preset_table.item(1, 6).text() == "+3.0"
+    assert len(popups) == 1
+    assert popups[0][1] == "Preset table CSV errors"
+    assert "Line 3" in popups[0][2]
+    assert "Line 4" in popups[0][2]
+    assert "Line 5" in popups[0][2]
+    assert "preset ID '99A'" in window.log.toPlainText()
+    assert "Preset table CSV loaded" in window.log.toHtml()
 
     window.close()
 
