@@ -44,6 +44,7 @@ class NormalizationRequest:
     windows_python: str
     reference_di: Path
     output_path: Path | None = None
+    diff_input_path: Path | None = None
     automation: bool = True
     defer_export: bool = False
     preset_set: str | None = None
@@ -134,6 +135,13 @@ def normalize_presets(
     )
     assignments = handler.list_assignments(input_path)
     preset_ids = handler.select_preset_ids(input_path, assignments, requested_ids)
+
+    if request.diff_input_path is not None:
+        previous_input_path = request.diff_input_path.resolve()
+        if previous_input_path.suffix.lower() != input_path.suffix.lower():
+            raise ValueError("--diff-input must use the same file type as --input")
+        diff_ids = set(handler.diff_preset_ids(input_path, previous_input_path))
+        preset_ids = [preset_id for preset_id in preset_ids if preset_id in diff_ids]
 
     if request.limit is not None:
         if request.limit < 1:

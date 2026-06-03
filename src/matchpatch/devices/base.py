@@ -95,6 +95,10 @@ class PatchFileHandler(ABC):
         """Extract displayable metadata from a patch file."""
         return {}
 
+    def diff_preset_ids(self, input_path: Path, previous_input_path: Path) -> list[int]:
+        """List presets whose loudness-affecting content differs between two patch files."""
+        raise NotImplementedError("Preset diff selection is not supported for this device")
+
     @abstractmethod
     def parse_patch_set(self, value: str) -> list[int]:
         """Parse device-facing preset labels into numeric preset IDs."""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
 import subprocess
 import sys
@@ -17,6 +18,16 @@ from matchpatch.devices.helix import (
     HelixMidiController,
     HelixPatchFileHandler,
 )
+
+
+def load_legacy_preset_handling():
+    script_path = Path(__file__).resolve().parents[1] / "Python" / "preset_handling.py"
+    spec = importlib.util.spec_from_file_location("preset_handling", script_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def make_handler(tmp_path: Path) -> HelixPatchFileHandler:
@@ -117,6 +128,68 @@ def test_metadata_delegates_to_legacy_script(tmp_path, monkeypatch) -> None:
         True,
         False,
     )]
+
+
+def test_diff_preset_ids_delegates_to_legacy_script(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    calls = []
+
+    def fake_run(*args, capture=False, log_output=True):
+        calls.append((args, capture, log_output))
+        return subprocess.CompletedProcess([], 0, stdout="[1, 6]")
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+
+    assert handler.diff_preset_ids(Path("set.hls"), Path("previous.hls")) == [1, 6]
+    assert calls == [(
+        ("-i", Path("set.hls"), "--diff-presets", Path("previous.hls")),
+        True,
+        False,
+    )]
+
+    with pytest.raises(ValueError, match="same extension"):
+        handler.diff_preset_ids(Path("set.hls"), Path("previous.hlx"))
+
+
+def test_legacy_diff_signature_ignores_names_and_colors() -> None:
+    legacy = load_legacy_preset_handling()
+    first = {
+        "meta": {"name": "Clean"},
+        "tone": {
+            "dsp0": {
+                "block0": {"@model": "amp", "gain": 2.0, "@color": 3},
+                "outputA": {"@output": 6, "gain": 0.0},
+            },
+            "snapshot0": {"@name": "Verse", "@pedalstate": {"block0": True}},
+        },
+    }
+    renamed = {
+        "meta": {"name": "Renamed"},
+        "tone": {
+            "dsp0": {
+                "block0": {"@model": "amp", "gain": 2.0, "@color": 7},
+                "outputA": {"@output": 6, "gain": 0.0},
+            },
+            "snapshot0": {"@name": "Intro", "@pedalstate": {"block0": True}},
+        },
+    }
+    changed_parameter = {
+        "meta": {"name": "Clean"},
+        "tone": {
+            "dsp0": {
+                "block0": {"@model": "amp", "gain": 3.0, "@color": 3},
+                "outputA": {"@output": 6, "gain": 0.0},
+            },
+            "snapshot0": {"@name": "Verse", "@pedalstate": {"block0": True}},
+        },
+    }
+
+    assert legacy.canonical_preset_signal_content(first) == legacy.canonical_preset_signal_content(
+        renamed
+    )
+    assert legacy.canonical_preset_signal_content(
+        first
+    ) != legacy.canonical_preset_signal_content(changed_parameter)
 
 
 def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> None:

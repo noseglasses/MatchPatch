@@ -36,6 +36,9 @@ class FakeHandler:
     def list_assignments(self, input_path: Path) -> list[PatchAssignment]:
         return [PatchAssignment(1, "patch-1", "One"), PatchAssignment(2, "patch-2", "Two")]
 
+    def diff_preset_ids(self, input_path: Path, previous_input_path: Path) -> list[int]:
+        return [2]
+
     def select_preset_ids(self, input_path, assignments, requested_ids):
         return requested_ids if requested_ids is not None else [item.id for item in assignments]
 
@@ -62,6 +65,59 @@ def test_count_csv_rows_handles_header(tmp_path) -> None:
     csv_path.write_text("Preset,DevicePatch\n1,patch-1\n2,patch-2\n", encoding="utf-8")
 
     assert normalize.count_csv_rows(csv_path) == 2
+
+
+def test_normalize_presets_filters_to_diff_input(tmp_path) -> None:
+    handler = FakeHandler()
+    input_path = tmp_path / "input.hls"
+    previous_path = tmp_path / "previous.hls"
+    output_path = tmp_path / "output.hls"
+    reference = tmp_path / "reference.wav"
+    work_dir = tmp_path / "work"
+    input_path.touch()
+    previous_path.touch()
+    reference.touch()
+    work_dir.mkdir()
+    measured = []
+
+    def fake_analysis(request, preset_ids, csv_path, callback):
+        measured.append(preset_ids)
+        write_analysis_csv(request, preset_ids, csv_path)
+
+    normalize_presets(
+        NormalizationRequest(
+            device="fake",
+            input_path=input_path,
+            output_path=output_path,
+            diff_input_path=previous_path,
+            backend="loopback",
+            windows_python="python.exe",
+            reference_di=reference,
+            automation=False,
+        ),
+        run_analysis=fake_analysis,
+        get_profile=lambda device: FakeProfile(handler),
+        make_temp_dir=lambda: work_dir,
+    )
+
+    assert measured == [[2]]
+
+
+def test_request_from_args_includes_diff_input() -> None:
+    args = normalize.apply_config(
+        normalize.parse_args(
+            [
+                "--device",
+                "helix",
+                "-i",
+                "current.hls",
+                "--diff-input",
+                "previous.hls",
+            ]
+        )
+    )
+
+    assert normalize.request_from_args(args).diff_input_path == Path("previous.hls")
 
 
 def test_subprocess_helpers_delegate_and_translate_paths(tmp_path, monkeypatch) -> None:

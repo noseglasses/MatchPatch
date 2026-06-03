@@ -398,6 +398,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", required=True, help="Audio processor profile")
     parser.add_argument("-i", "--input", required=True)
     parser.add_argument("-o", "--output")
+    parser.add_argument(
+        "--diff-input",
+        help="Previous version of the input file; only changed presets are normalized",
+    )
     parser.add_argument("-a", "--automation", action="store_true")
     parser.add_argument("-S", "--preset-set")
     parser.add_argument("-n", "--limit", type=int)
@@ -439,6 +443,7 @@ def request_from_args(args: argparse.Namespace) -> NormalizationRequest:
         device=args.device,
         input_path=Path(args.input),
         output_path=Path(args.output) if args.output else None,
+        diff_input_path=Path(args.diff_input) if args.diff_input else None,
         automation=args.automation,
         preset_set=args.preset_set,
         limit=args.limit,

@@ -225,6 +225,9 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.save_csv_button.isEnabled()
     assert window.load_csv_button.text() == ""
     assert window.save_csv_button.text() == ""
+    assert window.select_diff_button.text() == "Select changed"
+    assert not window.select_diff_button.icon().isNull()
+    assert window.select_diff_button.isHidden()
     assert window.load_csv_button.width() == window.load_csv_button.height()
     assert window.save_csv_button.width() == window.save_csv_button.height()
     assert window.snapshot_count_input.value() == 4
@@ -295,6 +298,7 @@ def test_initial_empty_state_reserves_loaded_preset_table_size(monkeypatch, app,
 
     assert loaded_window.preset_empty_state.isHidden()
     assert not loaded_window.preset_table.isHidden()
+    assert not loaded_window.select_diff_button.isHidden()
     assert initial_size == loaded_window.size()
 
     loaded_window.close()
@@ -403,6 +407,7 @@ def test_single_preset_load_displays_presets_panel_with_instruction_label(
     assert window.preset_table.isColumnHidden(0)
     assert window.single_slot.isHidden()
     assert window.preset_table_note.isHidden()
+    assert window.select_diff_button.isHidden()
     assert not window.preset_csv_controls.isHidden()
     assert window.load_csv_button.isEnabled()
     assert window.save_csv_button.isEnabled()
@@ -842,6 +847,57 @@ def test_preset_bulk_selection_buttons(app) -> None:
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Checked
         for row in range(window.preset_table.rowCount())
     )
+
+    window.close()
+
+
+def test_select_diff_presets_checks_only_changed_rows(monkeypatch, app, tmp_path) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "current.hls"
+    previous_path = tmp_path / "previous.hls"
+    input_path.touch()
+    previous_path.touch()
+    window.input_path.setText(str(input_path))
+    window._show_loaded_preset_state(single_preset=False)
+    for row, name in enumerate(("01A", "01B", "01C")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked)
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(name))
+        window._clear_preset_adjustments(row)
+
+    class Handler:
+        @staticmethod
+        def diff_preset_ids(input_path, previous_input_path):
+            return [2]
+
+        @staticmethod
+        def format_patch_id(preset_id):
+            return f"01{'ABC'[preset_id - 1]}"
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(root):
+            return Handler()
+
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(previous_path), ""),
+    )
+
+    window.select_diff_presets()
+
+    assert [
+        window.preset_table.item(row, 0).checkState()
+        for row in range(window.preset_table.rowCount())
+    ] == [
+        Qt.CheckState.Unchecked,
+        Qt.CheckState.Checked,
+        Qt.CheckState.Unchecked,
+    ]
 
     window.close()
 

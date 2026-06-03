@@ -94,6 +94,25 @@ class HelixPatchFileHandler(PatchFileHandler):
             raise ValueError("Helix metadata output must be a JSON object")
         return metadata
 
+    def diff_preset_ids(self, input_path: Path, previous_input_path: Path) -> list[int]:
+        if previous_input_path.suffix.lower() != input_path.suffix.lower():
+            raise ValueError(
+                "Helix diff input must use the same extension as the active input file"
+            )
+
+        completed = self._run(
+            "-i",
+            input_path,
+            "--diff-presets",
+            previous_input_path,
+            capture=True,
+            log_output=False,
+        )
+        diff_ids = json.loads(completed.stdout)
+        if not isinstance(diff_ids, list) or not all(isinstance(item, int) for item in diff_ids):
+            raise ValueError("Helix diff output must be a JSON array of preset IDs")
+        return diff_ids
+
     def parse_patch_set(self, value: str) -> list[int]:
         preset_ids = []
 

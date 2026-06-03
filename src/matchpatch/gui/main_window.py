@@ -506,8 +506,17 @@ class MainWindow(QMainWindow):
         )
         self.unselect_all_button.setToolTip("Exclude every preset in this setlist.")
         self.unselect_all_button.clicked.connect(lambda: self.set_all_presets_checked(False))
+        self.select_diff_button = QPushButton("Select changed")
+        self.select_diff_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
+        )
+        self.select_diff_button.setToolTip(
+            "Select presets whose loudness-affecting content differs from another setlist."
+        )
+        self.select_diff_button.clicked.connect(self.select_diff_presets)
         preset_header.addWidget(self.select_all_button)
         preset_header.addWidget(self.unselect_all_button)
+        preset_header.addWidget(self.select_diff_button)
         layout.addWidget(self.preset_header)
         layout.addWidget(self.preset_empty_state)
         layout.addWidget(self.preset_table)
@@ -589,6 +598,7 @@ class MainWindow(QMainWindow):
         self.single_slot.hide()
         self.select_all_button.hide()
         self.unselect_all_button.hide()
+        self.select_diff_button.hide()
         self.manual_adjustments.hide()
         self.presets.show()
         self._refresh_preset_advanced_splitter_visibility()
@@ -603,6 +613,7 @@ class MainWindow(QMainWindow):
         self.preset_csv_controls.show()
         self.select_all_button.setVisible(not single_preset)
         self.unselect_all_button.setVisible(not single_preset)
+        self.select_diff_button.setVisible(not single_preset)
         self.manual_adjustments.setVisible(not single_preset)
         self.manual_adjustments.setChecked(False)
         self.presets.show()
@@ -1905,6 +1916,55 @@ class MainWindow(QMainWindow):
                 item = self.preset_table.item(row, 0)
                 if item is not None:
                     item.setCheckState(state)
+
+    def select_diff_presets(self) -> None:
+        input_path = Path(self.input_path.text())
+        suffix = input_path.suffix.lower()
+        if suffix != ".hls":
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose previous setlist",
+            filter=f"Helix setlist (*{suffix})",
+        )
+        if not path:
+            return
+
+        previous_input_path = Path(path)
+        if previous_input_path.suffix.lower() != suffix:
+            self.show_error(f"Diff file must use the {suffix} extension")
+            return
+
+        try:
+            profile = get_device_profile(self.device.currentData())
+            handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+            diff_ids = {
+                handler.format_patch_id(preset_id)
+                for preset_id in handler.diff_preset_ids(input_path, previous_input_path)
+            }
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return
+
+        selected_count = 0
+        with self._sorting_paused():
+            for row in range(self.preset_table.rowCount()):
+                selected_item = self.preset_table.item(row, 0)
+                patch_item = self.preset_table.item(row, 1)
+                if selected_item is None or patch_item is None:
+                    continue
+                selected = patch_item.text() in diff_ids
+                selected_item.setCheckState(
+                    Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked
+                )
+                if selected:
+                    selected_count += 1
+
+        self._log(
+            f"Selected {selected_count} preset(s) changed since {previous_input_path}",
+            "success",
+        )
 
     def _manual_adjustments_toggled(self, checked: bool) -> None:
         self.preset_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)

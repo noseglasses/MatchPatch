@@ -130,6 +130,64 @@ def extract_preset_assignments(data):
     return assignments
 
 
+def extract_diff_preset_ids(current_filename, previous_filename):
+    current_filetype = get_filetype(current_filename)
+    previous_filetype = get_filetype(previous_filename)
+    if previous_filetype != current_filetype:
+        raise ValueError(
+            "Diff input file type must match input file type: "
+            f".{previous_filetype} != .{current_filetype}"
+        )
+
+    current_json_text, _ = load_input(current_filename)
+    previous_json_text, _ = load_input(previous_filename)
+    current_data = json.loads(current_json_text)
+    previous_data = json.loads(previous_json_text)
+    current_presets = current_data.get("presets", [])
+    previous_presets = previous_data.get("presets", [])
+    diff_ids = []
+
+    for preset_index, current_preset in enumerate(current_presets):
+        if is_default_preset(current_preset):
+            continue
+
+        previous_preset = (
+            previous_presets[preset_index]
+            if preset_index < len(previous_presets)
+            else None
+        )
+        if canonical_preset_signal_content(current_preset) != canonical_preset_signal_content(
+            previous_preset
+        ):
+            diff_ids.append(preset_index + 1)
+
+    return diff_ids
+
+
+def canonical_preset_signal_content(preset):
+    if not isinstance(preset, dict):
+        return None
+
+    return remove_non_signal_content(preset.get("tone", {}))
+
+
+def remove_non_signal_content(value):
+    if isinstance(value, dict):
+        result = {}
+        for key, child in value.items():
+            key_text = str(key)
+            normalized_key = key_text.lstrip("@").casefold()
+            if normalized_key in {"name", "meta", "metadata"} or "color" in normalized_key:
+                continue
+            result[key_text] = remove_non_signal_content(child)
+        return result
+
+    if isinstance(value, list):
+        return [remove_non_signal_content(child) for child in value]
+
+    return value
+
+
 def extract_metadata(filename, json_text, original_data=None):
     filetype = get_filetype(filename)
     data = json.loads(json_text)
@@ -1321,6 +1379,12 @@ def main():
         help=("Print extracted file metadata as JSON"),
     )
 
+    mode_group.add_argument(
+        "--diff-presets",
+        metavar="PREVIOUS_INPUT",
+        help=("Print preset IDs whose loudness-affecting content differs from PREVIOUS_INPUT"),
+    )
+
     args = parser.parse_args()
 
     try:
@@ -1350,8 +1414,20 @@ def main():
 
             return
 
+        if args.diff_presets:
+            diff_ids = extract_diff_preset_ids(args.input, args.diff_presets)
+
+            json.dump(diff_ids, sys.stdout, indent=2)
+
+            print()
+
+            return
+
         if not args.output:
-            raise ValueError("Output file is required unless --list-presets or --metadata is used")
+            raise ValueError(
+                "Output file is required unless --list-presets, --metadata, "
+                "or --diff-presets is used"
+            )
 
         require_compatible_output_path(args.input, args.output)
 
