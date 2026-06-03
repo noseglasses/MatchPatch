@@ -38,6 +38,7 @@ from PySide6.QtGui import (
     QPalette,
     QPen,
     QPixmap,
+    QResizeEvent,
     QSyntaxHighlighter,
     Qt,
     QTextCharFormat,
@@ -61,8 +62,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSplitter,
     QSpinBox,
+    QSplitter,
     QStackedWidget,
     QStyle,
     QStyledItemDelegate,
@@ -83,8 +84,12 @@ from matchpatch.devices.base import PatchFileAdjustments
 from matchpatch.gui.device_panels import HelixSettingsPanel
 from matchpatch.gui.dialogs import ASSETS_DIR, AboutDialog, HelpDialog
 from matchpatch.gui.snapshot_header import SnapshotHeader
-from matchpatch.gui.worker import NormalizationWorker
-from matchpatch.normalize import apply_config, parse_args, request_from_args
+from matchpatch.gui.worker import HardwareCheckWorker, NormalizationWorker
+from matchpatch.normalize import (
+    apply_config,
+    parse_args,
+    request_from_args,
+)
 from matchpatch.progress import ProgressEvent
 from matchpatch.workflow import (
     ImportRequest,
@@ -216,6 +221,7 @@ class MainWindow(QMainWindow):
         screen = QApplication.primaryScreen()
         available_height = screen.availableGeometry().height() if screen is not None else 800
         self.resize(820, min(760, max(560, available_height - 100)))
+        self.hardware_check_worker: HardwareCheckWorker | None = None
         self.worker: NormalizationWorker | None = None
         self.completed_request: NormalizationRequest | None = None
         self.completed_result: NormalizationResult | None = None
@@ -243,6 +249,7 @@ class MainWindow(QMainWindow):
         scroll.setWidget(content)
         self.setCentralWidget(scroll)
         self._build_footer()
+        self._build_hardware_check_overlay()
         layout = QVBoxLayout(content)
         layout.addWidget(self._build_preset_advanced_splitter(), 1)
         layout.addWidget(self._build_progress())
@@ -253,6 +260,57 @@ class MainWindow(QMainWindow):
         self.load_defaults()
         self._refresh_file_actions()
         QTimer.singleShot(0, self._resize_to_initial_content)
+
+    def _build_hardware_check_overlay(self) -> None:
+        overlay = QWidget(self)
+        overlay.setObjectName("hardwareCheckOverlay")
+        overlay.setAutoFillBackground(True)
+        overlay.setStyleSheet(
+            "QWidget#hardwareCheckOverlay {"
+            "background-color: rgba(15, 23, 42, 170);"
+            "}"
+            "QWidget#hardwareCheckPanel {"
+            "background: #ffffff;"
+            "border: 1px solid #cbd5e1;"
+            "border-radius: 6px;"
+            "}"
+            "QLabel#hardwareCheckTitle {"
+            "font-weight: 600;"
+            "color: #0f172a;"
+            "}"
+        )
+        overlay.hide()
+
+        outer = QVBoxLayout(overlay)
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.addStretch()
+
+        panel = QWidget(overlay)
+        panel.setObjectName("hardwareCheckPanel")
+        panel.setFixedWidth(340)
+        panel.setMinimumHeight(150)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(20, 20, 20, 20)
+        panel_layout.setSpacing(12)
+
+        title = QLabel("Checking backend availability...")
+        title.setObjectName("hardwareCheckTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        detail = QLabel("Looking for a suitable audio processor and MIDI output.")
+        detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        detail.setWordWrap(True)
+        progress = QProgressBar()
+        progress.setRange(0, 0)
+        progress.setTextVisible(False)
+        progress.setFixedHeight(10)
+
+        panel_layout.addWidget(title)
+        panel_layout.addWidget(detail)
+        panel_layout.addWidget(progress)
+        outer.addWidget(panel, 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addStretch()
+
+        self.hardware_check_overlay = overlay
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("File", self)
@@ -1241,6 +1299,17 @@ class MainWindow(QMainWindow):
         try:
             args = apply_config(parse_args(self._build_argv()))
             request = replace(request_from_args(args), defer_export=True)
+            if request.backend == "hardware":
+                self._start_hardware_check(request)
+                return
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return
+
+        self._start_normalization_request(request)
+
+    def _start_normalization_request(self, request: NormalizationRequest) -> None:
+        try:
             if not self._confirm_automation_overwrites(request):
                 return
         except Exception as exc:  # noqa: BLE001
@@ -1275,6 +1344,60 @@ class MainWindow(QMainWindow):
         self.worker.finished.connect(self.worker_finished)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+
+    def _start_hardware_check(self, request: NormalizationRequest) -> None:
+        if self.hardware_check_worker is not None:
+            return
+
+        self.start_button.setEnabled(False)
+        self._show_hardware_check_overlay()
+        self._set_phase("starting")
+        self._log("Checking backend availability", "info")
+        self.hardware_check_worker = HardwareCheckWorker(request, self)
+        self.hardware_check_worker.completed.connect(
+            lambda checked_request=request: self._hardware_check_completed(checked_request)
+        )
+        self.hardware_check_worker.failed.connect(self._hardware_check_failed)
+        self.hardware_check_worker.finished.connect(self._hardware_check_finished)
+        self.hardware_check_worker.finished.connect(self.hardware_check_worker.deleteLater)
+        self.hardware_check_worker.start()
+
+    def _hardware_check_completed(self, request: NormalizationRequest) -> None:
+        self._hide_hardware_check_overlay()
+        self.start_button.setEnabled(True)
+        self._log("Backend availability check completed", "success")
+        self._start_normalization_request(request)
+
+    def _hardware_check_failed(self, detail: str) -> None:
+        self._hide_hardware_check_overlay()
+        self.start_button.setEnabled(True)
+        self._set_phase("ready")
+        message = "No suitable device connected."
+        detail = detail.strip()
+        self._log(f"{message} {detail}".strip(), "error")
+        QMessageBox.critical(
+            self,
+            "MatchPatch error",
+            f"{message}\n\nConnect a compatible audio processor and try again.",
+        )
+
+    def _hardware_check_finished(self) -> None:
+        self.hardware_check_worker = None
+
+    def _show_hardware_check_overlay(self) -> None:
+        self._position_hardware_check_overlay()
+        self.hardware_check_overlay.show()
+        self.hardware_check_overlay.raise_()
+
+    def _hide_hardware_check_overlay(self) -> None:
+        self.hardware_check_overlay.hide()
+
+    def _position_hardware_check_overlay(self) -> None:
+        central = self.centralWidget()
+        if central is None:
+            self.hardware_check_overlay.setGeometry(self.rect())
+        else:
+            self.hardware_check_overlay.setGeometry(central.geometry())
 
     def _confirm_automation_overwrites(self, request: NormalizationRequest) -> bool:
         if not getattr(request, "automation", False):
@@ -1637,6 +1760,9 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self.hardware_check_worker is not None:
+            event.ignore()
+            return
         if self._preset_table_has_unsaved_changes() and not self._confirm_discard_preset_table_changes():
             event.ignore()
             return
@@ -1650,6 +1776,11 @@ class MainWindow(QMainWindow):
         self._discard_completed_export()
         super().closeEvent(event)
         QApplication.quit()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "hardware_check_overlay") and self.hardware_check_overlay.isVisible():
+            self._position_hardware_check_overlay()
 
     def _base_argv(self, input_path: str) -> list[str]:
         argv = [

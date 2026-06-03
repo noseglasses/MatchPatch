@@ -1770,6 +1770,63 @@ def test_worker_import_confirmation_blocks_until_answered(app) -> None:
     assert answers == [True]
 
 
+def test_hardware_normalization_checks_device_before_starting(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(backend="hardware")
+    popups = []
+    checks = []
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(
+        gui_worker,
+        "check_windows_hardware",
+        lambda checked_request: checks.append(checked_request)
+        or (_ for _ in ()).throw(RuntimeError("no audio device")),
+    )
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
+
+    window.start_normalization()
+
+    for _ in range(100):
+        app.processEvents()
+        if popups and window.hardware_check_worker is None:
+            break
+        time.sleep(0.01)
+
+    assert len(checks) == 1
+    assert checks[0].backend == "hardware"
+    assert checks[0].defer_export
+    assert len(popups) == 1
+    assert popups[0][1] == "MatchPatch error"
+    assert "No suitable device connected" in popups[0][2]
+    assert window.worker is None
+    assert window.hardware_check_worker is None
+    assert window.hardware_check_overlay.isHidden()
+
+    window.close()
+
+
+def test_loopback_normalization_skips_hardware_check(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(backend="loopback")
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(
+        gui_worker,
+        "check_windows_hardware",
+        lambda request: (_ for _ in ()).throw(AssertionError("unexpected hardware check")),
+    )
+    monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
+
+    window.start_normalization()
+
+    assert window.worker is not None
+    window.worker_finished()
+    window.close()
+
+
 def test_worker_thread_exits_without_processing_gui_events(monkeypatch, app) -> None:
     window = MainWindow()
     request = _request()

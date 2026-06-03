@@ -261,6 +261,57 @@ def run_windows_analysis(
     _run_progress_command(command, args.timeout, on_progress, cancel_requested)
 
 
+def check_windows_hardware(args: argparse.Namespace | NormalizationRequest) -> None:
+    windows_python = Path(args.windows_python).resolve()
+
+    if not windows_python.exists():
+        raise RuntimeError(
+            "Native Windows MatchPatch environment is missing. "
+            "Run scripts/sync-windows-from-wsl.sh first."
+        )
+
+    command: list[object] = [
+        windows_python,
+        "-m",
+        "matchpatch.measure",
+        "check-hardware",
+        "--device",
+        args.device,
+    ]
+
+    optional_values = {
+        "--audio-device": args.audio_device,
+        "--steering-output": args.steering_output,
+        "--steering-channel": args.steering_channel,
+        "--sample-rate": args.sample_rate,
+        "--input-mapping": args.input_mapping,
+        "--output-mapping": args.output_mapping,
+        "--blocksize": getattr(args, "blocksize", None),
+        "--preset-wait": getattr(args, "preset_wait", None),
+        "--snapshot-wait": getattr(args, "snapshot_wait", None),
+        "--measurement-wait": getattr(args, "measurement_wait", None),
+    }
+
+    for option, value in optional_values.items():
+        if value is not None:
+            command.extend([option, value])
+
+    try:
+        subprocess.run(
+            [str(arg) for arg in command],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=args.timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError("Timed out checking native Windows hardware") from exc
+    except subprocess.CalledProcessError as exc:
+        message = (exc.stderr or exc.stdout or "").strip()
+        raise RuntimeError(message or "Native Windows hardware check failed") from exc
+
+
 def _run_progress_command(
     command: list[object],
     timeout: float | None,

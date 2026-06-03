@@ -91,6 +91,28 @@ def test_prepare_audio_config_checks_settings_and_record_uses_resolved_device(mo
     assert prepared.device == 2
 
 
+def test_validate_audio_device_available_checks_channel_counts(monkeypatch) -> None:
+    devices = [
+        {
+            "name": "Helix ASIO",
+            "hostapi": 0,
+            "max_input_channels": 2,
+            "max_output_channels": 4,
+        }
+    ]
+    sd = SimpleNamespace(
+        query_devices=lambda index=None: devices if index is None else devices[index],
+        query_hostapis=lambda index: {"name": "ASIO"},
+    )
+    audio = load_audio(monkeypatch, sd)
+
+    config = audio.AudioConfig("helix", 48000, (1, 2), (3, 4))
+    assert audio.validate_audio_device_available(config).device == 0
+
+    with pytest.raises(ValueError, match="output channels"):
+        audio.validate_audio_device_available(audio.AudioConfig("helix", 48000, (1, 2), (3, 5)))
+
+
 def test_record_processed_audio_pads_and_trims_fixed_latency(monkeypatch) -> None:
     playback = []
     recorded = np.arange(16, dtype=np.float32)[:, np.newaxis]

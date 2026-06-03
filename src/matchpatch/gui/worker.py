@@ -6,8 +6,25 @@ import threading
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from matchpatch.normalize import run_windows_analysis
+from matchpatch.normalize import check_windows_hardware, run_windows_analysis
 from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_presets
+
+
+class HardwareCheckWorker(QThread):
+    completed = Signal()
+    failed = Signal(str)
+
+    def __init__(self, request: NormalizationRequest, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.request = request
+
+    def run(self) -> None:
+        try:
+            check_windows_hardware(self.request)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+        else:
+            self.completed.emit()
 
 
 class NormalizationWorker(QThread):

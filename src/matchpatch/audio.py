@@ -75,6 +75,31 @@ def prepare_audio_config(config: AudioConfig) -> AudioConfig:
     return replace(config, device=device)
 
 
+def validate_audio_device_available(config: AudioConfig) -> AudioConfig:
+    """Quickly validate that a matching audio device with enough channels is present."""
+    device = resolve_audio_device(config.device)
+    if device is None:
+        return replace(config, device=device)
+
+    device_info = sd.query_devices(device)
+    input_channels = int(device_info.get("max_input_channels", 0))
+    output_channels = int(device_info.get("max_output_channels", 0))
+
+    if input_channels < max(config.input_mapping):
+        raise ValueError(
+            f"Audio device {device_info['name']!r} has {input_channels} input channels; "
+            f"need channel {max(config.input_mapping)}"
+        )
+
+    if output_channels < max(config.output_mapping):
+        raise ValueError(
+            f"Audio device {device_info['name']!r} has {output_channels} output channels; "
+            f"need channel {max(config.output_mapping)}"
+        )
+
+    return replace(config, device=device)
+
+
 def record_processed_audio(
     reference_audio: np.ndarray,
     config: AudioConfig,

@@ -508,6 +508,33 @@ def measure(args: argparse.Namespace) -> None:
         )
 
 
+def check_hardware(args: argparse.Namespace) -> None:
+    """Validate that configured processor audio and steering endpoints are present."""
+    profile = get_device_profile(args.device)
+
+    from matchpatch.audio import validate_audio_device_available
+
+    validate_audio_device_available(resolve_audio_config(args, profile))
+    steering_options = resolve_steering_options(args, profile)
+    _validate_steering_output_available(steering_options)
+
+
+def _validate_steering_output_available(steering_options: SteeringOptions) -> None:
+    import mido
+
+    names = mido.get_output_names()
+    query = steering_options.output
+    matches = (
+        names if query is None else [name for name in names if query.casefold() in name.casefold()]
+    )
+
+    if len(matches) != 1:
+        raise ValueError(
+            f"MIDI output query {query!r} matched {len(matches)} ports; "
+            "configure a unique steering output"
+        )
+
+
 def list_devices() -> None:
     from matchpatch.audio import sd
 
@@ -560,7 +587,10 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     profile = get_device_profile(args.device)
     device_audio = ("devices", args.device, "audio")
     device_steering = ("devices", args.device, "steering")
-    args.backend = args.backend or config_value(config, "normalize", "backend", default="hardware")
+    args.backend = (
+        getattr(args, "backend", None)
+        or config_value(config, "normalize", "backend", default="hardware")
+    )
     args.audio_device = (
         args.audio_device
         if args.audio_device is not None
@@ -612,23 +642,23 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
         else config_value(config, *device_steering, "measurement_wait_seconds")
     )
     args.pre_roll = (
-        args.pre_roll
-        if args.pre_roll is not None
+        getattr(args, "pre_roll", None)
+        if getattr(args, "pre_roll", None) is not None
         else config_value(config, "analysis", "pre_roll_seconds", default=1.0)
     )
     args.post_roll = (
-        args.post_roll
-        if args.post_roll is not None
+        getattr(args, "post_roll", None)
+        if getattr(args, "post_roll", None) is not None
         else config_value(config, "analysis", "post_roll_seconds", default=1.0)
     )
     args.round_trip_latency = (
-        args.round_trip_latency
-        if args.round_trip_latency is not None
+        getattr(args, "round_trip_latency", None)
+        if getattr(args, "round_trip_latency", None) is not None
         else config_value(config, "analysis", "round_trip_latency_seconds", default=0.02)
     )
     args.snapshot_count = (
-        args.snapshot_count
-        if args.snapshot_count is not None
+        getattr(args, "snapshot_count", None)
+        if getattr(args, "snapshot_count", None) is not None
         else config_value(config, "policy", "measured_snapshots")
     )
 
@@ -637,18 +667,18 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
 
     args.analysis_options = AnalysisOptions(
         window_seconds=(
-            args.analysis_window
-            if args.analysis_window is not None
+            getattr(args, "analysis_window", None)
+            if getattr(args, "analysis_window", None) is not None
             else config_value(config, "analysis", "window_seconds", default=3.0)
         ),
         interval_seconds=(
-            args.analysis_interval
-            if args.analysis_interval is not None
+            getattr(args, "analysis_interval", None)
+            if getattr(args, "analysis_interval", None) is not None
             else config_value(config, "analysis", "interval_seconds", default=0.1)
         ),
         minimum_valid_lufs=(
-            args.minimum_valid_lufs
-            if args.minimum_valid_lufs is not None
+            getattr(args, "minimum_valid_lufs", None)
+            if getattr(args, "minimum_valid_lufs", None) is not None
             else config_value(config, "analysis", "minimum_valid_lufs", default=-100.0)
         ),
     )
@@ -659,6 +689,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("devices", help="List profiles, audio devices, and MIDI outputs")
+
+    check_parser = subparsers.add_parser(
+        "check-hardware",
+        help="Validate configured processor audio and MIDI endpoints",
+    )
+    check_parser.add_argument("--device", required=True)
+    check_parser.add_argument("--config", help="TOML configuration file")
+    add_hardware_arguments(check_parser)
 
     measure_parser = subparsers.add_parser(
         "measure",
@@ -691,7 +729,7 @@ def parse_args() -> argparse.Namespace:
     add_hardware_arguments(measure_parser)
 
     args = parser.parse_args()
-    return apply_config(args) if args.command == "measure" else args
+    return apply_config(args) if args.command in {"check-hardware", "measure"} else args
 
 
 def main() -> None:
@@ -699,6 +737,14 @@ def main() -> None:
 
     if args.command == "devices":
         list_devices()
+    elif args.command == "check-hardware":
+        try:
+            check_hardware(args)
+        except Exception as exc:  # noqa: BLE001
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from None
+        else:
+            print("Hardware available")
     else:
         if args.backend == "helix":
             args.backend = "hardware"

@@ -281,6 +281,59 @@ def test_run_windows_analysis_reports_missing_environment(tmp_path) -> None:
         normalize.run_windows_analysis(args, [1], tmp_path / "results.csv")
 
 
+def test_check_windows_hardware_builds_worker_command(tmp_path, monkeypatch) -> None:
+    windows_python = tmp_path / "python.exe"
+    windows_python.touch()
+    args = argparse.Namespace(
+        windows_python=str(windows_python),
+        device="helix",
+        audio_device="Helix",
+        steering_output="Helix MIDI",
+        steering_channel=2,
+        sample_rate=48000,
+        input_mapping="1,2",
+        output_mapping="3,4",
+        blocksize=128,
+        preset_wait=None,
+        snapshot_wait=None,
+        measurement_wait=None,
+        timeout=5,
+    )
+    calls = []
+    monkeypatch.setattr(
+        normalize.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs))
+        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+    )
+
+    normalize.check_windows_hardware(args)
+
+    command, kwargs = calls[0]
+    assert command[:5] == [
+        str(windows_python.resolve()),
+        "-m",
+        "matchpatch.measure",
+        "check-hardware",
+        "--device",
+    ]
+    assert command[command.index("--audio-device") : command.index("--audio-device") + 2] == [
+        "--audio-device",
+        "Helix",
+    ]
+    assert command[command.index("--steering-output") : command.index("--steering-output") + 2] == [
+        "--steering-output",
+        "Helix MIDI",
+    ]
+    assert command[command.index("--output-mapping") : command.index("--output-mapping") + 2] == [
+        "--output-mapping",
+        "3,4",
+    ]
+    assert kwargs["timeout"] == 5
+    assert kwargs["stdout"] == subprocess.PIPE
+    assert kwargs["stderr"] == subprocess.PIPE
+
+
 def test_run_windows_analysis_translates_timeout(tmp_path, monkeypatch) -> None:
     windows_python = tmp_path / "python.exe"
     windows_python.touch()

@@ -23,6 +23,7 @@ from matchpatch.measure import (
     HardwareBackend,
     LoopbackBackend,
     SimulatedHardwareBackend,
+    check_hardware,
     csv_fields,
     list_devices,
     load_reference_audio,
@@ -491,6 +492,33 @@ def test_measure_configures_hardware_backend(monkeypatch) -> None:
     ]
 
 
+def test_check_hardware_validates_audio_and_midi_presence(monkeypatch) -> None:
+    calls = []
+
+    profile = get_device_profile("helix")
+    monkeypatch.setattr("matchpatch.measure.get_device_profile", lambda device: profile)
+    monkeypatch.setitem(
+        sys.modules,
+        "matchpatch.audio",
+        SimpleNamespace(
+            AudioConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            validate_audio_device_available=lambda config: calls.append(
+                ("validated", config.device)
+            )
+            or config,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "mido",
+        SimpleNamespace(get_output_names=lambda: calls.append("midi_listed") or ["Helix MIDI"]),
+    )
+
+    check_hardware(worker_args(backend="hardware", audio_device="processor"))
+
+    assert calls == [("validated", "processor"), "midi_listed"]
+
+
 def fake_sounddevice():
     apis = [{"name": "ASIO"}]
     devices = [
@@ -674,8 +702,14 @@ def test_worker_parse_args_rejects_snapshot_count_above_device_limit(monkeypatch
 def test_worker_main_dispatches_devices_and_legacy_helix_backend(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr("matchpatch.measure.list_devices", lambda: calls.append("devices"))
+    monkeypatch.setattr("matchpatch.measure.check_hardware", lambda args: calls.append("check"))
     monkeypatch.setattr("matchpatch.measure.measure", lambda args: calls.append(args.backend))
     monkeypatch.setattr("matchpatch.measure.parse_args", lambda: SimpleNamespace(command="devices"))
+    main()
+    monkeypatch.setattr(
+        "matchpatch.measure.parse_args",
+        lambda: SimpleNamespace(command="check-hardware"),
+    )
     main()
     monkeypatch.setattr(
         "matchpatch.measure.parse_args",
@@ -693,4 +727,23 @@ def test_worker_main_dispatches_devices_and_legacy_helix_backend(monkeypatch) ->
     )
     main()
 
-    assert calls == ["devices", "hardware", "loopback", "simulated"]
+    assert calls == ["devices", "check", "hardware", "loopback", "simulated"]
+
+
+def test_check_hardware_main_reports_error_without_traceback(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "matchpatch.measure.parse_args",
+        lambda: SimpleNamespace(command="check-hardware"),
+    )
+    monkeypatch.setattr(
+        "matchpatch.measure.check_hardware",
+        lambda args: (_ for _ in ()).throw(ValueError("No audio device matched 'Helix'")),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.err == "No audio device matched 'Helix'\n"
+    assert "Traceback" not in captured.err
