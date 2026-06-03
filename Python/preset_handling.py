@@ -615,6 +615,7 @@ def load_lufs_analysis_file(
     crest_factor_reference_db=CREST_FACTOR_REFERENCE_DB,
     crest_factor_correction_ratio=CREST_FACTOR_CORRECTION_RATIO,
     max_crest_factor_correction_db=MAX_CREST_FACTOR_CORRECTION_DB,
+    custom_adjustments=None,
 ):
 
     gain_deltas = {}
@@ -642,6 +643,11 @@ def load_lufs_analysis_file(
                     lufs_value = float(row[lufs_key])
                     crest_factor_db = float(row[crest_factor_key])
 
+                    custom_adjustment = 0.0
+                    if custom_adjustments is not None:
+                        custom_adjustment = custom_adjustments.get(helix_preset, {}).get(
+                            i - 1, 0.0
+                        )
                     lufs_delta = target_lufs - lufs_value
                     crest_factor_correction = get_crest_factor_correction(
                         crest_factor_db,
@@ -649,7 +655,8 @@ def load_lufs_analysis_file(
                         crest_factor_correction_ratio,
                         max_crest_factor_correction_db,
                     )
-                    gain_delta = round(lufs_delta - crest_factor_correction, 1)
+                    normal_gain_delta = round(lufs_delta - crest_factor_correction, 1)
+                    gain_delta = normal_gain_delta + custom_adjustment
 
                 else:
                     raise ValueError(f"Missing {lufs_key} or {crest_factor_key} for {helix_preset}")
@@ -659,6 +666,57 @@ def load_lufs_analysis_file(
             gain_deltas[helix_preset] = snapshot_gain_deltas
 
     return gain_deltas
+
+
+def load_custom_adjustments_file(filename, snapshot_count=4):
+    adjustments = {}
+    expected_columns = snapshot_count + 1
+
+    with open(filename, "r", encoding="utf-8-sig", newline="") as f:
+        sample = f.read(4096)
+        f.seek(0)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",|")
+        except csv.Error:
+            dialect = csv.excel
+        reader = csv.reader(f, dialect)
+
+        for line_number, row in enumerate(reader, start=1):
+            if not row or all(not cell.strip() for cell in row):
+                continue
+            if len(row) != expected_columns:
+                raise ValueError(
+                    f"Line {line_number}: expected {expected_columns} columns, got {len(row)}"
+                )
+
+            helix_preset = row[0].strip().upper()
+            if not helix_preset:
+                raise ValueError(f"Line {line_number}: preset ID is empty")
+            if helix_preset in adjustments:
+                raise ValueError(f"Line {line_number}: duplicate preset ID {helix_preset!r}")
+
+            snapshot_adjustments = {}
+            for snapshot_index, cell in enumerate(row[1:]):
+                text = cell.strip()
+                if not text:
+                    continue
+                try:
+                    value = float(text)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Line {line_number}: snapshot {snapshot_index + 1} "
+                        f"custom adjustment is not a floating point number: {text!r}"
+                    ) from exc
+                if not math.isfinite(value):
+                    raise ValueError(
+                        f"Line {line_number}: snapshot {snapshot_index + 1} "
+                        f"custom adjustment is not finite: {text!r}"
+                    )
+                snapshot_adjustments[snapshot_index] = value
+
+            adjustments[helix_preset] = snapshot_adjustments
+
+    return adjustments
 
 
 def normalize_single_preset_gain_deltas(gain_deltas):
@@ -977,7 +1035,7 @@ def adjust_snapshot_gains(
 
             current_gain = get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain)
 
-            delta_text = f"Delta: {gain_delta:+.1f} dB"
+            delta_text = f"Delta: {gain_delta:+g} dB"
 
             if abs(gain_delta) <= gain_deadband_db:
                 print(
@@ -1308,6 +1366,10 @@ def main():
     parser.add_argument(
         "--manual-adjustments", help="GUI preset, snapshot, and gain overrides JSON"
     )
+    parser.add_argument(
+        "--custom-adjustments-file",
+        help="CSV of per-preset snapshot target loudness bumps in dB",
+    )
 
     parser.add_argument(
         "--ignore-bad-lufs",
@@ -1454,6 +1516,13 @@ def main():
             if not args.lufs_analysis_file:
                 raise ValueError("Adjust gain mode requires -g lufs_analysis.csv")
 
+            custom_adjustments = None
+            if args.custom_adjustments_file:
+                custom_adjustments = load_custom_adjustments_file(
+                    args.custom_adjustments_file,
+                    args.snapshot_count,
+                )
+
             gain_deltas = load_lufs_analysis_file(
                 args.lufs_analysis_file,
                 args.target_lufs,
@@ -1461,6 +1530,7 @@ def main():
                 args.crest_factor_reference_db,
                 args.crest_factor_correction_ratio,
                 args.max_crest_factor_correction_db,
+                custom_adjustments,
             )
 
             if input_filetype == "hlx":

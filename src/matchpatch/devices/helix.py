@@ -181,6 +181,7 @@ class HelixPatchFileHandler(PatchFileHandler):
         ignore_bad_lufs: bool,
         target_lufs: float,
         policy: NormalizationPolicy = NormalizationPolicy(),
+        custom_adjustments_path: Path | None = None,
         adjustments: PatchFileAdjustments | None = None,
     ) -> None:
         legacy_csv_path = self._create_legacy_analysis_csv(csv_path)
@@ -215,6 +216,8 @@ class HelixPatchFileHandler(PatchFileHandler):
             ]
 
             args.append("--ignore-bad-lufs")
+            if custom_adjustments_path is not None:
+                args.extend(["--custom-adjustments-file", custom_adjustments_path])
             if adjustments_path is not None:
                 args.extend(["--manual-adjustments", adjustments_path])
 

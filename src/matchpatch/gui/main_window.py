@@ -79,6 +79,7 @@ from PySide6.QtWidgets import (
 )
 
 from matchpatch.config import config_value, load_config
+from matchpatch.custom_adjustments import CustomAdjustments, load_custom_adjustments_file
 from matchpatch.devices import get_device_profile, list_device_profiles
 from matchpatch.devices.base import PatchFileAdjustments
 from matchpatch.gui.device_panels import HelixSettingsPanel
@@ -116,6 +117,8 @@ HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
 HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
 PRESET_TABLE_CSV_DELIMITER = "|"
 PRESET_TABLE_ATTENTION_ROLE = Qt.ItemDataRole.UserRole + 1
+ADJUSTMENT_VALUE_ROLE = Qt.ItemDataRole.UserRole + 2
+CUSTOM_ADJUSTMENT_COLOR = "#2563eb"
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
 PROCESSING_DOT_RED = "#dc2626"
@@ -235,6 +238,7 @@ class MainWindow(QMainWindow):
         self._preset_load_discard_confirmed = False
         self._manual_cell_editor: QLineEdit | None = None
         self._manual_cell_target: tuple[int, int] | None = None
+        self._custom_adjustments: CustomAdjustments = {}
         self.log_entries: list[tuple[str, str, str]] = []
         self._processing_dot_green = False
 
@@ -764,6 +768,22 @@ class MainWindow(QMainWindow):
             _label("Config file", "Optional TOML file providing saved MatchPatch defaults."),
             _path_row(self.config_path, config_browse),
         )
+        self.custom_adjustments_path = QLineEdit()
+        custom_adjustments_browse = QPushButton("Browse")
+        custom_adjustments_browse.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
+        )
+        custom_adjustments_browse.setToolTip(
+            "Choose an optional CSV of per-preset snapshot loudness target bumps."
+        )
+        custom_adjustments_browse.clicked.connect(self.browse_custom_adjustments)
+        form.addRow(
+            _label(
+                "Custom adjustments",
+                "Optional CSV mapping preset IDs to per-snapshot target loudness bumps.",
+            ),
+            _path_row(self.custom_adjustments_path, custom_adjustments_browse),
+        )
         self.reference_di = QLineEdit()
         reference_browse = QPushButton("Browse")
         reference_browse.setIcon(
@@ -1048,7 +1068,7 @@ class MainWindow(QMainWindow):
                 )
                 return None
             try:
-                adjustment = float(adjustment_text)
+                adjustment = float(adjustment_text.split(" ", 1)[0])
             except ValueError:
                 errors.append(
                     f"Line {line_number}: snapshot {snapshot_index + 1} adjustment "
@@ -1113,10 +1133,24 @@ class MainWindow(QMainWindow):
         for column in range(3, self.preset_table.columnCount(), 2):
             name = self.preset_table.item(row, column)
             adjustment = self.preset_table.item(row, column + 1)
+            adjustment_value = ""
+            if adjustment is not None:
+                if adjustment.text() == "⚠️":
+                    adjustment_value = adjustment.text()
+                else:
+                    stored_value = adjustment.data(ADJUSTMENT_VALUE_ROLE)
+                    if isinstance(stored_value, (int, float)) and not isinstance(
+                        stored_value, bool
+                    ):
+                        adjustment_value = _format_adjustment(float(stored_value))
+                    else:
+                        adjustment_value = _format_adjustment(
+                            _parse_adjustment_display_text(adjustment.text())
+                        )
             values.extend(
                 [
                     name.text() if name is not None else "",
-                    adjustment.text() if adjustment is not None else "",
+                    adjustment_value,
                 ]
             )
         return values
@@ -1144,6 +1178,21 @@ class MainWindow(QMainWindow):
         if path:
             self.config_path.setText(path)
             self.load_defaults()
+
+    def browse_custom_adjustments(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose custom adjustments CSV",
+            filter="CSV (*.csv)",
+        )
+        if not path:
+            return
+        try:
+            load_custom_adjustments_file(Path(path), self.snapshot_count_input.value())
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(f"Could not parse custom adjustments CSV: {exc}")
+            return
+        self.custom_adjustments_path.setText(path)
 
     def device_changed(self) -> None:
         name = self.device.currentData()
@@ -1176,6 +1225,9 @@ class MainWindow(QMainWindow):
 
         self.backend.setCurrentText(args.backend)
         self.reference_di.setText(str(args.reference_di))
+        self.custom_adjustments_path.setText(
+            str(args.custom_adjustments_file) if args.custom_adjustments_file else ""
+        )
         self.target_lufs.setText(str(args.target_lufs))
         self.solo_gain_bump_db.setText(str(args.policy.solo_gain_bump_db))
         self.solo_regex.setText(args.policy.solo_regex)
@@ -1276,6 +1328,14 @@ class MainWindow(QMainWindow):
         if hasattr(self, "save_csv_button"):
             self.save_csv_button.setEnabled(enabled)
 
+    def _load_custom_adjustments(self, request: NormalizationRequest) -> CustomAdjustments:
+        if request.custom_adjustments_path is None:
+            return {}
+        return load_custom_adjustments_file(
+            request.custom_adjustments_path,
+            request.policy.snapshot_count,
+        )
+
     def _populate_single_preset_table(self, path: Path, assignment: object | None = None) -> None:
         preset_name = str(getattr(assignment, "name", "") or path.stem)
         snapshot_names = getattr(assignment, "snapshot_names", ())
@@ -1320,6 +1380,7 @@ class MainWindow(QMainWindow):
         try:
             args = apply_config(parse_args(self._build_argv()))
             request = replace(request_from_args(args), defer_export=True)
+            self._custom_adjustments = self._load_custom_adjustments(request)
             if request.backend == "hardware":
                 self._start_hardware_check(request)
                 return
@@ -1354,6 +1415,11 @@ class MainWindow(QMainWindow):
         self._set_phase("starting")
         self._log("Normalization started", "info")
         self._log(f"Backend: {getattr(request, 'backend', 'unknown')}", "info")
+        if self._custom_adjustments:
+            self._log(
+                f"Custom adjustments loaded: {request.custom_adjustments_path}",
+                "info",
+            )
         self._start_busy_phase()
         self.completed_request = request
         self.worker = NormalizationWorker(request, self)
@@ -1815,6 +1881,13 @@ class MainWindow(QMainWindow):
         ]
         if self.config_path.text().strip():
             argv.extend(["--config", self.config_path.text().strip()])
+        if (
+            hasattr(self, "custom_adjustments_path")
+            and self.custom_adjustments_path.text().strip()
+        ):
+            argv.extend(
+                ["--custom-adjustments-file", self.custom_adjustments_path.text().strip()]
+            )
         return argv
 
     def _build_argv(self) -> list[str]:
@@ -2127,12 +2200,18 @@ class MainWindow(QMainWindow):
                 if adjustment_item is not None:
                     if adjustment_item.text() == "⚠️":
                         continue
-                    try:
-                        value = float(adjustment_item.text())
-                    except ValueError as exc:
-                        raise ValueError(
-                            f"Invalid gain adjustment: {adjustment_item.text()!r}"
-                        ) from exc
+                    stored_value = adjustment_item.data(ADJUSTMENT_VALUE_ROLE)
+                    if isinstance(stored_value, (int, float)) and not isinstance(
+                        stored_value, bool
+                    ):
+                        value = float(stored_value)
+                    else:
+                        try:
+                            value = _parse_adjustment_display_text(adjustment_item.text())
+                        except ValueError as exc:
+                            raise ValueError(
+                                f"Invalid gain adjustment: {adjustment_item.text()!r}"
+                            ) from exc
                     if not math.isfinite(value):
                         raise ValueError(f"Invalid gain adjustment: {adjustment_item.text()!r}")
                     patch_gain_deltas[snapshot_index] = value
@@ -2193,6 +2272,7 @@ class MainWindow(QMainWindow):
             self._set_snapshot_name(name_item, label, is_solo)
         if match.re is GAIN_BAD_LUFS_PATTERN:
             adjustment_item.setText("⚠️")
+            adjustment_item.setData(ADJUSTMENT_VALUE_ROLE, None)
             adjustment_item.setToolTip("This snapshot produced an unusable LUFS measurement.")
             adjustment_item.setForeground(QBrush(QColor("#b45309")))
             font = adjustment_item.font()
@@ -2204,14 +2284,39 @@ class MainWindow(QMainWindow):
             self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
             return
 
-        adjustment = match["delta"]
+        actual_adjustment = float(match["delta"])
+        custom_adjustment = self._custom_adjustment_for_snapshot(
+            match["patch"],
+            snapshot_position,
+        )
+        display_adjustment = (
+            actual_adjustment - custom_adjustment
+            if custom_adjustment is not None
+            else actual_adjustment
+        )
         self._set_adjustment_value(
             adjustment_item,
-            adjustment,
-            float(match["delta"]),
+            _format_adjustment(display_adjustment)
+            if custom_adjustment is not None
+            else match["delta"],
+            actual_adjustment,
+            custom_adjustment,
+            display_adjustment if custom_adjustment is not None else None,
         )
         self._adjusted_presets.add(match["patch"])
         self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
+
+    def _custom_adjustment_for_snapshot(
+        self,
+        patch: str,
+        snapshot_index: int,
+    ) -> float | None:
+        preset_adjustments = self._custom_adjustments.get(patch)
+        if preset_adjustments is None and Path(self.input_path.text()).suffix.lower() == ".hlx":
+            preset_adjustments = self._custom_adjustments.get(self._single_preset_slot_text())
+        if preset_adjustments is None:
+            return None
+        return preset_adjustments.get(snapshot_index)
 
     def _configure_snapshot_columns(self, snapshot_count: int) -> None:
         self.snapshot_count = snapshot_count
@@ -2232,9 +2337,10 @@ class MainWindow(QMainWindow):
             self.preset_table.setColumnWidth(0, selection_width)
             self.preset_table.setColumnWidth(1, 52)
             self.preset_table.setColumnWidth(2, 120)
+            adjustment_width = self._adjustment_column_width()
             for column in range(3, len(labels), 2):
                 self.preset_table.setColumnWidth(column, 100)
-                self.preset_table.setColumnWidth(column + 1, 62)
+                self.preset_table.setColumnWidth(column + 1, adjustment_width)
             for column, tooltip in enumerate(
                 [
                     "Include this preset in normalization.",
@@ -2260,6 +2366,11 @@ class MainWindow(QMainWindow):
     def _snapshot_count_changed(self, snapshot_count: int) -> None:
         if hasattr(self, "preset_table"):
             self._configure_snapshot_columns(snapshot_count)
+
+    def _adjustment_column_width(self) -> int:
+        sample = "+12.5 (+12.5)"
+        padding = 18
+        return max(92, self.preset_table.fontMetrics().horizontalAdvance(sample) + padding)
 
     @contextmanager
     def _sorting_paused(self) -> Iterator[None]:
@@ -2491,18 +2602,50 @@ class MainWindow(QMainWindow):
         )
 
     @staticmethod
-    def _set_adjustment_value(item: QTableWidgetItem, text: str, value: float) -> None:
+    def _set_adjustment_value(
+        item: QTableWidgetItem,
+        text: str,
+        value: float,
+        custom_adjustment: float | None = None,
+        display_value: float | None = None,
+    ) -> None:
         table = item.tableWidget()
         signals_blocked = table.blockSignals(True) if table is not None else False
         try:
-            item.setText("0" if value == 0 else text)
-            item.setToolTip("")
+            if custom_adjustment is None and display_value is None:
+                display_value = value
+                display_text = "0" if value == 0 else str(text)
+            else:
+                display_value = value if display_value is None else display_value
+                display_text = _format_adjustment(display_value)
+            if custom_adjustment is not None:
+                display_text += f" ({_format_adjustment(custom_adjustment)})"
+            item.setText(display_text)
+            item.setData(ADJUSTMENT_VALUE_ROLE, value)
+            item.setToolTip(
+                f"Custom loudness adjustment: {_format_adjustment(custom_adjustment)}"
+                if custom_adjustment is not None
+                else ""
+            )
             font = item.font()
             font.setBold(False)
             font.setPointSize(max(QApplication.font().pointSize(), 9))
             item.setFont(font)
             color = "#15803d" if value > 0 else "#b91c1c" if value < 0 else None
             item.setForeground(QBrush(QColor(color)) if color is not None else QBrush())
+            if table is not None:
+                table.removeCellWidget(item.row(), item.column())
+                if custom_adjustment is not None:
+                    label = QLabel(
+                        f"{escape(_format_adjustment(display_value))} "
+                        f"<span style='color: {CUSTOM_ADJUSTMENT_COLOR};'>"
+                        f"({escape(_format_adjustment(custom_adjustment))})"
+                        f"</span>"
+                    )
+                    label.setContentsMargins(3, 0, 0, 0)
+                    label.setToolTip(item.toolTip())
+                    label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                    table.setCellWidget(item.row(), item.column(), label)
         finally:
             if table is not None:
                 table.blockSignals(signals_blocked)
@@ -2569,7 +2712,7 @@ class MainWindow(QMainWindow):
         target_lufs = self._target_lufs()
         self.current.clear()
         self.measured_loudness.reset_loudness(target_lufs)
-        waiting_text = f"waiting for signal (target {target_lufs:.1f} LUFS)"
+        waiting_text = f"Waiting for signal (target {target_lufs:.1f} LUFS)"
         self.measured_loudness_reading.setText(waiting_text)
 
     def _target_lufs(self) -> float:
@@ -2800,6 +2943,22 @@ def _loudness_bar_color(lufs: float, target_lufs: float) -> QColor:
         LOUDNESS_WARNING_RED,
         min((delta - LOUDNESS_YELLOW_DELTA) / (LOUDNESS_RED_DELTA - LOUDNESS_YELLOW_DELTA), 1.0),
     )
+
+
+def _format_adjustment(value: float) -> str:
+    return "0" if value == 0 else f"{value:+g}"
+
+
+def _parse_adjustment_display_text(text: str) -> float:
+    parts = text.strip().split(" ", 1)
+    value = float(parts[0])
+    if len(parts) == 1:
+        return value
+
+    custom_text = parts[1].strip()
+    if custom_text.startswith("(") and custom_text.endswith(")"):
+        return value + float(custom_text[1:-1])
+    return value
 
 
 def _interpolate_color(start: QColor, end: QColor, fraction: float) -> QColor:

@@ -117,9 +117,11 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.advanced_tabs.widget(0).isAncestorOf(window.backend)
     assert not window.advanced_tabs.widget(1).isAncestorOf(window.backend)
     assert window.advanced_tabs.widget(1).isAncestorOf(window.config_path)
+    assert window.advanced_tabs.widget(1).isAncestorOf(window.custom_adjustments_path)
     assert window.advanced_tabs.widget(1).isAncestorOf(window.reference_di)
     assert window.advanced_tabs.widget(1).isAncestorOf(window.keep_temp)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.config_path)
+    assert not window.advanced_tabs.widget(2).isAncestorOf(window.custom_adjustments_path)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.reference_di)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.keep_temp)
     assert window.advanced_tabs.widget(2).isAncestorOf(window.snapshot_count_input)
@@ -976,6 +978,36 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(monkeypa
     window.close()
 
 
+def test_custom_adjustment_is_shown_but_numeric_delta_is_exported(app) -> None:
+    window = MainWindow()
+    window.snapshot_count_input.setValue(2)
+    window.input_path.setText("input.hls")
+    window.preset_table.setRowCount(1)
+    window.preset_table.setItem(0, 0, QTableWidgetItem())
+    window.preset_table.item(0, 0).setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._custom_adjustments = {"02B": {0: 2.0}}
+
+    window.update_progress(
+        ProgressEvent("log", message="[GAIN] 02B Clean | 0.0 dB -> 3.5 dB (Delta: +3.5 dB)")
+    )
+
+    adjustment_item = window.preset_table.item(0, 4)
+    assert adjustment_item.text() == "+1.5 (+2)"
+    assert adjustment_item.toolTip() == "Custom loudness adjustment: +2"
+    custom_label = window.preset_table.cellWidget(0, 4)
+    assert isinstance(custom_label, QLabel)
+    assert "color: #2563eb" in custom_label.text()
+    assert "(+2)" in custom_label.text()
+    assert window._table_adjustments().gain_deltas["02B"][0] == 3.5
+    assert window._preset_table_csv_row(0)[3] == "+3.5"
+
+    window._reset_preset_table_modified()
+    window.close()
+
+
 def test_preset_table_csv_save_uses_pipe_delimiter(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     window.snapshot_count_input.setValue(2)
@@ -1231,6 +1263,9 @@ def test_gain_log_updates_preset_correction_columns(monkeypatch, app) -> None:
     assert window.preset_table.columnWidth(0) == window.style().pixelMetric(
         QStyle.PixelMetric.PM_IndicatorWidth
     ) + 2 * window.style().pixelMetric(QStyle.PixelMetric.PM_CheckBoxLabelSpacing)
+    assert window.preset_table.columnWidth(4) >= (
+        window.preset_table.fontMetrics().horizontalAdvance("+12.5 (+12.5)") + 18
+    )
     assert (
         window.preset_table.horizontalHeader().sectionResizeMode(0) == QHeaderView.ResizeMode.Fixed
     )

@@ -129,6 +129,7 @@ class PatchFileHandler(ABC):
         ignore_bad_lufs: bool,
         target_lufs: float,
         policy: NormalizationPolicy,
+        custom_adjustments_path: Path | None = None,
         adjustments: PatchFileAdjustments | None = None,
     ) -> None:
         """Apply measured gain adjustments to a patch file."""

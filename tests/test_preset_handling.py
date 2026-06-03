@@ -34,6 +34,36 @@ def test_lufs_error_sentinel_is_retained_per_snapshot(tmp_path) -> None:
     assert deltas == {"01A": {0: None, 1: 1.0}}
 
 
+def test_custom_adjustments_bump_snapshot_targets(tmp_path) -> None:
+    module = _load_legacy_module()
+    csv_path = tmp_path / "analysis.csv"
+    csv_path.write_text(
+        "HelixPreset,LUFS1,CrestFactor1,LUFS2,CrestFactor2\n01A,-17.0,12.0,-17.0,12.0\n",
+        encoding="utf-8",
+    )
+    adjustments_path = tmp_path / "custom.csv"
+    adjustments_path.write_text("01A|2.0|-1.0\n", encoding="utf-8")
+
+    custom_adjustments = module.load_custom_adjustments_file(adjustments_path, snapshot_count=2)
+    deltas = module.load_lufs_analysis_file(
+        csv_path,
+        snapshot_count=2,
+        custom_adjustments=custom_adjustments,
+    )
+
+    assert deltas == {"01A": {0: 3.0, 1: 0.0}}
+
+
+def test_custom_adjustments_accept_comma_separator(tmp_path) -> None:
+    module = _load_legacy_module()
+    adjustments_path = tmp_path / "custom.csv"
+    adjustments_path.write_text("01A,0.5,-2\n", encoding="utf-8")
+
+    assert module.load_custom_adjustments_file(adjustments_path, snapshot_count=2) == {
+        "01A": {0: 0.5, 1: -2.0}
+    }
+
+
 def test_assignment_extraction_includes_snapshot_names() -> None:
     module = _load_legacy_module()
     data = {

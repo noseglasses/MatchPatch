@@ -282,6 +282,31 @@ def test_apply_analysis_csv_passes_manual_adjustments_json(tmp_path, monkeypatch
     assert not seen["path"].exists()
 
 
+def test_apply_analysis_csv_passes_custom_adjustments_file(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    csv_path = tmp_path / "measurements.csv"
+    custom_path = tmp_path / "custom.csv"
+    csv_path.write_text("Preset,DevicePatch,LUFS1\n1,01A,-15.5\n", encoding="utf-8")
+    custom_path.write_text("01A,1.0\n", encoding="utf-8")
+    seen = {}
+
+    def fake_run(*args, capture=False):
+        seen["args"] = args
+        return subprocess.CompletedProcess([], 0)
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+    handler.apply_analysis_csv(
+        Path("set.hls"),
+        Path("adjusted.hls"),
+        csv_path,
+        True,
+        -16.0,
+        custom_adjustments_path=custom_path,
+    )
+
+    assert seen["args"][seen["args"].index("--custom-adjustments-file") + 1] == custom_path
+
+
 def test_apply_analysis_csv_always_tolerates_bad_lufs_and_cleans_up_on_failure(
     tmp_path, monkeypatch
 ) -> None:

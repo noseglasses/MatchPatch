@@ -121,6 +121,13 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
         or os.getenv("MATCHPATCH_REFERENCE_DI")
         or config_value(config, "normalize", "reference_di", default=str(DEFAULT_REFERENCE_DI))
     )
+    args.custom_adjustments_file = prefer(
+        args.custom_adjustments_file,
+        config,
+        "normalize",
+        "custom_adjustments_file",
+        default=config_value(config, "normalize", "custom_adjustments"),
+    )
     args.target_lufs = prefer(args.target_lufs, config, "normalize", "target_lufs", default=-16.0)
     args.timeout = prefer(args.timeout, config, "normalize", "timeout_seconds")
     args.ignore_bad_lufs = True
@@ -420,6 +427,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--reference-di",
     )
+    parser.add_argument("--custom-adjustments-file")
     parser.add_argument("--audio-device")
     parser.add_argument("--steering-output", "--midi-output")
     parser.add_argument("--steering-channel", "--midi-channel", type=int)
@@ -453,6 +461,9 @@ def request_from_args(args: argparse.Namespace) -> NormalizationRequest:
         backend=args.backend,
         windows_python=args.windows_python,
         reference_di=Path(args.reference_di),
+        custom_adjustments_path=(
+            Path(args.custom_adjustments_file) if args.custom_adjustments_file else None
+        ),
         audio_device=args.audio_device,
         sample_rate=args.sample_rate,
         input_mapping=args.input_mapping,

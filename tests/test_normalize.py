@@ -152,6 +152,7 @@ def test_apply_config_layers_cli_environment_and_toml(tmp_path, monkeypatch) -> 
 [normalize]
 backend = "hardware"
 reference_di = "configured.wav"
+custom_adjustments_file = "configured-custom.csv"
 target_lufs = -18.0
 timeout_seconds = 90
 ignore_bad_lufs = true
@@ -210,6 +211,7 @@ round_trip_latency_seconds = 0.03
 
     assert args.backend == "loopback"
     assert args.reference_di == "environment.wav"
+    assert args.custom_adjustments_file == "configured-custom.csv"
     assert args.target_lufs == -17
     assert args.audio_device == "CLI Audio"
     assert args.input_mapping == "3,4"
@@ -667,6 +669,33 @@ def test_export_adjusted_file_passes_complete_csv_through(tmp_path) -> None:
     )
 
     assert handler.applied[0][2] == csv_path
+
+
+def test_export_adjusted_file_passes_custom_adjustments_path(tmp_path) -> None:
+    handler = FakeHandler()
+    input_path = tmp_path / "input.hls"
+    output_path = tmp_path / "output.hls"
+    csv_path = tmp_path / "lufs_analysis.csv"
+    custom_path = tmp_path / "custom.csv"
+    input_path.touch()
+    csv_path.write_text("Preset,DevicePatch\n1,01A\n", encoding="utf-8")
+    custom_path.write_text("01A,1.0,,-2.0,\n", encoding="utf-8")
+
+    export_adjusted_file(
+        NormalizationRequest(
+            device="fake",
+            input_path=input_path,
+            backend="loopback",
+            windows_python="python.exe",
+            reference_di=tmp_path / "reference.wav",
+            custom_adjustments_path=custom_path,
+        ),
+        csv_path,
+        output_path,
+        get_profile=lambda device: FakeProfile(handler),
+    )
+
+    assert handler.applied[0][6] == custom_path
 
 
 def test_main_automation_creates_measurement_file_confirms_and_keeps_temp(

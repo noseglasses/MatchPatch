@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from matchpatch.analysis import AnalysisOptions
+from matchpatch.custom_adjustments import load_custom_adjustments_file
 from matchpatch.devices import get_device_profile
 from matchpatch.devices.base import (
     DeviceProfile,
@@ -43,6 +44,7 @@ class NormalizationRequest:
     backend: str
     windows_python: str
     reference_di: Path
+    custom_adjustments_path: Path | None = None
     output_path: Path | None = None
     diff_input_path: Path | None = None
     automation: bool = True
@@ -105,6 +107,7 @@ def normalize_presets(
 
     if not request.reference_di.is_file():
         raise ValueError(f"Reference DI WAV does not exist: {request.reference_di}")
+    _validate_custom_adjustments(request)
 
     if request.automation:
         if request.output_path is not None:
@@ -192,6 +195,7 @@ def normalize_presets(
                 request.ignore_bad_lufs,
                 request.target_lufs,
                 request.policy,
+                request.custom_adjustments_path,
             )
         elif request.defer_export:
             preview_path = temp_dir / f"{input_path.stem}_preview{input_path.suffix}"
@@ -207,6 +211,7 @@ def normalize_presets(
                     request.ignore_bad_lufs,
                     request.target_lufs,
                     request.policy,
+                    request.custom_adjustments_path,
                 )
             finally:
                 preview_path.unlink(missing_ok=True)
@@ -269,6 +274,7 @@ def export_adjusted_file(
     output_path = output_path.resolve()
     handler.validate_input(input_path)
     handler.validate_output(input_path, output_path)
+    _validate_custom_adjustments(request)
     handler.apply_analysis_csv(
         input_path,
         output_path,
@@ -276,8 +282,19 @@ def export_adjusted_file(
         request.ignore_bad_lufs,
         request.target_lufs,
         request.policy,
+        request.custom_adjustments_path,
         adjustments,
     )
+
+
+def _validate_custom_adjustments(request: NormalizationRequest) -> None:
+    if request.custom_adjustments_path is None:
+        return
+    if not request.custom_adjustments_path.is_file():
+        raise ValueError(
+            f"Custom adjustments CSV does not exist: {request.custom_adjustments_path}"
+        )
+    load_custom_adjustments_file(request.custom_adjustments_path, request.policy.snapshot_count)
 
 
 def _emit(callback: ProgressCallback | None, event: ProgressEvent) -> None:
