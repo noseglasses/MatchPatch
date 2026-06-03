@@ -978,6 +978,61 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(monkeypa
     window.close()
 
 
+def test_manual_name_edits_highlight_changed_cells_until_csv_save(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    window.snapshot_count_input.setValue(1)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Clean",))
+    window._reset_preset_table_modified()
+    window.manual_adjustments.setChecked(True)
+
+    preset_item = window.preset_table.item(0, 2)
+    snapshot_item = window.preset_table.item(0, 3)
+
+    window._manual_table_cell_double_clicked(0, 2)
+    window._manual_cell_editor.setText("Song")
+    window._finish_manual_cell_edit(commit=True)
+    assert preset_item.background().style() == Qt.BrushStyle.NoBrush
+
+    window._manual_table_cell_double_clicked(0, 2)
+    window._manual_cell_editor.setText("Song%")
+    window._finish_manual_cell_edit(commit=True)
+    assert preset_item.text() == "Song"
+    assert preset_item.background().style() == Qt.BrushStyle.NoBrush
+
+    window._manual_table_cell_double_clicked(0, 2)
+    window._manual_cell_editor.setText("Song 2")
+    window._finish_manual_cell_edit(commit=True)
+    assert preset_item.background().color() == main_window.MANUAL_NAME_MODIFIED_BACKGROUND
+
+    window._manual_table_cell_double_clicked(0, 3)
+    window._manual_cell_editor.setText("Clean!")
+    window._finish_manual_cell_edit(commit=True)
+    assert snapshot_item.background().color() == main_window.MANUAL_NAME_MODIFIED_BACKGROUND
+
+    csv_path = tmp_path / "preset-table.csv"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(csv_path), ""),
+    )
+
+    window.save_preset_table_csv()
+
+    assert preset_item.background().style() == Qt.BrushStyle.NoBrush
+    assert snapshot_item.background().style() == Qt.BrushStyle.NoBrush
+
+    window.close()
+
+
 def test_custom_adjustment_is_shown_but_numeric_delta_is_exported(app) -> None:
     window = MainWindow()
     window.snapshot_count_input.setValue(2)

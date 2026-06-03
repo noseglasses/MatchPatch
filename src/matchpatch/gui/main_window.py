@@ -113,11 +113,14 @@ GAIN_BAD_LUFS_PATTERN = re.compile(
     r"^\[GAIN\] (?P<patch>\d{2}[A-D]) (?P<label>.*?) \| bad LUFS(?: \(.*\))?$"
 )
 BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
+MANUAL_NAME_MODIFIED_BACKGROUND = QColor("#fef3c7")
 HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
 HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
 PRESET_TABLE_CSV_DELIMITER = "|"
 PRESET_TABLE_ATTENTION_ROLE = Qt.ItemDataRole.UserRole + 1
 ADJUSTMENT_VALUE_ROLE = Qt.ItemDataRole.UserRole + 2
+MANUAL_NAME_MODIFIED_ROLE = Qt.ItemDataRole.UserRole + 3
+BAD_LUFS_HIGHLIGHT_ROLE = Qt.ItemDataRole.UserRole + 4
 CUSTOM_ADJUSTMENT_COLOR = "#2563eb"
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
@@ -957,6 +960,7 @@ class MainWindow(QMainWindow):
             self.show_error(f"Could not save preset table CSV: {exc}")
             return
 
+        self._reset_preset_table_modified()
         self._log(f"Preset table CSV saved: {csv_path}", "success")
 
     def load_preset_table_csv(self) -> None:
@@ -1142,7 +1146,17 @@ class MainWindow(QMainWindow):
                     if isinstance(stored_value, (int, float)) and not isinstance(
                         stored_value, bool
                     ):
-                        adjustment_value = _format_adjustment(float(stored_value))
+                        try:
+                            displayed_value = _parse_adjustment_display_text(adjustment.text())
+                        except ValueError:
+                            displayed_value = None
+                        if (
+                            displayed_value == float(stored_value)
+                            and "(" not in adjustment.text()
+                        ):
+                            adjustment_value = adjustment.text()
+                        else:
+                            adjustment_value = _format_adjustment(float(stored_value))
                     else:
                         adjustment_value = _format_adjustment(
                             _parse_adjustment_display_text(adjustment.text())
@@ -2064,6 +2078,10 @@ class MainWindow(QMainWindow):
         return column == 2 or column >= 3
 
     @staticmethod
+    def _is_name_column(column: int) -> bool:
+        return column == 2 or (column >= 3 and column % 2 == 1)
+
+    @staticmethod
     def _set_preset_item_editable(item: QTableWidgetItem, editable: bool) -> None:
         flags = item.flags()
         if editable:
@@ -2116,6 +2134,7 @@ class MainWindow(QMainWindow):
         item = self.preset_table.item(row, column)
         if commit and item is not None:
             value = editor.text()
+            before = item.text()
             if column == 1 and Path(self.input_path.text()).suffix.lower() == ".hlx":
                 item.setText(value.strip().upper())
             elif column == 2:
@@ -2136,6 +2155,8 @@ class MainWindow(QMainWindow):
                     editor.selectAll()
                     return
                 self._set_adjustment_value(item, value, delta)
+            if self._is_name_column(column) and item.text() != before:
+                self._set_manual_name_modified(item, True)
 
         self._manual_cell_editor = None
         self._manual_cell_target = None
@@ -2406,20 +2427,54 @@ class MainWindow(QMainWindow):
             self._set_adjustment_value(adjustment, "+0", 0)
 
     def _set_bad_lufs_highlight(self, row: int) -> None:
-        for column in range(self.preset_table.columnCount()):
-            item = self.preset_table.item(row, column)
-            if item is not None:
-                item.setBackground(BAD_LUFS_ROW_BACKGROUND)
+        signals_blocked = self.preset_table.blockSignals(True)
+        try:
+            for column in range(self.preset_table.columnCount()):
+                item = self.preset_table.item(row, column)
+                if item is not None:
+                    item.setData(BAD_LUFS_HIGHLIGHT_ROLE, True)
+                    self._refresh_preset_item_background(item)
+        finally:
+            self.preset_table.blockSignals(signals_blocked)
 
     def _clear_bad_lufs_highlight(self, row: int) -> None:
-        for column in range(self.preset_table.columnCount()):
-            item = self.preset_table.item(row, column)
-            if item is not None:
-                item.setBackground(QBrush())
+        signals_blocked = self.preset_table.blockSignals(True)
+        try:
+            for column in range(self.preset_table.columnCount()):
+                item = self.preset_table.item(row, column)
+                if item is not None:
+                    item.setData(BAD_LUFS_HIGHLIGHT_ROLE, None)
+                    self._refresh_preset_item_background(item)
+        finally:
+            self.preset_table.blockSignals(signals_blocked)
 
     def _clear_bad_lufs_highlights(self) -> None:
         for row in range(self.preset_table.rowCount()):
             self._clear_bad_lufs_highlight(row)
+
+    def _set_manual_name_modified(self, item: QTableWidgetItem, modified: bool) -> None:
+        signals_blocked = self.preset_table.blockSignals(True)
+        try:
+            item.setData(MANUAL_NAME_MODIFIED_ROLE, True if modified else None)
+            self._refresh_preset_item_background(item)
+        finally:
+            self.preset_table.blockSignals(signals_blocked)
+
+    def _clear_manual_name_modified_highlights(self) -> None:
+        for row in range(self.preset_table.rowCount()):
+            for column in range(self.preset_table.columnCount()):
+                item = self.preset_table.item(row, column)
+                if item is not None and item.data(MANUAL_NAME_MODIFIED_ROLE):
+                    self._set_manual_name_modified(item, False)
+
+    @staticmethod
+    def _refresh_preset_item_background(item: QTableWidgetItem) -> None:
+        if item.data(BAD_LUFS_HIGHLIGHT_ROLE):
+            item.setBackground(BAD_LUFS_ROW_BACKGROUND)
+        elif item.data(MANUAL_NAME_MODIFIED_ROLE):
+            item.setBackground(MANUAL_NAME_MODIFIED_BACKGROUND)
+        else:
+            item.setBackground(QBrush())
 
     def _set_snapshot_names(self, row: int, snapshot_names: tuple[str, ...]) -> None:
         name_item = self.preset_table.item(row, 2)
@@ -2749,6 +2804,7 @@ class MainWindow(QMainWindow):
         self._preset_table_clean_signature = self._preset_table_content_signature()
         self._preset_table_modified = False
         self._adjusted_presets.clear()
+        self._clear_manual_name_modified_highlights()
         self._refresh_file_actions()
 
     def _preset_table_content_signature(self) -> tuple[tuple[str, ...], ...]:
