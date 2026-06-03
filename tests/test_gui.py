@@ -571,8 +571,9 @@ def test_preset_bulk_selection_buttons(app) -> None:
     window.close()
 
 
-def test_manual_adjustments_gate_table_editing_and_build_export_payload(app) -> None:
+def test_manual_adjustments_gate_table_editing_and_build_export_payload(monkeypatch, app) -> None:
     window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
     window.preset_table.insertRow(0)
     selected = QTableWidgetItem()
     selected.setCheckState(Qt.CheckState.Checked)
@@ -583,7 +584,7 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(app) -> 
     window._set_snapshot_names(0, ("Clean", "Solo"))
 
     assert not window.manual_adjustments.isChecked()
-    assert window.manual_adjustments.text() == "Manual adjustments"
+    assert window.manual_adjustments.text() == "Edit content"
     assert window.preset_table.editTriggers() == window.preset_table.EditTrigger.NoEditTriggers
     header = window.presets.layout().itemAt(0).layout()
     assert header is not None
@@ -616,6 +617,7 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(app) -> 
     assert adjustments.preset_names == {"02B": "Song 2"}
     assert adjustments.snapshot_names["02B"][0] == "Clean!"
     assert adjustments.gain_deltas["02B"][0] == 1.5
+    assert window._preset_table_modified
     window.preset_table.item(0, 2).setText("Invalid%")
     assert window.preset_table.item(0, 2).text() == "Invalid"
 
@@ -690,6 +692,7 @@ def test_preset_table_csv_load_applies_valid_rows_and_reports_line_errors(
         lambda *args, **kwargs: (str(csv_path), ""),
     )
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
 
     window.load_preset_table_csv()
 
@@ -707,6 +710,49 @@ def test_preset_table_csv_load_applies_valid_rows_and_reports_line_errors(
     assert "Line 5" in popups[0][2]
     assert "preset ID '99A'" in window.log.toPlainText()
     assert "Preset table CSV loaded" in window.log.toHtml()
+    assert window._preset_table_modified
+
+    window.close()
+
+
+def test_preset_table_csv_load_does_not_mark_identical_content_modified(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    window.snapshot_count_input.setValue(1)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Clean",))
+    window._reset_preset_table_modified()
+    csv_path = tmp_path / "preset-table.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "preset_id|preset_name|snapshot_1_name|snapshot_1_adjustment",
+                "02B|Song|Clean|0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(csv_path), ""),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: pytest.fail("identical CSV should not create a close prompt"),
+    )
+
+    window.load_preset_table_csv()
+
+    assert not window._preset_table_modified
 
     window.close()
 
@@ -724,8 +770,9 @@ def test_manual_adjustments_reject_invalid_helix_names(app) -> None:
     window.close()
 
 
-def test_manual_adjustments_limit_helix_name_lengths(app) -> None:
+def test_manual_adjustments_limit_helix_name_lengths(monkeypatch, app) -> None:
     window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
     window.preset_table.insertRow(0)
     window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
     window.preset_table.setItem(0, 2, QTableWidgetItem("Original"))
@@ -857,7 +904,7 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
         ProgressEvent("log", message="[GAIN] 02B Solo | 0.0 dB -> 1.0 dB (Delta: +1.0 dB)")
     )
     prompts = []
-    answers = iter([QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
+    answers = iter([QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Discard])
     monkeypatch.setattr(
         QFileDialog,
         "getOpenFileName",
@@ -880,7 +927,7 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
     assert window.preset_table.rowCount() == 0
     assert not window._adjusted_presets
     assert len(prompts) == 2
-    assert prompts[0][1] == "Discard preset adjustments"
+    assert prompts[0][1] == "Discard preset table changes"
 
     window.close()
 
@@ -903,6 +950,38 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
 
     assert window.input_path.text() == "/tmp/new.hlx"
 
+    window.close()
+
+
+def test_closing_main_window_can_cancel_discarding_manual_table_changes(
+    monkeypatch, app
+) -> None:
+    window = MainWindow()
+    window.preset_table.insertRow(0)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._reset_preset_table_modified()
+    window.manual_adjustments.setChecked(True)
+    prompts = []
+    quit_requests = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: prompts.append(args) or QMessageBox.StandardButton.Cancel,
+    )
+    monkeypatch.setattr(QApplication, "quit", lambda: quit_requests.append(True))
+
+    window.preset_table.item(0, 2).setText("Song 2")
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert window._preset_table_modified
+    assert quit_requests == []
+    assert prompts[0][1] == "Discard preset table changes"
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
     window.close()
 
 

@@ -160,6 +160,10 @@ class MainWindow(QMainWindow):
         self.snapshot_count = 4
         self.preset_snapshot_positions: dict[str, int] = {}
         self._adjusted_presets: set[str] = set()
+        self._preset_table_modified = False
+        self._preset_table_clean_signature: tuple[tuple[str, ...], ...] = ()
+        self._loaded_input_path = ""
+        self._preset_load_discard_confirmed = False
         self._manual_cell_editor: QLineEdit | None = None
         self._manual_cell_target: tuple[int, int] | None = None
         self.log_entries: list[tuple[str, str, str]] = []
@@ -554,24 +558,27 @@ class MainWindow(QMainWindow):
         )
         if not path or path == self.input_path.text():
             return
-        if not self._confirm_discard_preset_adjustments():
+        if not self._confirm_discard_preset_table_changes():
             return
+        self._preset_load_discard_confirmed = True
         self.input_path.setText(path)
-        self.load_assignments()
+        try:
+            self.load_assignments()
+        finally:
+            self._preset_load_discard_confirmed = False
 
-    def _confirm_discard_preset_adjustments(self) -> bool:
-        if not self._adjusted_presets:
+    def _confirm_discard_preset_table_changes(self) -> bool:
+        if not self._preset_table_has_unsaved_changes():
             return True
         answer = QMessageBox.question(
             self,
-            "Discard preset adjustments",
-            "The preset table contains adjustments from the last normalization run. "
-            "Opening another preset or setlist file will discard them.\n\n"
-            "Open the new file anyway?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            "Discard preset table changes",
+            "The preset table contains unsaved changes. Opening another preset or setlist "
+            "file will discard them.\n\nDiscard the changes and continue?",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
         )
-        return answer == QMessageBox.StandardButton.Yes
+        return answer in {QMessageBox.StandardButton.Discard, QMessageBox.StandardButton.Yes}
 
     def browse_output(self) -> None:
         suffix = Path(self.input_path.text()).suffix.lower()
@@ -626,11 +633,14 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            before = self._preset_table_content_signature()
             with self._sorting_paused():
                 accepted, errors = self._load_preset_table_csv(Path(path))
         except OSError as exc:
             self.show_error(f"Could not load preset table CSV: {exc}")
             return
+        if self._preset_table_content_signature() != before:
+            self._mark_preset_table_modified()
 
         for error in errors:
             self._log(error, "error")
@@ -858,12 +868,21 @@ class MainWindow(QMainWindow):
         self.backend_changed()
 
     def load_assignments(self) -> None:
+        path = Path(self.input_path.text())
+        if (
+            not self._preset_load_discard_confirmed
+            and self._loaded_input_path
+            and str(path) != self._loaded_input_path
+            and not self._confirm_discard_preset_table_changes()
+        ):
+            self.input_path.setText(self._loaded_input_path)
+            return
+
         self._discard_completed_export()
         self.preset_snapshot_positions.clear()
         self._clear_bad_lufs_highlights()
         self._load_metadata()
         self.presets.hide()
-        path = Path(self.input_path.text())
         if (
             self.output_path.text().strip()
             and Path(self.output_path.text()).suffix.lower() != path.suffix.lower()
@@ -886,6 +905,8 @@ class MainWindow(QMainWindow):
         if path.suffix.lower() == ".hlx":
             self._adjusted_presets.clear()
             self.preset_table.setRowCount(0)
+            self._loaded_input_path = str(path)
+            self._reset_preset_table_modified()
             self._set_preset_csv_buttons_enabled(False)
             self.preset_hint.setText("Enter the temporary Helix slot used during measurement.")
             self.presets.show()
@@ -915,6 +936,8 @@ class MainWindow(QMainWindow):
             self.show_error(str(exc))
             return
 
+        self._loaded_input_path = str(path)
+        self._reset_preset_table_modified()
         self.preset_hint.setText("Select the presets to normalize.")
         self._set_preset_csv_buttons_enabled(self.preset_table.rowCount() > 0)
         self.presets.show()
@@ -1203,6 +1226,9 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._preset_table_modified and not self._confirm_discard_preset_table_changes():
+            event.ignore()
+            return
         if self.worker is not None:
             if not self._confirm_cancellation():
                 event.ignore()
@@ -1700,6 +1726,8 @@ class MainWindow(QMainWindow):
                 except ValueError:
                     return
                 self._set_adjustment_value(item, item.text(), value)
+            if self._preset_table_content_signature() != self._preset_table_clean_signature:
+                self._mark_preset_table_modified()
 
     def _preset_name_max_length(self) -> int | None:
         return self._current_profile_name_max_length("preset_name_max_length")
@@ -1866,6 +1894,22 @@ class MainWindow(QMainWindow):
             return text
         name = self.preset_table.item(row, 3 + (event.snapshot - 1) * 2)
         return f"{text}: {name.text()}" if name and name.text() else text
+
+    def _preset_table_has_unsaved_changes(self) -> bool:
+        return self._preset_table_modified or bool(self._adjusted_presets)
+
+    def _mark_preset_table_modified(self) -> None:
+        self._preset_table_modified = True
+
+    def _reset_preset_table_modified(self) -> None:
+        self._preset_table_clean_signature = self._preset_table_content_signature()
+        self._preset_table_modified = False
+
+    def _preset_table_content_signature(self) -> tuple[tuple[str, ...], ...]:
+        return tuple(
+            tuple(self._preset_table_csv_row(row))
+            for row in range(self.preset_table.rowCount())
+        )
 
 
 class CurrentPageHeightTabWidget(QTabWidget):
