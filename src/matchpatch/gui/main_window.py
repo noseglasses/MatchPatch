@@ -1377,7 +1377,7 @@ class MainWindow(QMainWindow):
         self._log(f"{message} {detail}".strip(), "error")
         QMessageBox.critical(
             self,
-            "MatchPatch error",
+            "Error",
             f"{message}\n\nConnect a compatible audio processor and try again.",
         )
 
@@ -1716,7 +1716,7 @@ class MainWindow(QMainWindow):
         self._stop_busy_phase()
         self._set_phase("error")
         self._log(message, "error")
-        QMessageBox.critical(self, "MatchPatch error", message)
+        QMessageBox.critical(self, "Error", message)
 
     def normalization_cancelled(self) -> None:
         self._stop_busy_phase(PROCESSING_DOT_RED)

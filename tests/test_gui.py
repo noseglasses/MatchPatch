@@ -1798,7 +1798,7 @@ def test_hardware_normalization_checks_device_before_starting(monkeypatch, app) 
     assert checks[0].backend == "hardware"
     assert checks[0].defer_export
     assert len(popups) == 1
-    assert popups[0][1] == "MatchPatch error"
+    assert popups[0][1] == "Error"
     assert "No suitable device connected" in popups[0][2]
     assert window.worker is None
     assert window.hardware_check_worker is None
