@@ -106,12 +106,29 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not isinstance(window.advanced, main_window.QGroupBox)
     assert window.advanced.isHidden()
     assert not window.advanced_button.isChecked()
-    assert [window.advanced_tabs.tabText(index) for index in range(4)] == [
+    assert [window.advanced_tabs.tabText(index) for index in range(6)] == [
         "Device",
+        "Files",
+        "LUFS",
         "Misc",
         "Meta Data",
         "Log",
     ]
+    assert window.advanced_tabs.widget(0).isAncestorOf(window.backend)
+    assert not window.advanced_tabs.widget(1).isAncestorOf(window.backend)
+    assert window.advanced_tabs.widget(1).isAncestorOf(window.config_path)
+    assert window.advanced_tabs.widget(1).isAncestorOf(window.reference_di)
+    assert window.advanced_tabs.widget(1).isAncestorOf(window.keep_temp)
+    assert not window.advanced_tabs.widget(2).isAncestorOf(window.config_path)
+    assert not window.advanced_tabs.widget(2).isAncestorOf(window.reference_di)
+    assert not window.advanced_tabs.widget(2).isAncestorOf(window.keep_temp)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.snapshot_count_input)
+    assert not window.advanced_tabs.widget(2).isAncestorOf(window.target_lufs)
+    assert not window.advanced_tabs.widget(2).isAncestorOf(window.solo_gain_bump_db)
+    assert not window.advanced_tabs.widget(2).isAncestorOf(window.solo_regex)
+    assert window.advanced_tabs.widget(3).isAncestorOf(window.target_lufs)
+    assert window.advanced_tabs.widget(3).isAncestorOf(window.solo_gain_bump_db)
+    assert window.advanced_tabs.widget(3).isAncestorOf(window.solo_regex)
     assert not isinstance(window.presets, main_window.QGroupBox)
     assert window.presets.layout().contentsMargins().isNull()
     assert not window.presets.isHidden()

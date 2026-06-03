@@ -16,13 +16,22 @@ from PySide6.QtWidgets import (
 
 
 class HelixSettingsPanel(QWidget):
-    def __init__(self) -> None:
+    def __init__(self, backend_selector: QWidget | None = None) -> None:
         super().__init__()
         layout = QVBoxLayout(self)
         self.audio_group = QGroupBox("Audio routing")
         self.steering_group = QGroupBox("MIDI steering")
         layout.addWidget(self.audio_group)
         layout.addWidget(self.steering_group)
+        if backend_selector is not None:
+            backend = QFormLayout()
+            backend.addRow(
+                _label(
+                    "Backend", "Select loopback for testing or hardware for a connected device."
+                ),
+                backend_selector,
+            )
+            layout.addLayout(backend)
         layout.addStretch()
 
         audio = QFormLayout(self.audio_group)

@@ -240,6 +240,9 @@ class MainWindow(QMainWindow):
 
         self.input_path = QLineEdit()
         self.output_path = QLineEdit()
+        self.backend = QComboBox()
+        self.backend.addItems(["hardware", "loopback", "simulated"])
+        self.backend.currentTextChanged.connect(self.backend_changed)
         self._build_toolbar()
         content = QWidget()
         self.content = content
@@ -735,6 +738,8 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         self.advanced_tabs = CurrentPageHeightTabWidget()
         self.advanced_tabs.addTab(self._build_device_settings(), "Device")
+        self.advanced_tabs.addTab(self._build_files(), "Files")
+        self.advanced_tabs.addTab(self._build_lufs(), "LUFS")
         self.advanced_tabs.addTab(self._build_misc(), "Misc")
         self.advanced_tabs.addTab(self._build_metadata(), "Meta Data")
         self.advanced_tabs.addTab(self._build_log(), "Log")
@@ -746,6 +751,39 @@ class MainWindow(QMainWindow):
         self.advanced.setToolTip("Show less frequently changed settings and diagnostic details.")
         self.advanced.setVisible(self.advanced_button.isChecked())
         return self.advanced
+
+    def _build_files(self) -> QWidget:
+        content = QWidget()
+        form = QFormLayout(content)
+        self.config_path = QLineEdit()
+        config_browse = QPushButton("Browse")
+        config_browse.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        config_browse.setToolTip("Choose an optional TOML configuration file.")
+        config_browse.clicked.connect(self.browse_config)
+        form.addRow(
+            _label("Config file", "Optional TOML file providing saved MatchPatch defaults."),
+            _path_row(self.config_path, config_browse),
+        )
+        self.reference_di = QLineEdit()
+        reference_browse = QPushButton("Browse")
+        reference_browse.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
+        )
+        reference_browse.setToolTip("Choose the clean DI WAV used for evaluation measurements.")
+        reference_browse.clicked.connect(self.browse_reference)
+        form.addRow(
+            _label("Reference DI", "Clean guitar DI WAV replayed through each preset."),
+            _path_row(self.reference_di, reference_browse),
+        )
+        self.keep_temp = QCheckBox()
+        form.addRow(
+            _label(
+                "Keep temporary files",
+                "Retain the measurement CSV for inspection after processing.",
+            ),
+            self.keep_temp,
+        )
+        return content
 
     def _set_advanced_visible(self, visible: bool) -> None:
         if hasattr(self, "advanced"):
@@ -775,38 +813,6 @@ class MainWindow(QMainWindow):
     def _build_misc(self) -> QWidget:
         content = QWidget()
         form = QFormLayout(content)
-        self.backend = QComboBox()
-        self.backend.addItems(["hardware", "loopback", "simulated"])
-        self.backend.currentTextChanged.connect(self.backend_changed)
-        form.addRow(
-            _label("Backend", "Select loopback for testing or hardware for a connected device."),
-            self.backend,
-        )
-        self.config_path = QLineEdit()
-        config_browse = QPushButton("Browse")
-        config_browse.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
-        config_browse.setToolTip("Choose an optional TOML configuration file.")
-        config_browse.clicked.connect(self.browse_config)
-        form.addRow(
-            _label("Config file", "Optional TOML file providing saved MatchPatch defaults."),
-            _path_row(self.config_path, config_browse),
-        )
-        self.reference_di = QLineEdit()
-        reference_browse = QPushButton("Browse")
-        reference_browse.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
-        )
-        reference_browse.setToolTip("Choose the clean DI WAV used for evaluation measurements.")
-        reference_browse.clicked.connect(self.browse_reference)
-        form.addRow(
-            _label("Reference DI", "Clean guitar DI WAV replayed through each preset."),
-            _path_row(self.reference_di, reference_browse),
-        )
-        self.target_lufs = QLineEdit("-16.0")
-        form.addRow(
-            _label("Target LUFS", "Desired loudness used to calculate snapshot gain corrections."),
-            self.target_lufs,
-        )
         self.snapshot_count_input = QSpinBox()
         self.snapshot_count_input.setRange(1, 8)
         self.snapshot_count_input.setValue(self.snapshot_count)
@@ -815,13 +821,15 @@ class MainWindow(QMainWindow):
             _label("Snapshots", "Number of snapshots to measure and normalize."),
             self.snapshot_count_input,
         )
-        self.keep_temp = QCheckBox()
+        return content
+
+    def _build_lufs(self) -> QWidget:
+        content = QWidget()
+        form = QFormLayout(content)
+        self.target_lufs = QLineEdit("-16.0")
         form.addRow(
-            _label(
-                "Keep temporary files",
-                "Retain the measurement CSV for inspection after processing.",
-            ),
-            self.keep_temp,
+            _label("Target LUFS", "Desired loudness used to calculate snapshot gain corrections."),
+            self.target_lufs,
         )
         self.solo_gain_bump_db = QLineEdit("3.0")
         form.addRow(
@@ -846,7 +854,7 @@ class MainWindow(QMainWindow):
         for profile in list_device_profiles():
             self.device.addItem(profile.display_name, profile.name)
             if profile.name == "helix":
-                panel = HelixSettingsPanel()
+                panel = HelixSettingsPanel(self.backend)
                 self.device_panels[profile.name] = panel
                 self.device_stack.addWidget(panel)
 
