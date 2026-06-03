@@ -36,6 +36,7 @@ from PySide6.QtGui import (
     QPainter,
     QPaintEvent,
     QPalette,
+    QPen,
     QPixmap,
     QSyntaxHighlighter,
     Qt,
@@ -64,6 +65,8 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStackedWidget,
     QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -107,6 +110,7 @@ BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
 HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
 HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
 PRESET_TABLE_CSV_DELIMITER = "|"
+PRESET_TABLE_ATTENTION_ROLE = Qt.ItemDataRole.UserRole + 1
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
 PROCESSING_DOT_RED = "#dc2626"
@@ -144,6 +148,20 @@ IN_PROGRESS_PHASES = {
 
 class SaveCancelled(Exception):
     """Raised internally when the user cancels a save operation."""
+
+
+class AttentionFrameDelegate(QStyledItemDelegate):
+    """Draw an attention frame around cells marked by the window."""
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        super().paint(painter, option, index)
+        if not index.data(PRESET_TABLE_ATTENTION_ROLE):
+            return
+
+        painter.save()
+        painter.setPen(QPen(QColor("#dc2626"), 3))
+        painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
+        painter.restore()
 
 
 def _phase_text(phase: str) -> str:
@@ -359,6 +377,7 @@ class MainWindow(QMainWindow):
         self.preset_empty_state = self._build_preset_empty_state()
         self.preset_table = ContentHeightTableWidget()
         self.preset_table.setHorizontalHeader(SnapshotHeader(self.preset_table))
+        self.preset_table.setItemDelegate(AttentionFrameDelegate(self.preset_table))
         self.preset_table.verticalHeader().hide()
         self.preset_table.setWordWrap(False)
         self.preset_table.setToolTip(
@@ -474,7 +493,7 @@ class MainWindow(QMainWindow):
         open_button = QToolButton()
         open_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
         open_button.setIconSize(QSize(72, 72))
-        open_button.setText("Open hlx/hlx file")
+        open_button.setText("Open setlist/preset file")
         open_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         open_button.setAutoRaise(True)
         open_button.setToolTip("Open a Helix setlist or preset file.")
@@ -517,10 +536,11 @@ class MainWindow(QMainWindow):
     def _show_loaded_preset_state(self, *, single_preset: bool) -> None:
         self.preset_empty_state.hide()
         self.preset_header.show()
-        self.single_slot.setVisible(single_preset)
-        self.preset_table.setVisible(not single_preset)
+        self.single_slot.hide()
+        self.preset_table.show()
+        self.preset_table.setColumnHidden(0, single_preset)
         self.preset_table_note.setVisible(not single_preset)
-        self.preset_csv_controls.setVisible(not single_preset)
+        self.preset_csv_controls.show()
         self.select_all_button.setVisible(not single_preset)
         self.unselect_all_button.setVisible(not single_preset)
         self.manual_adjustments.setVisible(not single_preset)
@@ -1110,14 +1130,28 @@ class MainWindow(QMainWindow):
         self._schedule_resize_for_content()
 
         if path.suffix.lower() == ".hlx":
+            try:
+                profile = get_device_profile(self.device.currentData())
+                handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+                handler.validate_input(path)
+                assignments = handler.list_assignments(path)
+            except Exception as exc:  # noqa: BLE001
+                self._show_preset_empty_state()
+                self.presets.updateGeometry()
+                self._schedule_resize_for_content()
+                self.show_error(str(exc))
+                return
+
             self._adjusted_presets.clear()
-            self.preset_table.setRowCount(0)
+            self._populate_single_preset_table(path, assignments[0] if assignments else None)
             self._loaded_input_path = str(path)
             self._set_active_file(path)
             self._reset_preset_table_modified()
             self._refresh_file_actions()
-            self._set_preset_csv_buttons_enabled(False)
-            self.preset_hint.setText("Enter the temporary Helix slot used during measurement.")
+            self._set_preset_csv_buttons_enabled(self.preset_table.rowCount() > 0)
+            self.preset_hint.setText(
+                "Enter the temporary Helix slot used during measurement in the Preset column."
+            )
             QTimer.singleShot(0, self._fit_advanced_splitter_width)
             self.presets.updateGeometry()
             self._schedule_resize_for_content()
@@ -1163,6 +1197,23 @@ class MainWindow(QMainWindow):
         if hasattr(self, "save_csv_button"):
             self.save_csv_button.setEnabled(enabled)
 
+    def _populate_single_preset_table(self, path: Path, assignment: object | None = None) -> None:
+        preset_name = str(getattr(assignment, "name", "") or path.stem)
+        snapshot_names = getattr(assignment, "snapshot_names", ())
+        if not isinstance(snapshot_names, tuple):
+            snapshot_names = tuple(snapshot_names)
+        with self._sorting_paused():
+            self.preset_table.setRowCount(0)
+            self.preset_table.insertRow(0)
+            selected = QTableWidgetItem()
+            selected.setCheckState(Qt.CheckState.Checked)
+            self.preset_table.setItem(0, 0, selected)
+            self.preset_table.setItem(0, 1, QTableWidgetItem())
+            self.preset_table.setItem(0, 2, QTableWidgetItem(preset_name))
+            self._clear_preset_adjustments(0)
+            self._set_snapshot_names(0, snapshot_names)
+            self._refresh_preset_table_editable_flags()
+
     def _load_metadata(self) -> None:
         path = Path(self.input_path.text())
         if not path.exists():
@@ -1181,6 +1232,9 @@ class MainWindow(QMainWindow):
         self.metadata_text.setPlainText(json.dumps(metadata, indent=2, ensure_ascii=False))
 
     def start_normalization(self) -> None:
+        if not self._validate_single_preset_slot_for_run():
+            return
+
         if self._preset_table_has_unsaved_changes() and not self._prompt_save_before_normalization():
             return
 
@@ -1631,7 +1685,7 @@ class MainWindow(QMainWindow):
 
     def _selected_preset_set(self) -> str:
         if Path(self.input_path.text()).suffix.lower() == ".hlx":
-            return self.single_slot.text().strip()
+            return self._single_preset_slot_text()
 
         selected = []
         for row in range(self.preset_table.rowCount()):
@@ -1644,6 +1698,72 @@ class MainWindow(QMainWindow):
             ):
                 selected.append(patch_item.text())
         return ",".join(selected)
+
+    def _single_preset_slot_text(self) -> str:
+        item = self.preset_table.item(0, 1)
+        return item.text().strip().upper() if item is not None else ""
+
+    def _validate_single_preset_slot_for_run(self) -> bool:
+        if Path(self.input_path.text()).suffix.lower() != ".hlx":
+            return True
+
+        slot = self._single_preset_slot_text()
+        if not slot:
+            self._highlight_preset_cell(0, 1)
+            QMessageBox.warning(
+                self,
+                "Preset ID required",
+                "Enter the temporary Helix preset ID in the Preset column before running normalization.",
+            )
+            return False
+
+        try:
+            self._parse_single_helix_preset_slot(slot)
+        except ValueError as exc:
+            self.show_error(str(exc))
+            self._highlight_preset_cell(0, 1)
+            return False
+
+        return True
+
+    def _parse_single_helix_preset_slot(self, slot: str) -> int:
+        profile = get_device_profile(self.device.currentData())
+        handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+        preset_ids = handler.parse_patch_set(slot)
+        if len(preset_ids) != 1:
+            raise ValueError("Enter exactly one Helix preset ID for a .hlx file.")
+
+        preset_id = preset_ids[0]
+        if preset_id < 1 or preset_id > 128:
+            raise ValueError("Helix preset ID must be between 01A and 32D.")
+        return preset_id
+
+    def _highlight_preset_cell(self, row: int, column: int) -> None:
+        item = self.preset_table.item(row, column)
+        if item is None:
+            return
+
+        signals_blocked = self.preset_table.blockSignals(True)
+        try:
+            item.setData(PRESET_TABLE_ATTENTION_ROLE, True)
+        finally:
+            self.preset_table.blockSignals(signals_blocked)
+        self.preset_table.setCurrentCell(row, column)
+        self.preset_table.scrollToItem(item)
+        self.preset_table.viewport().update(self.preset_table.visualItemRect(item))
+        QTimer.singleShot(2500, lambda: self._clear_preset_cell_highlight(row, column))
+
+    def _clear_preset_cell_highlight(self, row: int, column: int) -> None:
+        item = self.preset_table.item(row, column)
+        if item is None:
+            return
+
+        signals_blocked = self.preset_table.blockSignals(True)
+        try:
+            item.setData(PRESET_TABLE_ATTENTION_ROLE, None)
+        finally:
+            self.preset_table.blockSignals(signals_blocked)
+        self.preset_table.viewport().update(self.preset_table.visualItemRect(item))
 
     def set_all_presets_checked(self, checked: bool) -> None:
         state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
@@ -1658,11 +1778,12 @@ class MainWindow(QMainWindow):
         self._refresh_preset_table_editable_flags()
 
     def _refresh_preset_table_editable_flags(self) -> None:
+        single_preset = Path(self.input_path.text()).suffix.lower() == ".hlx"
         for row in range(self.preset_table.rowCount()):
             for column in range(self.preset_table.columnCount()):
                 item = self.preset_table.item(row, column)
                 if item is not None:
-                    self._set_preset_item_editable(item, False)
+                    self._set_preset_item_editable(item, single_preset and column == 1)
 
     @staticmethod
     def _is_manual_adjustment_column(column: int) -> bool:
@@ -1681,7 +1802,11 @@ class MainWindow(QMainWindow):
         return hasattr(self, "manual_adjustments") and self.manual_adjustments.isChecked()
 
     def _manual_table_cell_double_clicked(self, row: int, column: int) -> None:
-        if not self._manual_adjustments_enabled() or not self._is_manual_adjustment_column(column):
+        single_preset_slot = Path(self.input_path.text()).suffix.lower() == ".hlx" and column == 1
+        if not single_preset_slot and (
+            not self._manual_adjustments_enabled()
+            or not self._is_manual_adjustment_column(column)
+        ):
             return
 
         item = self.preset_table.item(row, column)
@@ -1717,7 +1842,9 @@ class MainWindow(QMainWindow):
         item = self.preset_table.item(row, column)
         if commit and item is not None:
             value = editor.text()
-            if column == 2:
+            if column == 1 and Path(self.input_path.text()).suffix.lower() == ".hlx":
+                item.setText(value.strip().upper())
+            elif column == 2:
                 item.setText(self._sanitize_helix_name(value, self._preset_name_max_length()))
             elif column % 2:
                 item.setText(self._sanitize_helix_name(value, self._snapshot_name_max_length()))
@@ -2032,6 +2159,19 @@ class MainWindow(QMainWindow):
         table.setCellWidget(item.row(), item.column(), label)
 
     def _preset_item_changed(self, item: QTableWidgetItem) -> None:
+        if item.data(PRESET_TABLE_ATTENTION_ROLE):
+            item.setData(PRESET_TABLE_ATTENTION_ROLE, None)
+            self.preset_table.viewport().update(self.preset_table.visualItemRect(item))
+        if Path(self.input_path.text()).suffix.lower() == ".hlx" and item.column() == 1:
+            normalized = item.text().strip().upper()
+            if normalized != item.text():
+                signals_blocked = self.preset_table.blockSignals(True)
+                try:
+                    item.setText(normalized)
+                finally:
+                    self.preset_table.blockSignals(signals_blocked)
+            return
+
         if item.column() == 0 and item.checkState() != Qt.CheckState.Checked:
             self._clear_preset_adjustments(item.row())
         elif self._manual_adjustments_enabled() and self._is_manual_adjustment_column(

@@ -60,6 +60,43 @@ def _request(**kwargs) -> NormalizationRequest:
     return NormalizationRequest(**values)
 
 
+def _mock_single_hlx_handler(
+    monkeypatch,
+    *,
+    name: str = "example",
+    snapshot_names: tuple[str, ...] = ("Clean", "Solo"),
+    assignments: list[SimpleNamespace] | None = None,
+) -> None:
+    if assignments is None:
+        assignments = [
+            SimpleNamespace(
+                device_patch="01A",
+                name=name,
+                snapshot_names=snapshot_names,
+            )
+        ]
+
+    class Handler:
+        @staticmethod
+        def validate_input(path):
+            return None
+
+        @staticmethod
+        def list_assignments(path):
+            return assignments
+
+        @staticmethod
+        def metadata(path):
+            return {"file_type": "hlx"}
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(root):
+            return Handler()
+
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+
+
 def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     window = MainWindow()
 
@@ -84,7 +121,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.preset_empty_logo.pixmap().isNull()
     assert window.preset_empty_logo.pixmap().size() == main_window.QSize(360, 360)
     assert isinstance(window.preset_empty_open_button, main_window.QToolButton)
-    assert window.preset_empty_open_button.text() == "Open hlx/hlx file"
+    assert window.preset_empty_open_button.text() == "Open setlist/preset file"
     assert not window.preset_empty_open_button.icon().isNull()
     assert window.preset_empty_open_button.iconSize() == main_window.QSize(72, 72)
     assert isinstance(window.preset_advanced_splitter, QSplitter)
@@ -347,8 +384,11 @@ def test_advanced_and_preset_panes_follow_their_content_height(app) -> None:
     window.close()
 
 
-def test_single_preset_load_displays_presets_panel_with_instruction_label(app) -> None:
+def test_single_preset_load_displays_presets_panel_with_instruction_label(
+    monkeypatch, app
+) -> None:
     window = MainWindow()
+    _mock_single_hlx_handler(monkeypatch, name="Lead", snapshot_names=("Clean", "Solo"))
     window.show()
     app.processEvents()
 
@@ -358,11 +398,75 @@ def test_single_preset_load_displays_presets_panel_with_instruction_label(app) -
 
     assert not window.presets.isHidden()
     assert not window.preset_advanced_splitter.isHidden()
-    assert window.preset_table.isHidden()
-    assert not window.single_slot.isHidden()
-    assert window.preset_csv_controls.isHidden()
+    assert not window.preset_table.isHidden()
+    assert window.preset_table.isColumnHidden(0)
+    assert window.single_slot.isHidden()
+    assert window.preset_table_note.isHidden()
+    assert not window.preset_csv_controls.isHidden()
+    assert window.load_csv_button.isEnabled()
+    assert window.save_csv_button.isEnabled()
+    assert window.preset_table.rowCount() == 1
+    assert window.preset_table.item(0, 1).text() == ""
+    assert window.preset_table.item(0, 2).text() == "Lead"
+    assert window.preset_table.item(0, 3).text() == "Clean"
+    assert window.preset_table.item(0, 5).text() == "Solo"
+    assert window.preset_table.item(0, 1).flags() & Qt.ItemFlag.ItemIsEditable
     assert window.preset_hint.height() == window.preset_hint.sizeHint().height()
-    assert window.preset_hint.text() == ("Enter the temporary Helix slot used during measurement.")
+    assert window.preset_hint.text() == (
+        "Enter the temporary Helix slot used during measurement in the Preset column."
+    )
+
+    window.close()
+
+
+def test_empty_single_preset_load_still_displays_table(monkeypatch, app) -> None:
+    window = MainWindow()
+    _mock_single_hlx_handler(monkeypatch, assignments=[])
+    window.input_path.setText("/tmp/empty.hlx")
+
+    window.load_assignments()
+
+    assert not window.preset_table.isHidden()
+    assert window.preset_table.isColumnHidden(0)
+    assert window.preset_table_note.isHidden()
+    assert window.load_csv_button.isEnabled()
+    assert window.save_csv_button.isEnabled()
+    assert window.preset_table.rowCount() == 1
+    assert window.preset_table.item(0, 1).text() == ""
+    assert window.preset_table.item(0, 2).text() == "empty"
+
+    window.close()
+
+
+def test_single_preset_uses_table_preset_id_for_normalization(monkeypatch, app) -> None:
+    window = MainWindow()
+    _mock_single_hlx_handler(monkeypatch)
+    window.input_path.setText("/tmp/example.hlx")
+    window.load_assignments()
+
+    window.preset_table.item(0, 1).setText("12a")
+
+    argv = window._build_argv()
+    assert argv[argv.index("--preset-set") + 1] == "12A"
+
+    window.close()
+
+
+def test_single_preset_run_warns_when_preset_id_is_missing(monkeypatch, app) -> None:
+    window = MainWindow()
+    _mock_single_hlx_handler(monkeypatch)
+    window.input_path.setText("/tmp/example.hlx")
+    window.load_assignments()
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    window.start_normalization()
+
+    assert len(warnings) == 1
+    assert warnings[0][1] == "Preset ID required"
+    assert window.preset_table.item(0, 1).data(main_window.PRESET_TABLE_ATTENTION_ROLE)
+    assert window.worker is None
+    assert window.start_button.isEnabled()
 
     window.close()
 
@@ -397,6 +501,7 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
     assert not window.presets.isHidden()
     assert not window.preset_advanced_splitter.isHidden()
     assert not window.preset_table.isHidden()
+    assert not window.preset_table.isColumnHidden(0)
     assert not window.preset_csv_controls.isHidden()
     assert window.preset_hint.text() == "Select the presets to normalize."
     assert '"file_type": "hls"' in window.metadata_text.toPlainText()
@@ -470,8 +575,8 @@ def test_setlist_load_enables_preset_table_csv_buttons(monkeypatch, app, tmp_pat
     window.input_path.setText(str(tmp_path / "single.hlx"))
     window.load_assignments()
 
-    assert not window.load_csv_button.isEnabled()
-    assert not window.save_csv_button.isEnabled()
+    assert window.load_csv_button.isEnabled()
+    assert window.save_csv_button.isEnabled()
 
     window.close()
 
@@ -1066,6 +1171,7 @@ def test_gain_log_updates_preset_correction_columns(monkeypatch, app) -> None:
 
 def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, app) -> None:
     window = MainWindow()
+    _mock_single_hlx_handler(monkeypatch, name="New")
     window.input_path.setText("/tmp/original.hls")
     window.preset_table.insertRow(0)
     selected = QTableWidgetItem()
@@ -1098,7 +1204,9 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
     window.browse_input()
 
     assert window.input_path.text() == "/tmp/new.hlx"
-    assert window.preset_table.rowCount() == 0
+    assert window.preset_table.rowCount() == 1
+    assert window.preset_table.item(0, 1).text() == ""
+    assert window.preset_table.item(0, 2).text() == "New"
     assert not window._adjusted_presets
     assert len(prompts) == 2
     assert prompts[0][1] == "Discard preset table changes"
@@ -1108,6 +1216,7 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
 
 def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -> None:
     window = MainWindow()
+    _mock_single_hlx_handler(monkeypatch)
     window.input_path.setText("/tmp/original.hls")
     monkeypatch.setattr(
         QFileDialog,
@@ -1336,8 +1445,9 @@ def test_completion_enables_save_without_redundant_popup(tmp_path, monkeypatch, 
     window.close()
 
 
-def test_loaded_file_updates_window_title_and_save_as_state(app) -> None:
+def test_loaded_file_updates_window_title_and_save_as_state(monkeypatch, app) -> None:
     window = MainWindow()
+    _mock_single_hlx_handler(monkeypatch)
     assert not window.start_button.isEnabled()
     window.input_path.setText("/tmp/input.hlx")
 
