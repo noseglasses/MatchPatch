@@ -198,13 +198,13 @@ def _normalization_icon() -> QIcon:
 
 
 def _advanced_icon() -> QIcon:
-    pixmap = QPixmap(32, 32)
+    pixmap = QPixmap(56, 56)
     pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     font = QFont(QApplication.font())
-    font.setPixelSize(27)
+    font.setPixelSize(50)
     painter.setFont(font)
     painter.setPen(QColor("#475569"))
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "⚙")
@@ -403,11 +403,13 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.about_action)
 
         square_button_size = toolbar.iconSize().width() + 14
-        for button in (self.start_button, self.cancel_button, self.advanced_button):
+        for button in (self.start_button, self.cancel_button):
             button.setAutoRaise(True)
             button.setIconSize(toolbar.iconSize())
             button.setFixedSize(square_button_size, square_button_size)
-        self.advanced_button.setIconSize(QSize(24, 24))
+        self.advanced_button.setAutoRaise(True)
+        self.advanced_button.setIconSize(QSize(40, 40))
+        self.advanced_button.setFixedSize(46, 46)
         self.start_cancel_stack.setFixedSize(square_button_size, square_button_size)
         for action in (self.help_action, self.about_action):
             button = toolbar.widgetForAction(action)

@@ -167,13 +167,14 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert toolbar.widgetForAction(window.device_action) is window.device
     assert toolbar.widgetForAction(window.advanced_action) is window.advanced_button
     assert toolbar.widgetForAction(window.normalization_action) is window.start_cancel_stack
+    assert toolbar.iconSize() == main_window.QSize(18, 18)
     assert window.start_cancel_stack.currentWidget() is window.start_button
     assert window.start_button.text() == ""
     assert window.advanced_button.text() == ""
     assert not window.start_button.icon().isNull()
     assert not window.advanced_button.icon().isNull()
     assert window.start_button.iconSize() == toolbar.iconSize()
-    assert window.advanced_button.iconSize() == main_window.QSize(24, 24)
+    assert window.advanced_button.iconSize() == main_window.QSize(40, 40)
     assert isinstance(window.start_button, main_window.QToolButton)
     assert isinstance(window.cancel_button, main_window.QToolButton)
     assert isinstance(window.advanced_button, main_window.QToolButton)
@@ -186,7 +187,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.cancel_button.width() == window.cancel_button.height()
     assert window.advanced_button.width() == window.advanced_button.height()
     assert window.start_button.size() == window.cancel_button.size()
-    assert window.advanced_button.size() == window.start_button.size()
+    assert window.advanced_button.size() == main_window.QSize(46, 46)
     assert window.start_cancel_stack.size() == window.start_button.size()
     for action in (window.help_action, window.about_action):
         button = toolbar.widgetForAction(action)
