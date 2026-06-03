@@ -7,6 +7,7 @@ import json
 import math
 import re
 import shutil
+import tempfile
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
@@ -25,6 +26,7 @@ from PySide6.QtCore import (
     QTimer,
 )
 from PySide6.QtGui import (
+    QAction,
     QBrush,
     QCloseEvent,
     QColor,
@@ -34,6 +36,7 @@ from PySide6.QtGui import (
     QPainter,
     QPaintEvent,
     QPalette,
+    QPixmap,
     QSyntaxHighlighter,
     Qt,
     QTextCharFormat,
@@ -64,6 +67,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QTextEdit,
+    QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -137,11 +142,36 @@ IN_PROGRESS_PHASES = {
 }
 
 
+class SaveCancelled(Exception):
+    """Raised internally when the user cancels a save operation."""
+
+
 def _phase_text(phase: str) -> str:
     if phase == "normalization_cancelled_by_user":
         return "Normalization cancelled by user"
     text = phase.replace("_", " ").title()
     return f"{text}..." if phase in IN_PROGRESS_PHASES else text
+
+
+def _normalization_icon() -> QIcon:
+    pixmap = QPixmap(32, 32)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#475569"))
+    painter.drawRoundedRect(5, 22, 22, 2, 1, 1)
+    painter.drawRoundedRect(5, 8, 2, 16, 1, 1)
+    for x, y, height, color in (
+        (10, 15, 7, "#38bdf8"),
+        (15, 11, 11, "#22c55e"),
+        (20, 7, 15, "#f59e0b"),
+    ):
+        painter.setBrush(QColor(color))
+        painter.drawRoundedRect(x, y, 4, height, 1, 1)
+    painter.end()
+    return QIcon(pixmap)
 
 
 class MainWindow(QMainWindow):
@@ -169,6 +199,9 @@ class MainWindow(QMainWindow):
         self.log_entries: list[tuple[str, str, str]] = []
         self._processing_dot_green = False
 
+        self.input_path = QLineEdit()
+        self.output_path = QLineEdit()
+        self._build_toolbar()
         content = QWidget()
         self.content = content
         scroll = QScrollArea()
@@ -181,89 +214,110 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_inputs())
         layout.addWidget(self._build_advanced())
         layout.addWidget(self._build_presets())
-        self.start_button = QPushButton("Start normalization")
-        self.start_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-        self.start_button.setToolTip("Start the guided preset-normalization workflow.")
-        self.start_button.clicked.connect(self.start_normalization)
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton)
-        )
-        self.cancel_button.setToolTip("Stop the currently running normalization workflow.")
-        self.cancel_button.clicked.connect(self.cancel_normalization)
-        self.start_cancel_stack = QStackedWidget()
-        self.start_cancel_stack.addWidget(self.start_button)
-        self.start_cancel_stack.addWidget(self.cancel_button)
-        self.export_button = QPushButton("Export")
-        self.export_button.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
-        )
-        self.export_button.setToolTip("Write the normalized setlist or preset to the output file.")
-        self.export_button.setEnabled(False)
-        self.export_button.clicked.connect(self.export_output)
-        action_button_height = max(
-            button.sizeHint().height()
-            for button in (self.start_button, self.cancel_button, self.export_button)
-        )
-        self.start_cancel_stack.setFixedHeight(action_button_height)
-        for button in (self.start_button, self.cancel_button, self.export_button):
-            button.setFixedHeight(action_button_height)
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.start_cancel_stack)
-        buttons.addWidget(self.export_button)
-        layout.addLayout(buttons)
         layout.addWidget(self._build_progress())
         layout.addWidget(self._build_retained_csv())
         layout.addStretch()
         self._set_phase("ready")
         self._populate_devices()
         self.load_defaults()
+        self._refresh_file_actions()
         QTimer.singleShot(0, self._resize_to_initial_content)
+
+    def _build_toolbar(self) -> None:
+        toolbar = QToolBar("File", self)
+        toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(18, 18))
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+
+        self.open_action = QAction(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton),
+            "Open",
+            self,
+        )
+        self.open_action.setToolTip("Open a Helix setlist or preset file.")
+        self.open_action.triggered.connect(self.browse_input)
+        toolbar.addAction(self.open_action)
+
+        self.save_action = QAction(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton),
+            "Save",
+            self,
+        )
+        self.save_action.setToolTip("Save changes to the active Helix file.")
+        self.save_action.triggered.connect(self.save_active_file)
+        toolbar.addAction(self.save_action)
+
+        self.save_as_action = QAction(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton),
+            "Save As",
+            self,
+        )
+        self.save_as_action.setToolTip("Save the active Helix file under a new name.")
+        self.save_as_action.triggered.connect(self.save_active_file_as)
+        toolbar.addAction(self.save_as_action)
+
+        self.normalization_separator_action = toolbar.addSeparator()
+        self.start_button = QToolButton(self)
+        self.start_button.setIcon(_normalization_icon())
+        self.start_button.setToolTip("Start the guided preset-normalization workflow.")
+        self.start_button.clicked.connect(self.start_normalization)
+        self.cancel_button = QToolButton(self)
+        self.cancel_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton)
+        )
+        self.cancel_button.setToolTip("Stop the currently running normalization workflow.")
+        self.cancel_button.clicked.connect(self.cancel_normalization)
+        self.start_cancel_stack = QStackedWidget(self)
+        self.start_cancel_stack.addWidget(self.start_button)
+        self.start_cancel_stack.addWidget(self.cancel_button)
+        self.normalization_action = toolbar.addWidget(self.start_cancel_stack)
+
+        help_spacer = QWidget(self)
+        help_spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.help_spacer_action = toolbar.addWidget(help_spacer)
+        toolbar.addSeparator()
+
+        self.help_action = QAction(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogHelpButton),
+            "Help",
+            self,
+        )
+        self.help_action.setToolTip("Open the guided MatchPatch usage instructions.")
+        self.help_action.triggered.connect(self.show_help)
+        toolbar.addAction(self.help_action)
+
+        self.about_action = QAction(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation),
+            "About",
+            self,
+        )
+        self.about_action.setToolTip(
+            "Show project version, license, and repository information."
+        )
+        self.about_action.triggered.connect(self.show_about)
+        toolbar.addAction(self.about_action)
+
+        square_button_size = toolbar.iconSize().width() + 14
+        for button in (self.start_button, self.cancel_button):
+            button.setAutoRaise(True)
+            button.setIconSize(toolbar.iconSize())
+            button.setFixedSize(square_button_size, square_button_size)
+        self.start_cancel_stack.setFixedSize(square_button_size, square_button_size)
+        for action in (self.help_action, self.about_action):
+            button = toolbar.widgetForAction(action)
+            if button is not None:
+                button.setFixedSize(square_button_size, square_button_size)
 
     def _build_inputs(self) -> QGroupBox:
         group = QGroupBox("General")
         self.general = group
         layout = QGridLayout(group)
-        self.input_path = QLineEdit()
-        input_browse = QPushButton("Browse")
-        input_browse.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
-        input_browse.setToolTip("Choose the Helix setlist or preset file to normalize.")
-        input_browse.clicked.connect(self.browse_input)
-        layout.addWidget(
-            _label("Setlist/Preset file", "The Helix .hls setlist or .hlx preset to normalize."),
-            0,
-            0,
-        )
-        layout.addWidget(_path_row(self.input_path, input_browse), 0, 1)
-        self.output_path = QLineEdit()
-        output_browse = QPushButton("Browse")
-        output_browse.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
-        output_browse.setToolTip("Choose where to export the normalized setlist or preset.")
-        output_browse.clicked.connect(self.browse_output)
-        layout.addWidget(
-            _label("Output file", "The .hls or .hlx file written when Export is pressed."),
-            1,
-            0,
-        )
-        layout.addWidget(_path_row(self.output_path, output_browse), 1, 1)
         self.device = QComboBox()
         self.device.currentIndexChanged.connect(self.device_changed)
         layout.addWidget(
-            _label("Device", "The audio processor profile used by this workflow."), 2, 0
+            _label("Device", "The audio processor profile used by this workflow."), 0, 0
         )
-        layout.addWidget(self.device, 2, 1)
-        help_button = QPushButton("Help")
-        help_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogHelpButton))
-        help_button.setToolTip("Open the guided MatchPatch usage instructions.")
-        help_button.clicked.connect(self.show_help)
-        about_button = QPushButton("About")
-        about_button.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
-        )
-        about_button.setToolTip("Show project version, license, and repository information.")
-        about_button.clicked.connect(self.show_about)
-        layout.addWidget(help_button, 0, 2)
-        layout.addWidget(about_button, 1, 2)
+        layout.addWidget(self.device, 0, 1)
         layout.setColumnStretch(1, 1)
         return group
 
@@ -309,6 +363,14 @@ class MainWindow(QMainWindow):
         for button in (self.save_csv_button, self.load_csv_button):
             button.setFixedSize(csv_button_size, csv_button_size)
             button.setEnabled(False)
+        self.preset_csv_controls = QWidget()
+        preset_csv_layout = QHBoxLayout(self.preset_csv_controls)
+        preset_csv_layout.setContentsMargins(0, 0, 0, 0)
+        preset_csv_layout.setSpacing(4)
+        self.preset_csv_label = QLabel("CSV: ")
+        preset_csv_layout.addWidget(self.preset_csv_label)
+        preset_csv_layout.addWidget(self.load_csv_button)
+        preset_csv_layout.addWidget(self.save_csv_button)
         self.single_slot = QLineEdit()
         self.single_slot.setPlaceholderText("Temporary slot, for example 12A")
         self.single_slot.hide()
@@ -332,7 +394,6 @@ class MainWindow(QMainWindow):
         )
         self.unselect_all_button.setToolTip("Exclude every preset in this setlist.")
         self.unselect_all_button.clicked.connect(lambda: self.set_all_presets_checked(False))
-        preset_header.addWidget(self.manual_adjustments)
         preset_header.addWidget(self.select_all_button)
         preset_header.addWidget(self.unselect_all_button)
         layout.addLayout(preset_header)
@@ -340,8 +401,8 @@ class MainWindow(QMainWindow):
         preset_table_note_row = QHBoxLayout()
         preset_table_note_row.addWidget(self.preset_table_note)
         preset_table_note_row.addStretch()
-        preset_table_note_row.addWidget(self.load_csv_button)
-        preset_table_note_row.addWidget(self.save_csv_button)
+        preset_table_note_row.addWidget(self.manual_adjustments)
+        preset_table_note_row.addWidget(self.preset_csv_controls)
         layout.addLayout(preset_table_note_row)
         layout.addWidget(self.single_slot)
         self.presets = content
@@ -580,23 +641,33 @@ class MainWindow(QMainWindow):
         )
         return answer in {QMessageBox.StandardButton.Discard, QMessageBox.StandardButton.Yes}
 
-    def browse_output(self) -> None:
+    def _choose_save_as_path(self, *, accept_label: str = "Save as") -> Path | None:
         suffix = Path(self.input_path.text()).suffix.lower()
+        if suffix not in {".hls", ".hlx"}:
+            self.show_error("Open a Helix .hls or .hlx file before saving")
+            return None
         file_filter = (
             f"Helix {suffix} (*{suffix})" if suffix in {".hls", ".hlx"} else "Patches (*.hls *.hlx)"
         )
-        dialog = QFileDialog(self, "Choose output file")
+        dialog = QFileDialog(self, "Save Helix file as")
         dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setNameFilter(file_filter)
-        dialog.setLabelText(QFileDialog.DialogLabel.Accept, "Select")
+        dialog.setLabelText(QFileDialog.DialogLabel.Accept, accept_label)
         path = dialog.selectedFiles()[0] if dialog.exec() and dialog.selectedFiles() else ""
-        if path:
-            if suffix in {".hls", ".hlx"} and Path(path).suffix.lower() != suffix:
-                self.show_error(f"Output file must use the {suffix} extension")
-                return
-            self.output_path.setText(path)
+        if not path:
+            return None
+        save_path = Path(path)
+        if save_path.suffix.lower() != suffix:
+            self.show_error(f"Saved file must use the {suffix} extension")
+            return None
+        return save_path
+
+    def browse_output(self) -> None:
+        path = self._choose_save_as_path(accept_label="Save")
+        if path is not None:
+            self.output_path.setText(str(path))
 
     def save_preset_table_csv(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -634,6 +705,7 @@ class MainWindow(QMainWindow):
 
         try:
             before = self._preset_table_content_signature()
+            adjusted_before = set(self._adjusted_presets)
             with self._sorting_paused():
                 accepted, errors = self._load_preset_table_csv(Path(path))
         except OSError as exc:
@@ -641,6 +713,9 @@ class MainWindow(QMainWindow):
             return
         if self._preset_table_content_signature() != before:
             self._mark_preset_table_modified()
+        else:
+            self._adjusted_presets = adjusted_before
+            self._refresh_file_actions()
 
         for error in errors:
             self._log(error, "error")
@@ -883,17 +958,11 @@ class MainWindow(QMainWindow):
         self._clear_bad_lufs_highlights()
         self._load_metadata()
         self.presets.hide()
-        if (
-            self.output_path.text().strip()
-            and Path(self.output_path.text()).suffix.lower() != path.suffix.lower()
-        ):
-            self.output_path.clear()
         is_single_preset = path.suffix.lower() == ".hlx"
         self.single_slot.setVisible(is_single_preset)
         self.preset_table.setVisible(not is_single_preset)
         self.preset_table_note.setVisible(not is_single_preset)
-        self.load_csv_button.setVisible(not is_single_preset)
-        self.save_csv_button.setVisible(not is_single_preset)
+        self.preset_csv_controls.setVisible(not is_single_preset)
         self._set_preset_csv_buttons_enabled(False)
         self.select_all_button.setVisible(not is_single_preset)
         self.unselect_all_button.setVisible(not is_single_preset)
@@ -906,7 +975,9 @@ class MainWindow(QMainWindow):
             self._adjusted_presets.clear()
             self.preset_table.setRowCount(0)
             self._loaded_input_path = str(path)
+            self._set_active_file(path)
             self._reset_preset_table_modified()
+            self._refresh_file_actions()
             self._set_preset_csv_buttons_enabled(False)
             self.preset_hint.setText("Enter the temporary Helix slot used during measurement.")
             self.presets.show()
@@ -937,7 +1008,9 @@ class MainWindow(QMainWindow):
             return
 
         self._loaded_input_path = str(path)
+        self._set_active_file(path)
         self._reset_preset_table_modified()
+        self._refresh_file_actions()
         self.preset_hint.setText("Select the presets to normalize.")
         self._set_preset_csv_buttons_enabled(self.preset_table.rowCount() > 0)
         self.presets.show()
@@ -967,6 +1040,9 @@ class MainWindow(QMainWindow):
         self.metadata_text.setPlainText(json.dumps(metadata, indent=2, ensure_ascii=False))
 
     def start_normalization(self) -> None:
+        if self._preset_table_has_unsaved_changes() and not self._prompt_save_before_normalization():
+            return
+
         try:
             args = apply_config(parse_args(self._build_argv()))
             request = replace(request_from_args(args), defer_export=True)
@@ -1128,20 +1204,60 @@ class MainWindow(QMainWindow):
             self.retained_csv.setText(str(result.retained_csv_path))
             self.retained_csv_pane.show()
         self.completed_result = result
-        self.export_button.setEnabled(result.retained_csv_path is not None)
-        self._log("Measurement completed; choose an output file and press Export", "success")
+        if result.retained_csv_path is not None:
+            self._mark_preset_table_modified()
+        self._log("Measurement completed; save the active file to write adjustments", "success")
 
     def export_output(self) -> None:
+        self.save_active_file()
+
+    def save_active_file(self) -> bool:
+        active_path = Path(self.input_path.text().strip())
+        if not self.input_path.text().strip():
+            self.show_error("Open a Helix .hls or .hlx file before saving")
+            return False
+        return self._save_to_path(active_path)
+
+    def save_active_file_as(self) -> bool:
+        output_path = self._choose_save_as_path()
+        if output_path is None:
+            return False
+        return self._save_to_path(output_path, make_active=True)
+
+    def _save_to_path(self, output_path: Path, *, make_active: bool = True) -> bool:
         request = self.completed_request
         result = self.completed_result
-        if request is None or result is None or result.retained_csv_path is None:
-            self.show_error("Run normalization before exporting an output file")
-            return
+        if not self.input_path.text().strip():
+            self.show_error("Open a Helix .hls or .hlx file before saving")
+            return False
+        if not self._preset_table_has_unsaved_changes():
+            if make_active and output_path != Path(self.input_path.text()):
+                try:
+                    self._copy_active_file_to(output_path)
+                except SaveCancelled:
+                    return False
+                except Exception as exc:  # noqa: BLE001
+                    self.show_error(str(exc))
+                    return False
+                self._activate_saved_file(output_path)
+            return True
 
-        output_path = Path(self.output_path.text().strip())
-        if not self.output_path.text().strip():
-            self.show_error("Choose an output file before exporting")
-            return
+        if request is None:
+            try:
+                request = replace(request_from_args(apply_config(parse_args(self._build_argv()))))
+            except Exception as exc:  # noqa: BLE001
+                self.show_error(str(exc))
+                return False
+
+        csv_path = result.retained_csv_path if result is not None else None
+        temporary_csv: Path | None = None
+        if csv_path is None:
+            try:
+                temporary_csv = self._create_table_save_csv(output_path.parent)
+                csv_path = temporary_csv
+            except Exception as exc:  # noqa: BLE001
+                self.show_error(str(exc))
+                return False
 
         try:
             profile = get_device_profile(request.device)
@@ -1149,33 +1265,134 @@ class MainWindow(QMainWindow):
             handler.validate_output(request.input_path, output_path)
         except Exception as exc:  # noqa: BLE001
             self.show_error(str(exc))
-            return
+            return False
 
-        if output_path.exists():
-            answer = QMessageBox.question(
-                self,
-                "Overwrite output file",
-                f"The output file already exists:\n{output_path}\n\nOverwrite it?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+        if not self._confirm_overwrite(output_path):
+            return False
+
+        replace_target = output_path.resolve() == request.input_path.resolve()
+        export_path = output_path
+        temporary_output: Path | None = None
+        if replace_target:
+            temporary = tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                suffix=output_path.suffix,
+                dir=output_path.parent,
+                delete=False,
             )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-
+            temporary.close()
+            temporary_output = Path(temporary.name)
+            export_path = temporary_output
         try:
             export_adjusted_file(
                 request,
-                result.retained_csv_path,
-                output_path,
+                csv_path,
+                export_path,
                 adjustments=self._table_adjustments(),
                 on_progress=self.update_progress,
             )
+            if temporary_output is not None:
+                temporary_output.replace(output_path)
         except Exception as exc:  # noqa: BLE001
+            if temporary_output is not None:
+                temporary_output.unlink(missing_ok=True)
             self.show_error(str(exc))
-            return
+            return False
+        finally:
+            if temporary_csv is not None:
+                temporary_csv.unlink(missing_ok=True)
 
         self._set_phase("completed")
-        self._log(f"Output: {output_path.resolve()}", "success")
+        self._log(f"Saved: {output_path.resolve()}", "success")
+        if make_active:
+            self._activate_saved_file(output_path)
+        else:
+            self._reset_preset_table_modified()
+            self._refresh_file_actions()
+        return True
+
+    def _copy_active_file_to(self, output_path: Path) -> None:
+        input_path = Path(self.input_path.text())
+        if not self._confirm_overwrite(output_path):
+            raise SaveCancelled
+        shutil.copy2(input_path, output_path)
+
+    def _activate_saved_file(self, path: Path) -> None:
+        self.input_path.setText(str(path))
+        self._preset_load_discard_confirmed = True
+        try:
+            self.load_assignments()
+        finally:
+            self._preset_load_discard_confirmed = False
+
+    def _set_active_file(self, path: Path) -> None:
+        filename = path.name if str(path) else ""
+        self.setWindowTitle(filename or "MatchPatch")
+
+    def _refresh_file_actions(self) -> None:
+        has_file = bool(self.input_path.text().strip())
+        if hasattr(self, "save_action"):
+            self.save_action.setEnabled(has_file and self._preset_table_has_unsaved_changes())
+        if hasattr(self, "save_as_action"):
+            self.save_as_action.setEnabled(has_file)
+        if hasattr(self, "start_button"):
+            self.start_button.setEnabled(bool(self._loaded_input_path) and self.worker is None)
+
+    def _prompt_save_before_normalization(self) -> bool:
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Save changes")
+        dialog.setText("The preset table contains changes. Save them before starting normalization?")
+        save_button = dialog.addButton(QMessageBox.StandardButton.Save)
+        save_as_button = dialog.addButton("Save As", QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(save_button)
+        dialog.exec()
+        clicked = dialog.clickedButton()
+        if clicked is save_button:
+            return self.save_active_file()
+        if clicked is save_as_button:
+            return self.save_active_file_as()
+        return False
+
+    def _confirm_overwrite(self, output_path: Path) -> bool:
+        if not output_path.exists():
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Overwrite file",
+            f"The file already exists:\n{output_path}\n\nOverwrite it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _create_table_save_csv(self, directory: Path) -> Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="",
+            suffix=".matchpatch-save.csv",
+            dir=directory,
+            delete=False,
+        )
+        with temporary:
+            fieldnames = ["DevicePatch"]
+            for snapshot in range(1, self.snapshot_count + 1):
+                fieldnames.extend([f"LUFS{snapshot}", f"CrestFactor{snapshot}"])
+            writer = csv.DictWriter(temporary, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in range(self.preset_table.rowCount()):
+                patch_item = self.preset_table.item(row, 1)
+                if patch_item is None:
+                    continue
+                csv_row = {"DevicePatch": patch_item.text()}
+                for snapshot in range(1, self.snapshot_count + 1):
+                    csv_row[f"LUFS{snapshot}"] = self.target_lufs.text() or "-16.0"
+                    csv_row[f"CrestFactor{snapshot}"] = "12.0"
+                writer.writerow(csv_row)
+        return Path(temporary.name)
 
     def show_error(self, message: str) -> None:
         self._stop_busy_phase()
@@ -1190,9 +1407,9 @@ class MainWindow(QMainWindow):
 
     def worker_finished(self) -> None:
         self._stop_busy_phase(self._processing_dot_color)
-        self.start_button.setEnabled(True)
         self.start_cancel_stack.setCurrentWidget(self.start_button)
         self.worker = None
+        self._refresh_file_actions()
 
     def _discard_completed_export(self) -> None:
         if (
@@ -1204,7 +1421,6 @@ class MainWindow(QMainWindow):
             shutil.rmtree(self.completed_result.temp_dir, ignore_errors=True)
         self.completed_request = None
         self.completed_result = None
-        self.export_button.setEnabled(False)
         self.retained_csv.clear()
         self.retained_csv_pane.hide()
 
@@ -1226,7 +1442,7 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._preset_table_modified and not self._confirm_discard_preset_table_changes():
+        if self._preset_table_has_unsaved_changes() and not self._confirm_discard_preset_table_changes():
             event.ignore()
             return
         if self.worker is not None:
@@ -1900,10 +2116,13 @@ class MainWindow(QMainWindow):
 
     def _mark_preset_table_modified(self) -> None:
         self._preset_table_modified = True
+        self._refresh_file_actions()
 
     def _reset_preset_table_modified(self) -> None:
         self._preset_table_clean_signature = self._preset_table_content_signature()
         self._preset_table_modified = False
+        self._adjusted_presets.clear()
+        self._refresh_file_actions()
 
     def _preset_table_content_signature(self) -> tuple[tuple[str, ...], ...]:
         return tuple(

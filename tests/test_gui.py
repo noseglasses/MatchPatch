@@ -78,21 +78,57 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
         window.content.layout().indexOf(window.advanced) + 1
     )
     assert not window.findChildren(QMenuBar)
-    assert "Setlist/Preset file" in [label.text() for label in window.general.findChildren(QLabel)]
-    assert {"Help", "About"} <= {
-        button.text() for button in window.general.findChildren(QPushButton)
-    }
-    browse_buttons = {
-        button.toolTip(): button
-        for button in window.general.findChildren(QPushButton)
-        if button.text() == "Browse"
-    }
-    input_browse = browse_buttons["Choose the Helix setlist or preset file to normalize."]
-    output_browse = browse_buttons["Choose where to export the normalized setlist or preset."]
-    assert (
-        input_browse.icon().pixmap(16, 16).toImage()
-        != output_browse.icon().pixmap(16, 16).toImage()
+    assert "Setlist/Preset file" not in [
+        label.text() for label in window.general.findChildren(QLabel)
+    ]
+    assert {"Help", "About"}.isdisjoint(
+        {button.text() for button in window.general.findChildren(QPushButton)}
     )
+    toolbar = window.findChildren(main_window.QToolBar)[0]
+    toolbar_actions = [
+        action for action in toolbar.actions() if action.text() and not action.isSeparator()
+    ]
+    assert [action.text() for action in toolbar_actions] == [
+        "Open",
+        "Save",
+        "Save As",
+        "Help",
+        "About",
+    ]
+    assert toolbar.actions().index(window.normalization_separator_action) == (
+        toolbar.actions().index(window.save_as_action) + 1
+    )
+    assert toolbar.actions().index(window.normalization_action) == (
+        toolbar.actions().index(window.normalization_separator_action) + 1
+    )
+    assert toolbar.actions().index(window.help_spacer_action) < toolbar.actions().index(
+        window.help_action
+    )
+    help_spacer = toolbar.widgetForAction(window.help_spacer_action)
+    assert help_spacer is not None
+    assert help_spacer.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+    assert toolbar.widgetForAction(window.normalization_action) is window.start_cancel_stack
+    assert window.start_cancel_stack.currentWidget() is window.start_button
+    assert window.start_button.text() == ""
+    assert not window.start_button.icon().isNull()
+    assert window.start_button.iconSize() == toolbar.iconSize()
+    assert isinstance(window.start_button, main_window.QToolButton)
+    assert isinstance(window.cancel_button, main_window.QToolButton)
+    assert window.start_button.autoRaise()
+    assert window.cancel_button.autoRaise()
+    assert window.start_button.toolTip().startswith("Start")
+    assert window.start_button.width() == window.start_button.height()
+    assert window.cancel_button.width() == window.cancel_button.height()
+    assert window.start_button.size() == window.cancel_button.size()
+    assert window.start_cancel_stack.size() == window.start_button.size()
+    for action in (window.help_action, window.about_action):
+        button = toolbar.widgetForAction(action)
+        assert button is not None
+        assert button.width() == button.height()
+    assert window.open_action.isEnabled()
+    assert not window.save_action.isEnabled()
+    assert not window.save_as_action.isEnabled()
+    assert not window.start_button.isEnabled()
     assert window.log_level.currentText() == "Info"
     assert window.metadata_text.toPlainText() == "{}"
     assert window.device_stack.count() == 1
@@ -102,15 +138,6 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.statusBar().isSizeGripEnabled()
     assert window.phase.parent() is window.statusBar()
     assert window.processing_dot.parent() is window.statusBar()
-    progress_index = window.content.layout().indexOf(window.progress_group)
-    button_layout = window.content.layout().itemAt(progress_index - 1).layout()
-    assert button_layout is not None
-    assert button_layout.indexOf(window.start_cancel_stack) >= 0
-    assert button_layout.indexOf(window.export_button) >= 0
-    assert window.start_cancel_stack.currentWidget() is window.start_button
-    assert window.start_button.height() == window.export_button.height()
-    assert window.cancel_button.height() == window.export_button.height()
-    assert window.start_cancel_stack.height() == window.export_button.height()
     assert window.progress_group.layout().itemAt(0).widget() is window.current
     assert window.progress_group.layout().itemAt(2).widget() is window.preset_progress
     assert window.progress_group.isHidden()
@@ -120,6 +147,10 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.preset_table.verticalHeader().isHidden()
     assert not window.preset_table.wordWrap()
     assert window.preset_table_note.text() == "Only non-empty presets are listed."
+    assert window.preset_csv_label.text() == "CSV: "
+    assert window.preset_csv_controls.layout().indexOf(window.preset_csv_label) >= 0
+    assert window.preset_csv_controls.layout().indexOf(window.load_csv_button) >= 0
+    assert window.preset_csv_controls.layout().indexOf(window.save_csv_button) >= 0
     assert not window.load_csv_button.isEnabled()
     assert not window.save_csv_button.isEnabled()
     assert window.load_csv_button.text() == ""
@@ -220,6 +251,7 @@ def test_single_preset_load_displays_presets_panel_with_instruction_label(app) -
     assert not window.presets.isHidden()
     assert window.preset_table.isHidden()
     assert not window.single_slot.isHidden()
+    assert window.preset_csv_controls.isHidden()
     assert window.preset_hint.height() == window.preset_hint.sizeHint().height()
     assert window.preset_hint.text() == ("Enter the temporary Helix slot used during measurement.")
 
@@ -255,6 +287,7 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
 
     assert not window.presets.isHidden()
     assert not window.preset_table.isHidden()
+    assert not window.preset_csv_controls.isHidden()
     assert window.preset_hint.text() == "Select the presets to normalize."
     assert '"file_type": "hls"' in window.metadata_text.toPlainText()
     assert '"name": "Set"' in window.metadata_text.toPlainText()
@@ -586,9 +619,13 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(monkeypa
     assert not window.manual_adjustments.isChecked()
     assert window.manual_adjustments.text() == "Edit content"
     assert window.preset_table.editTriggers() == window.preset_table.EditTrigger.NoEditTriggers
-    header = window.presets.layout().itemAt(0).layout()
-    assert header is not None
-    assert header.indexOf(window.manual_adjustments) < header.indexOf(window.select_all_button)
+    preset_table_note_row = window.presets.layout().itemAt(2).layout()
+    assert preset_table_note_row is not None
+    assert preset_table_note_row.indexOf(
+        window.manual_adjustments
+    ) < preset_table_note_row.indexOf(
+        window.preset_csv_controls
+    )
 
     window.manual_adjustments.setChecked(True)
     assert window.preset_table.editTriggers() == window.preset_table.EditTrigger.NoEditTriggers
@@ -841,8 +878,9 @@ def test_preset_table_can_be_sorted_by_column_headers(app) -> None:
     window.close()
 
 
-def test_gain_log_updates_preset_correction_columns(app) -> None:
+def test_gain_log_updates_preset_correction_columns(monkeypatch, app) -> None:
     window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
     window.preset_table.insertRow(0)
     selected = QTableWidgetItem()
     selected.setCheckState(Qt.CheckState.Checked)
@@ -985,8 +1023,9 @@ def test_closing_main_window_can_cancel_discarding_manual_table_changes(
     window.close()
 
 
-def test_snapshot_names_are_preloaded_and_bad_lufs_is_marked(app) -> None:
+def test_snapshot_names_are_preloaded_and_bad_lufs_is_marked(monkeypatch, app) -> None:
     window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
     window.preset_table.insertRow(0)
     selected = QTableWidgetItem()
     selected.setCheckState(Qt.CheckState.Checked)
@@ -1040,6 +1079,7 @@ def test_snapshot_count_widget_redraws_columns_and_preserves_loaded_names(app) -
 
 def test_bad_lufs_row_highlight_is_reset_for_new_input_and_measurement(monkeypatch, app) -> None:
     window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
     window.preset_table.insertRow(0)
     selected = QTableWidgetItem()
     selected.setCheckState(Qt.CheckState.Checked)
@@ -1073,6 +1113,7 @@ def test_bad_lufs_row_highlight_is_reset_for_new_input_and_measurement(monkeypat
     monkeypatch.setattr(main_window, "apply_config", lambda args: args)
     monkeypatch.setattr(main_window, "request_from_args", lambda args: _request())
     monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
+    monkeypatch.setattr(window, "_prompt_save_before_normalization", lambda: True)
     window.start_normalization()
     assert window.preset_table.item(0, 0).background().style() == Qt.BrushStyle.NoBrush
 
@@ -1080,8 +1121,9 @@ def test_bad_lufs_row_highlight_is_reset_for_new_input_and_measurement(monkeypat
     window.close()
 
 
-def test_implausible_gain_warning_is_marked_as_bad_lufs(app) -> None:
+def test_implausible_gain_warning_is_marked_as_bad_lufs(monkeypatch, app) -> None:
     window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
     window.preset_table.insertRow(0)
     selected = QTableWidgetItem()
     selected.setCheckState(Qt.CheckState.Checked)
@@ -1139,34 +1181,107 @@ def test_retained_csv_path_and_colored_timestamped_log_are_displayed(app) -> Non
     window.close()
 
 
-def test_completion_enables_export_without_redundant_popup(tmp_path, monkeypatch, app) -> None:
+def test_completion_enables_save_without_redundant_popup(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
+    window.input_path.setText(str(tmp_path / "input.hls"))
+    window._loaded_input_path = window.input_path.text()
     popups = []
     monkeypatch.setattr(QMessageBox, "information", lambda *args: popups.append(args))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
 
     window.normalization_completed(
         NormalizationResult(None, tmp_path, tmp_path / "lufs_analysis.csv")
     )
 
     assert popups == []
-    assert window.export_button.isEnabled()
-    assert "press Export" in window.log.toHtml()
+    assert window.save_action.isEnabled()
+    assert "save the active file" in window.log.toHtml()
 
     window.close()
 
 
-def test_new_input_clears_output_with_different_extension(app) -> None:
+def test_loaded_file_updates_window_title_and_save_as_state(app) -> None:
     window = MainWindow()
-    window.output_path.setText("/tmp/output.hls")
+    assert not window.start_button.isEnabled()
     window.input_path.setText("/tmp/input.hlx")
 
     window.load_assignments()
 
-    assert window.output_path.text() == ""
+    assert window.windowTitle() == "input.hlx"
+    assert window.save_as_action.isEnabled()
+    assert window.start_button.isEnabled()
     window.close()
 
 
-def test_output_browse_uses_file_selection_dialog(monkeypatch, app) -> None:
+def test_save_as_uses_file_selection_dialog(monkeypatch, app) -> None:
+    window = MainWindow()
+    window.input_path.setText("/tmp/input.hls")
+    dialogs = []
+    save_targets = []
+
+    class FileDialog:
+        class Option:
+            DontUseNativeDialog = object()
+
+        class AcceptMode:
+            AcceptOpen = object()
+
+        class FileMode:
+            AnyFile = object()
+
+        class DialogLabel:
+            Accept = object()
+
+        def __init__(self, parent, title):
+            self.parent = parent
+            self.title = title
+            self.settings = []
+            dialogs.append(self)
+
+        def setOption(self, option):
+            self.settings.append(("option", option))
+
+        def setAcceptMode(self, mode):
+            self.settings.append(("accept_mode", mode))
+
+        def setFileMode(self, mode):
+            self.settings.append(("file_mode", mode))
+
+        def setNameFilter(self, file_filter):
+            self.settings.append(("name_filter", file_filter))
+
+        def setLabelText(self, label, text):
+            self.settings.append(("label", label, text))
+
+        @staticmethod
+        def exec():
+            return True
+
+        @staticmethod
+        def selectedFiles():
+            return ["/tmp/output.hls"]
+
+    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
+    monkeypatch.setattr(
+        window,
+        "_save_to_path",
+        lambda path, **kwargs: save_targets.append((path, kwargs)) or True,
+    )
+
+    window.save_active_file_as()
+
+    assert save_targets == [(Path("/tmp/output.hls"), {"make_active": True})]
+    assert dialogs[0].settings == [
+        ("option", FileDialog.Option.DontUseNativeDialog),
+        ("accept_mode", FileDialog.AcceptMode.AcceptOpen),
+        ("file_mode", FileDialog.FileMode.AnyFile),
+        ("name_filter", "Helix .hls (*.hls)"),
+        ("label", FileDialog.DialogLabel.Accept, "Save as"),
+    ]
+    window.close()
+
+
+def test_output_save_picker_uses_save_button(monkeypatch, app) -> None:
     window = MainWindow()
     window.input_path.setText("/tmp/input.hls")
     dialogs = []
@@ -1218,20 +1333,14 @@ def test_output_browse_uses_file_selection_dialog(monkeypatch, app) -> None:
     window.browse_output()
 
     assert window.output_path.text() == "/tmp/output.hls"
-    assert dialogs[0].settings == [
-        ("option", FileDialog.Option.DontUseNativeDialog),
-        ("accept_mode", FileDialog.AcceptMode.AcceptOpen),
-        ("file_mode", FileDialog.FileMode.AnyFile),
-        ("name_filter", "Helix .hls (*.hls)"),
-        ("label", FileDialog.DialogLabel.Accept, "Select"),
-    ]
+    assert dialogs[0].settings[-1] == ("label", FileDialog.DialogLabel.Accept, "Save")
     window.close()
 
 
-def test_export_prompts_before_overwriting_existing_output(tmp_path, monkeypatch, app) -> None:
+def test_save_prompts_before_overwriting_existing_file(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
-    output_path = tmp_path / "output.hls"
-    output_path.touch()
+    input_path = tmp_path / "input.hls"
+    input_path.touch()
     csv_path = tmp_path / "lufs_analysis.csv"
     exported = []
     prompts = []
@@ -1239,16 +1348,17 @@ def test_export_prompts_before_overwriting_existing_output(tmp_path, monkeypatch
     class Handler:
         @staticmethod
         def validate_output(input_path, selected_output_path):
-            assert selected_output_path == output_path
+            assert selected_output_path == input_path
 
     class Profile:
         @staticmethod
         def create_patch_file_handler(project_dir):
             return Handler()
 
-    window.completed_request = _request(input_path=tmp_path / "input.hls")
+    window.input_path.setText(str(input_path))
+    window._mark_preset_table_modified()
+    window.completed_request = _request(input_path=input_path)
     window.completed_result = NormalizationResult(None, tmp_path, csv_path)
-    window.output_path.setText(str(output_path))
     monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
     monkeypatch.setattr(
         main_window, "export_adjusted_file", lambda *args, **kwargs: exported.append(args)
@@ -1259,7 +1369,7 @@ def test_export_prompts_before_overwriting_existing_output(tmp_path, monkeypatch
         lambda *args: prompts.append(args) or QMessageBox.StandardButton.No,
     )
 
-    window.export_output()
+    window.save_active_file()
 
     assert len(prompts) == 1
     assert exported == []
@@ -1337,6 +1447,9 @@ def test_normalization_does_not_start_when_overwrite_is_declined(
     monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
     monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
+    window.input_path.setText(str(input_path))
+    window._loaded_input_path = str(input_path)
+    window._refresh_file_actions()
 
     window.start_normalization()
 

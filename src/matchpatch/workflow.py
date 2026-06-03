@@ -158,7 +158,7 @@ def normalize_presets(
             ProgressEvent(
                 "phase",
                 phase="measuring",
-                message="Starting native measurement worker...",
+                message="Starting measurement worker...",
                 preset_total=len(preset_ids),
                 snapshot_total=request.policy.snapshot_count,
             ),
