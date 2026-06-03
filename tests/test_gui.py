@@ -1375,6 +1375,28 @@ def test_gain_log_updates_preset_correction_columns(monkeypatch, app) -> None:
     window.close()
 
 
+def test_single_preset_gain_log_updates_table_when_apply_log_uses_wrapped_slot(app) -> None:
+    window = MainWindow()
+    window.input_path.setText("/tmp/example.hlx")
+    window.preset_table.setRowCount(1)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("12A"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Lead"))
+    window._clear_preset_adjustments(0)
+
+    window.update_progress(
+        ProgressEvent("log", message="[GAIN] 01A Clean | 0.0 dB -> 2.5 dB (Delta: +2.5 dB)")
+    )
+
+    assert window.preset_table.item(0, 3).text() == "Clean"
+    assert window.preset_table.item(0, 4).text() == "+2.5"
+    assert window._table_adjustments().gain_deltas["12A"][0] == 2.5
+
+    window.close()
+
+
 def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="New")

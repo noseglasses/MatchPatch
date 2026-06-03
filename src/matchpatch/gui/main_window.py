@@ -2680,6 +2680,11 @@ class MainWindow(QMainWindow):
             item = self.preset_table.item(row, 1)
             if item is not None and item.text() == patch:
                 return row
+        if (
+            Path(self.input_path.text()).suffix.lower() == ".hlx"
+            and self.preset_table.rowCount() == 1
+        ):
+            return 0
         return None
 
     def _log(self, message: str, level: str) -> None:
