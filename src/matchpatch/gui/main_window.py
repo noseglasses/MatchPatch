@@ -226,7 +226,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(scroll)
         self._build_footer()
         layout = QVBoxLayout(content)
-        layout.addWidget(self._build_inputs())
         layout.addWidget(self._build_preset_advanced_splitter(), 1)
         layout.addWidget(self._build_progress())
         layout.addWidget(self._build_retained_csv())
@@ -290,6 +289,12 @@ class MainWindow(QMainWindow):
         help_spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.help_spacer_action = toolbar.addWidget(help_spacer)
 
+        self.device = QComboBox(self)
+        self.device.setToolTip("The audio processor profile used by this workflow.")
+        self.device.setAccessibleName("Device")
+        self.device.currentIndexChanged.connect(self.device_changed)
+        self.device_action = toolbar.addWidget(self.device)
+
         self.advanced_button = QToolButton(self)
         self.advanced_button.setIcon(_advanced_icon())
         self.advanced_button.setCheckable(True)
@@ -333,19 +338,6 @@ class MainWindow(QMainWindow):
             if button is not None:
                 button.setFixedSize(square_button_size, square_button_size)
 
-    def _build_inputs(self) -> QGroupBox:
-        group = QGroupBox("General")
-        self.general = group
-        layout = QGridLayout(group)
-        self.device = QComboBox()
-        self.device.currentIndexChanged.connect(self.device_changed)
-        layout.addWidget(
-            _label("Device", "The audio processor profile used by this workflow."), 0, 0
-        )
-        layout.addWidget(self.device, 0, 1)
-        layout.setColumnStretch(1, 1)
-        return group
-
     def _build_preset_advanced_splitter(self) -> QSplitter:
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.preset_advanced_splitter = splitter
@@ -355,15 +347,16 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._build_advanced())
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
-        splitter.hide()
         return splitter
 
-    def _build_presets(self) -> QGroupBox:
-        content = QGroupBox("Presets")
+    def _build_presets(self) -> QWidget:
+        content = QWidget()
         content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.preset_hint = QLabel("Choose an .hls or .hlx file.")
         self.preset_hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.preset_empty_state = self._build_preset_empty_state()
         self.preset_table = ContentHeightTableWidget()
         self.preset_table.setHorizontalHeader(SnapshotHeader(self.preset_table))
         self.preset_table.verticalHeader().hide()
@@ -412,7 +405,9 @@ class MainWindow(QMainWindow):
         self.single_slot = QLineEdit()
         self.single_slot.setPlaceholderText("Temporary slot, for example 12A")
         self.single_slot.hide()
-        preset_header = QHBoxLayout()
+        self.preset_header = QWidget()
+        preset_header = QHBoxLayout(self.preset_header)
+        preset_header.setContentsMargins(0, 0, 0, 0)
         preset_header.addWidget(self.preset_hint)
         preset_header.addStretch()
         self.select_all_button = QPushButton("Select all")
@@ -434,7 +429,8 @@ class MainWindow(QMainWindow):
         self.unselect_all_button.clicked.connect(lambda: self.set_all_presets_checked(False))
         preset_header.addWidget(self.select_all_button)
         preset_header.addWidget(self.unselect_all_button)
-        layout.addLayout(preset_header)
+        layout.addWidget(self.preset_header)
+        layout.addWidget(self.preset_empty_state)
         layout.addWidget(self.preset_table)
         preset_table_note_row = QHBoxLayout()
         preset_table_note_row.addWidget(self.preset_table_note)
@@ -444,8 +440,93 @@ class MainWindow(QMainWindow):
         layout.addLayout(preset_table_note_row)
         layout.addWidget(self.single_slot)
         self.presets = content
-        content.hide()
+        self._sync_preset_empty_state_height()
+        self._show_preset_empty_state()
         return content
+
+    def _build_preset_empty_state(self) -> QWidget:
+        pane = QWidget()
+        pane.setAutoFillBackground(True)
+        pane.setStyleSheet("background: white;")
+        pane.setMinimumHeight(160)
+        pane.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        layout = QVBoxLayout(pane)
+        layout.setContentsMargins(32, 4, 32, 4)
+        layout.setSpacing(1)
+        layout.addStretch(1)
+
+        logo = QLabel()
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo_pixmap = QPixmap(str(ASSETS_DIR / "matchmatch-logo.png"))
+        if not logo_pixmap.isNull():
+            logo.setPixmap(
+                logo_pixmap.scaled(
+                    720,
+                    360,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        self.preset_empty_logo = logo
+        layout.addWidget(logo)
+
+        open_button = QToolButton()
+        open_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        open_button.setIconSize(QSize(72, 72))
+        open_button.setText("Open hlx/hlx file")
+        open_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        open_button.setAutoRaise(True)
+        open_button.setToolTip("Open a Helix setlist or preset file.")
+        open_button.clicked.connect(self.browse_input)
+        self.preset_empty_open_button = open_button
+        layout.addWidget(open_button, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addStretch(1)
+        return pane
+
+    def _sync_preset_empty_state_height(self) -> None:
+        table_height = max(
+            self.preset_table.minimumHeight(),
+            self.preset_table.horizontalHeader().sizeHint().height()
+            + self.preset_table.verticalHeader().defaultSectionSize()
+            * self.preset_table.MAX_VISIBLE_ROWS
+            + self.preset_table.frameWidth() * 2,
+        )
+        row_height = max(
+            self.preset_header.sizeHint().height(),
+            self.preset_table_note.sizeHint().height(),
+            self.preset_csv_controls.sizeHint().height(),
+            self.manual_adjustments.sizeHint().height(),
+        )
+        spacing = self.presets.layout().spacing() if self.presets.layout() is not None else 0
+        self.preset_empty_state.setMinimumHeight(table_height + row_height * 2 + spacing * 2)
+
+    def _show_preset_empty_state(self) -> None:
+        self.preset_header.hide()
+        self.preset_empty_state.show()
+        self.preset_table.hide()
+        self.preset_table_note.hide()
+        self.preset_csv_controls.hide()
+        self.single_slot.hide()
+        self.select_all_button.hide()
+        self.unselect_all_button.hide()
+        self.manual_adjustments.hide()
+        self.presets.show()
+        self._refresh_preset_advanced_splitter_visibility()
+
+    def _show_loaded_preset_state(self, *, single_preset: bool) -> None:
+        self.preset_empty_state.hide()
+        self.preset_header.show()
+        self.single_slot.setVisible(single_preset)
+        self.preset_table.setVisible(not single_preset)
+        self.preset_table_note.setVisible(not single_preset)
+        self.preset_csv_controls.setVisible(not single_preset)
+        self.select_all_button.setVisible(not single_preset)
+        self.unselect_all_button.setVisible(not single_preset)
+        self.manual_adjustments.setVisible(not single_preset)
+        self.manual_adjustments.setChecked(False)
+        self.presets.show()
+        self._refresh_preset_advanced_splitter_visibility()
 
     def _build_device_settings(self) -> QWidget:
         content = QWidget()
@@ -584,7 +665,7 @@ class MainWindow(QMainWindow):
             self._schedule_resize_for_content()
 
     def _refresh_preset_advanced_splitter_visibility(self) -> None:
-        if hasattr(self, "preset_advanced_splitter"):
+        if hasattr(self, "preset_advanced_splitter") and hasattr(self, "advanced"):
             self.preset_advanced_splitter.setVisible(
                 not self.presets.isHidden() or not self.advanced.isHidden()
             )
@@ -1022,18 +1103,9 @@ class MainWindow(QMainWindow):
         self.preset_snapshot_positions.clear()
         self._clear_bad_lufs_highlights()
         self._load_metadata()
-        self.presets.hide()
-        self._refresh_preset_advanced_splitter_visibility()
         is_single_preset = path.suffix.lower() == ".hlx"
-        self.single_slot.setVisible(is_single_preset)
-        self.preset_table.setVisible(not is_single_preset)
-        self.preset_table_note.setVisible(not is_single_preset)
-        self.preset_csv_controls.setVisible(not is_single_preset)
+        self._show_loaded_preset_state(single_preset=is_single_preset)
         self._set_preset_csv_buttons_enabled(False)
-        self.select_all_button.setVisible(not is_single_preset)
-        self.unselect_all_button.setVisible(not is_single_preset)
-        self.manual_adjustments.setVisible(not is_single_preset)
-        self.manual_adjustments.setChecked(False)
         self.presets.updateGeometry()
         self._schedule_resize_for_content()
 
@@ -1046,8 +1118,6 @@ class MainWindow(QMainWindow):
             self._refresh_file_actions()
             self._set_preset_csv_buttons_enabled(False)
             self.preset_hint.setText("Enter the temporary Helix slot used during measurement.")
-            self.presets.show()
-            self._refresh_preset_advanced_splitter_visibility()
             QTimer.singleShot(0, self._fit_advanced_splitter_width)
             self.presets.updateGeometry()
             self._schedule_resize_for_content()
@@ -1072,6 +1142,9 @@ class MainWindow(QMainWindow):
                     self._set_snapshot_names(row, assignment.snapshot_names)
                 self._refresh_preset_table_editable_flags()
         except Exception as exc:  # noqa: BLE001
+            self._show_preset_empty_state()
+            self.presets.updateGeometry()
+            self._schedule_resize_for_content()
             self.show_error(str(exc))
             return
 
@@ -1081,8 +1154,6 @@ class MainWindow(QMainWindow):
         self._refresh_file_actions()
         self.preset_hint.setText("Select the presets to normalize.")
         self._set_preset_csv_buttons_enabled(self.preset_table.rowCount() > 0)
-        self.presets.show()
-        self._refresh_preset_advanced_splitter_visibility()
         QTimer.singleShot(0, self._fit_advanced_splitter_width)
         self._schedule_resize_for_content()
 

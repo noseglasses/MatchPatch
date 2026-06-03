@@ -65,7 +65,6 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
 
     assert window.device.currentData() == "helix"
     assert window.backend.currentText() == "hardware"
-    assert window.general.title() == "General"
     assert isinstance(window.advanced, QWidget)
     assert not isinstance(window.advanced, main_window.QGroupBox)
     assert window.advanced.isHidden()
@@ -76,27 +75,29 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
         "Meta Data",
         "Log",
     ]
-    assert window.presets.title() == "Presets"
-    assert window.presets.isHidden()
+    assert not isinstance(window.presets, main_window.QGroupBox)
+    assert window.presets.layout().contentsMargins().isNull()
+    assert not window.presets.isHidden()
+    assert not window.preset_empty_state.isHidden()
+    assert window.preset_header.isHidden()
+    assert window.preset_table.isHidden()
+    assert not window.preset_empty_logo.pixmap().isNull()
+    assert window.preset_empty_logo.pixmap().size() == main_window.QSize(360, 360)
+    assert isinstance(window.preset_empty_open_button, main_window.QToolButton)
+    assert window.preset_empty_open_button.text() == "Open hlx/hlx file"
+    assert not window.preset_empty_open_button.icon().isNull()
+    assert window.preset_empty_open_button.iconSize() == main_window.QSize(72, 72)
     assert isinstance(window.preset_advanced_splitter, QSplitter)
     assert window.preset_advanced_splitter.orientation() == Qt.Orientation.Horizontal
-    assert window.preset_advanced_splitter.isHidden()
+    assert not window.preset_advanced_splitter.isHidden()
     assert (
         window.preset_advanced_splitter.sizePolicy().verticalPolicy()
         == QSizePolicy.Policy.Expanding
     )
     assert window.preset_advanced_splitter.widget(0) is window.presets
     assert window.preset_advanced_splitter.widget(1) is window.advanced
-    assert window.content.layout().indexOf(window.preset_advanced_splitter) == (
-        window.content.layout().indexOf(window.general) + 1
-    )
+    assert window.content.layout().indexOf(window.preset_advanced_splitter) == 0
     assert not window.findChildren(QMenuBar)
-    assert "Setlist/Preset file" not in [
-        label.text() for label in window.general.findChildren(QLabel)
-    ]
-    assert {"Help", "About"}.isdisjoint(
-        {button.text() for button in window.general.findChildren(QPushButton)}
-    )
     toolbar = window.findChildren(main_window.QToolBar)[0]
     toolbar_actions = [
         action for action in toolbar.actions() if action.text() and not action.isSeparator()
@@ -117,12 +118,16 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert toolbar.actions().index(window.help_spacer_action) < toolbar.actions().index(
         window.help_action
     )
-    assert toolbar.actions().index(window.advanced_action) == (
+    assert toolbar.actions().index(window.device_action) == (
         toolbar.actions().index(window.help_spacer_action) + 1
+    )
+    assert toolbar.actions().index(window.advanced_action) == (
+        toolbar.actions().index(window.device_action) + 1
     )
     help_spacer = toolbar.widgetForAction(window.help_spacer_action)
     assert help_spacer is not None
     assert help_spacer.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+    assert toolbar.widgetForAction(window.device_action) is window.device
     assert toolbar.widgetForAction(window.advanced_action) is window.advanced_button
     assert toolbar.widgetForAction(window.normalization_action) is window.start_cancel_stack
     assert window.start_cancel_stack.currentWidget() is window.start_button
@@ -204,8 +209,62 @@ def test_initial_window_size_avoids_scrollbar_for_collapsed_layout(app) -> None:
     window.close()
 
 
+def test_initial_empty_state_reserves_loaded_preset_table_size(monkeypatch, app, tmp_path) -> None:
+    initial_window = MainWindow()
+    initial_window.show()
+    app.processEvents()
+    initial_window._resize_to_initial_content()
+    app.processEvents()
+    initial_size = initial_window.size()
+    initial_window.close()
+
+    loaded_window = MainWindow()
+    path = tmp_path / "example.hls"
+    path.write_text("{}", encoding="utf-8")
+
+    class Handler:
+        @staticmethod
+        def validate_input(path):
+            return None
+
+        @staticmethod
+        def list_assignments(path):
+            return [
+                SimpleNamespace(
+                    device_patch=f"{row + 1:02d}A",
+                    name=f"Preset {row + 1}",
+                    snapshot_names=("Clean", "Solo"),
+                )
+                for row in range(main_window.ContentHeightTableWidget.MAX_VISIBLE_ROWS)
+            ]
+
+        @staticmethod
+        def metadata(path):
+            return {"file_type": "hls"}
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(root):
+            return Handler()
+
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    loaded_window.show()
+    loaded_window.input_path.setText(str(path))
+    loaded_window.load_assignments()
+    app.processEvents()
+    loaded_window._resize_to_initial_content()
+    app.processEvents()
+
+    assert loaded_window.preset_empty_state.isHidden()
+    assert not loaded_window.preset_table.isHidden()
+    assert initial_size == loaded_window.size()
+
+    loaded_window.close()
+
+
 def test_window_shrinks_when_advanced_side_pane_is_hidden(app) -> None:
     window = MainWindow()
+    window._show_loaded_preset_state(single_preset=True)
     window.show()
     app.processEvents()
 
@@ -262,6 +321,7 @@ def test_window_shrinks_when_progress_is_hidden(app) -> None:
 
 def test_advanced_and_preset_panes_follow_their_content_height(app) -> None:
     window = MainWindow()
+    window._show_loaded_preset_state(single_preset=False)
     initial_presets_height = window.presets.sizeHint().height()
     initial_table_height = window.preset_table.sizeHint().height()
     for row in range(20):
@@ -695,7 +755,7 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(monkeypa
     assert not window.manual_adjustments.isChecked()
     assert window.manual_adjustments.text() == "Edit content"
     assert window.preset_table.editTriggers() == window.preset_table.EditTrigger.NoEditTriggers
-    preset_table_note_row = window.presets.layout().itemAt(2).layout()
+    preset_table_note_row = window.presets.layout().itemAt(3).layout()
     assert preset_table_note_row is not None
     assert preset_table_note_row.indexOf(
         window.manual_adjustments
