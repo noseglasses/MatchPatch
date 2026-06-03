@@ -11,7 +11,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from matchpatch.devices.base import PatchAssignment, SteeringOptions
+from matchpatch.devices.base import PatchAssignment, PatchFileAdjustments, SteeringOptions
 from matchpatch.devices.helix import (
     HelixDeviceProfile,
     HelixMidiController,
@@ -100,6 +100,25 @@ def test_list_assignments_and_measurement_delegate_to_legacy_script(tmp_path, mo
     assert calls[1][0] == ("-i", Path("set.hls"), "-o", Path("measurement.hls"), "--measurement")
 
 
+def test_metadata_delegates_to_legacy_script(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    payload = {"file_type": "hls", "metadata": [{"path": "$.meta", "value": {"name": "Set"}}]}
+    calls = []
+
+    def fake_run(*args, capture=False, log_output=True):
+        calls.append((args, capture, log_output))
+        return subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+
+    assert handler.metadata(Path("set.hls")) == payload
+    assert calls == [(
+        ("-i", Path("set.hls"), "--metadata"),
+        True,
+        False,
+    )]
+
+
 def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
     calls = []
@@ -154,6 +173,40 @@ def test_apply_analysis_csv_translates_generic_patch_column(tmp_path, monkeypatc
     assert "--ignore-bad-lufs" in seen["args"]
     assert seen["args"][seen["args"].index("--solo-regex") + 1] == r"(?i)\bsolo\b"
     assert not seen["legacy"].exists()
+
+
+def test_apply_analysis_csv_passes_manual_adjustments_json(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    csv_path = tmp_path / "measurements.csv"
+    csv_path.write_text("Preset,DevicePatch,LUFS1\n1,01A,-15.5\n", encoding="utf-8")
+    seen = {}
+
+    def fake_run(*args, capture=False):
+        adjustments_path = Path(args[args.index("--manual-adjustments") + 1])
+        seen["adjustments"] = json.loads(adjustments_path.read_text(encoding="utf-8"))
+        seen["path"] = adjustments_path
+        return subprocess.CompletedProcess([], 0)
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+    handler.apply_analysis_csv(
+        Path("set.hls"),
+        Path("adjusted.hls"),
+        csv_path,
+        True,
+        -16.0,
+        adjustments=PatchFileAdjustments(
+            {"01A": "Lead"},
+            {"01A": {0: "Solo"}},
+            {"01A": {0: 1.5}},
+        ),
+    )
+
+    assert seen["adjustments"] == {
+        "preset_names": {"01A": "Lead"},
+        "snapshot_names": {"01A": {"0": "Solo"}},
+        "gain_deltas": {"01A": {"0": 1.5}},
+    }
+    assert not seen["path"].exists()
 
 
 def test_apply_analysis_csv_always_tolerates_bad_lufs_and_cleans_up_on_failure(

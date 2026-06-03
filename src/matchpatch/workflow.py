@@ -11,7 +11,12 @@ from pathlib import Path
 
 from matchpatch.analysis import AnalysisOptions
 from matchpatch.devices import get_device_profile
-from matchpatch.devices.base import DeviceProfile, NormalizationPolicy, validate_snapshot_count
+from matchpatch.devices.base import (
+    DeviceProfile,
+    NormalizationPolicy,
+    PatchFileAdjustments,
+    validate_snapshot_count,
+)
 from matchpatch.progress import ProgressEvent
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -243,6 +248,7 @@ def export_adjusted_file(
     csv_path: Path,
     output_path: Path,
     *,
+    adjustments: PatchFileAdjustments | None = None,
     on_progress: ProgressCallback | None = None,
     get_profile: ProfileProvider = get_device_profile,
 ) -> None:
@@ -262,6 +268,7 @@ def export_adjusted_file(
         request.ignore_bad_lufs,
         request.target_lufs,
         request.policy,
+        adjustments,
     )
 
 

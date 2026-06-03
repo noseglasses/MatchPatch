@@ -5,6 +5,7 @@ import base64
 import binascii
 import csv
 import json
+import math
 import os
 import re
 import sys
@@ -44,6 +45,7 @@ CREST_FACTOR_REFERENCE_DB = 12.0
 CREST_FACTOR_CORRECTION_RATIO = 0.4
 MAX_CREST_FACTOR_CORRECTION_DB = 3.0
 GAIN_ADJUSTMENT_DEADBAND_DB = 0.25
+HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
 
 
 # =================================================
@@ -128,6 +130,43 @@ def extract_preset_assignments(data):
     return assignments
 
 
+def extract_metadata(filename, json_text, original_data=None):
+    filetype = get_filetype(filename)
+    data = json.loads(json_text)
+    result = {
+        "file_type": filetype,
+        "metadata": list(iter_metadata_nodes(data)),
+    }
+
+    if filetype == "hls" and isinstance(original_data, str):
+        wrapper = json.loads(original_data)
+        result["wrapper"] = {
+            key: value for key, value in wrapper.items() if key != "encoded_data"
+        }
+    elif filetype == "hlx" and isinstance(original_data, dict):
+        wrapper = {
+            key: value
+            for key, value in original_data.items()
+            if key not in {"data", "tone"}
+        }
+        if wrapper:
+            result["wrapper"] = wrapper
+
+    return result
+
+
+def iter_metadata_nodes(value, path="$"):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            if str(key).casefold() in {"meta", "metadata"}:
+                yield {"path": child_path, "value": child}
+            yield from iter_metadata_nodes(child, child_path)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from iter_metadata_nodes(child, f"{path}[{index}]")
+
+
 # =================================================
 # SNAPSHOT LEVEL ASSIGNMENT
 # =================================================
@@ -137,6 +176,32 @@ def get_preset_name(preset):
     meta = preset.get("meta", {})
 
     return meta.get("name") or preset.get("name") or preset.get("@name") or ""
+
+
+def apply_manual_adjustments(data, adjustments):
+    preset_names = adjustments.get("preset_names", {})
+    snapshot_names = adjustments.get("snapshot_names", {})
+
+    for preset_index, preset in enumerate(data.get("presets", [])):
+        helix_preset = preset_index_to_helix(preset_index)
+
+        if helix_preset in preset_names:
+            name = str(preset_names[helix_preset])
+            require_helix_name(name)
+            preset.setdefault("meta", {})["name"] = name
+
+        tone = preset.get("tone", {})
+        for snapshot_index, name in snapshot_names.get(helix_preset, {}).items():
+            name = str(name)
+            require_helix_name(name)
+            snapshot = tone.get(f"snapshot{int(snapshot_index)}")
+            if isinstance(snapshot, dict):
+                snapshot["@name"] = name
+
+
+def require_helix_name(name):
+    if HELIX_NAME_PATTERN.fullmatch(name) is None:
+        raise ValueError(f"Invalid Helix name: {name!r}")
 
 
 def require_helix_input_path(filename, label):
@@ -760,6 +825,7 @@ def adjust_snapshot_gains(
     solo_regex=r"(?i)\bsolo\b",
     solo_gain_bump_db=SOLO_GAIN_BUMP,
     gain_deadband_db=GAIN_ADJUSTMENT_DEADBAND_DB,
+    manual_gain_deltas=None,
 ):
 
     changes = 0
@@ -833,14 +899,22 @@ def adjust_snapshot_gains(
 
             is_solo = solo_pattern.search(snapshot_name) is not None
 
+            manual_delta = (manual_gain_deltas or {}).get(helix_preset, {}).get(str(snapshot_index))
             gain_delta = snapshot_gain_deltas[snapshot_index]
             marker = " (S)" if is_solo else ""
 
-            if gain_delta is None:
+            if manual_delta is not None:
+                gain_delta = float(manual_delta)
+                if not math.isfinite(gain_delta):
+                    raise ValueError(
+                        f"Invalid manual gain delta for {helix_preset} snapshot "
+                        f"{snapshot_index + 1}: {manual_delta!r}"
+                    )
+            elif gain_delta is None:
                 print(f"[GAIN] {helix_preset} {snapshot_name}{marker} | bad LUFS")
                 continue
 
-            if is_solo:
+            if is_solo and manual_delta is None:
                 gain_delta += solo_gain_bump_db
 
             current_gain = get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain)
@@ -1019,6 +1093,7 @@ def process_json_structure(
     solo_regex=r"(?i)\bsolo\b",
     solo_gain_bump_db=SOLO_GAIN_BUMP,
     gain_deadband_db=GAIN_ADJUSTMENT_DEADBAND_DB,
+    manual_gain_deltas=None,
 ):
 
     data = json.loads(json_text)
@@ -1044,6 +1119,7 @@ def process_json_structure(
             solo_regex,
             solo_gain_bump_db,
             gain_deadband_db,
+            manual_gain_deltas,
         )
 
     modified_json_text = json.dumps(data, indent=1)
@@ -1171,6 +1247,9 @@ def main():
     parser.add_argument("-o", "--output", help="Output file (.hls, .hlx, or .json)")
 
     parser.add_argument("-g", "--lufs-analysis-file", help="LUFS analysis CSV file")
+    parser.add_argument(
+        "--manual-adjustments", help="GUI preset, snapshot, and gain overrides JSON"
+    )
 
     parser.add_argument(
         "--ignore-bad-lufs",
@@ -1236,6 +1315,12 @@ def main():
         help=("Print non-default preset ID/name assignments as JSON"),
     )
 
+    mode_group.add_argument(
+        "--metadata",
+        action="store_true",
+        help=("Print extracted file metadata as JSON"),
+    )
+
     args = parser.parse_args()
 
     try:
@@ -1256,8 +1341,17 @@ def main():
 
             return
 
+        if args.metadata:
+            metadata = extract_metadata(args.input, json_text, original_hls_text)
+
+            json.dump(metadata, sys.stdout, indent=2, ensure_ascii=False)
+
+            print()
+
+            return
+
         if not args.output:
-            raise ValueError("Output file is required unless --list-presets is used")
+            raise ValueError("Output file is required unless --list-presets or --metadata is used")
 
         require_compatible_output_path(args.input, args.output)
 
@@ -1269,6 +1363,14 @@ def main():
 
         if args.measurement or args.stage:
             (modified_json_text, input_changes, output_changes) = convert_json_text(json_text, mode)
+
+        manual_adjustments = {}
+        if args.manual_adjustments:
+            with open(args.manual_adjustments, "r", encoding="utf-8") as f:
+                manual_adjustments = json.load(f)
+            data = json.loads(modified_json_text)
+            apply_manual_adjustments(data, manual_adjustments)
+            modified_json_text = json.dumps(data)
 
         gain_deltas = None
 
@@ -1297,6 +1399,7 @@ def main():
             args.solo_regex,
             args.solo_gain_bump_db,
             args.gain_deadband_db,
+            manual_adjustments.get("gain_deltas"),
         )
 
         save_output(modified_json_text, args.output, original_hls_text)

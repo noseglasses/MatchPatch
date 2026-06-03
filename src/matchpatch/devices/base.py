@@ -19,6 +19,13 @@ class PatchAssignment:
 
 
 @dataclass(frozen=True)
+class PatchFileAdjustments:
+    preset_names: dict[str, str]
+    snapshot_names: dict[str, dict[int, str]]
+    gain_deltas: dict[str, dict[int, float]]
+
+
+@dataclass(frozen=True)
 class AudioRouting:
     device: str | int | None
     sample_rate: int
@@ -84,6 +91,10 @@ class PatchFileHandler(ABC):
     def list_assignments(self, input_path: Path) -> list[PatchAssignment]:
         """List measurable presets contained in a patch file."""
 
+    def metadata(self, input_path: Path) -> dict[str, object]:
+        """Extract displayable metadata from a patch file."""
+        return {}
+
     @abstractmethod
     def parse_patch_set(self, value: str) -> list[int]:
         """Parse device-facing preset labels into numeric preset IDs."""
@@ -114,6 +125,7 @@ class PatchFileHandler(ABC):
         ignore_bad_lufs: bool,
         target_lufs: float,
         policy: NormalizationPolicy,
+        adjustments: PatchFileAdjustments | None = None,
     ) -> None:
         """Apply measured gain adjustments to a patch file."""
 
@@ -127,6 +139,8 @@ class DeviceProfile(ABC):
     display_name: str
     snapshot_count: int = 4
     max_snapshot_count: int | None = None
+    preset_name_max_length: int | None = None
+    snapshot_name_max_length: int | None = None
 
     @abstractmethod
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:

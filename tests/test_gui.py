@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMenuBar,
     QMessageBox,
     QPushButton,
@@ -64,9 +65,10 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.general.title() == "General"
     assert not window.advanced.is_expanded()
     assert window.advanced.content.isHidden()
-    assert [window.advanced_tabs.tabText(index) for index in range(3)] == [
+    assert [window.advanced_tabs.tabText(index) for index in range(4)] == [
         "Device",
         "Misc",
+        "Meta Data",
         "Log",
     ]
     assert window.presets.title() == "Presets"
@@ -86,8 +88,12 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     }
     input_browse = browse_buttons["Choose the Helix setlist or preset file to normalize."]
     output_browse = browse_buttons["Choose where to export the normalized setlist or preset."]
-    assert input_browse.icon().pixmap(16, 16).toImage() != output_browse.icon().pixmap(16, 16).toImage()
+    assert (
+        input_browse.icon().pixmap(16, 16).toImage()
+        != output_browse.icon().pixmap(16, 16).toImage()
+    )
     assert window.log_level.currentText() == "Info"
+    assert window.metadata_text.toPlainText() == "{}"
     assert window.device_stack.count() == 1
     assert window.device_panels["helix"].audio_group.isEnabled()
     assert window.progress_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
@@ -213,8 +219,10 @@ def test_single_preset_load_displays_presets_panel_with_instruction_label(app) -
     window.close()
 
 
-def test_setlist_load_displays_presets_panel(monkeypatch, app) -> None:
+def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None:
     window = MainWindow()
+    path = tmp_path / "example.hls"
+    path.write_text("{}", encoding="utf-8")
 
     class Handler:
         @staticmethod
@@ -225,18 +233,24 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app) -> None:
         def list_assignments(path):
             return []
 
+        @staticmethod
+        def metadata(path):
+            return {"file_type": "hls", "metadata": [{"path": "$.meta", "value": {"name": "Set"}}]}
+
     class Profile:
         @staticmethod
         def create_patch_file_handler(root):
             return Handler()
 
     monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
-    window.input_path.setText("/tmp/example.hls")
+    window.input_path.setText(str(path))
     window.load_assignments()
 
     assert not window.presets.isHidden()
     assert not window.preset_table.isHidden()
     assert window.preset_hint.text() == "Select the presets to normalize."
+    assert '"file_type": "hls"' in window.metadata_text.toPlainText()
+    assert '"name": "Set"' in window.metadata_text.toPlainText()
 
     window.close()
 
@@ -342,6 +356,9 @@ def test_phase_text_marks_in_progress_statuses(phase, text) -> None:
 def test_preset_progress_shows_most_recently_measured_preset_and_snapshot_names(app) -> None:
     window = MainWindow()
     window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
     window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
     window.preset_table.setItem(0, 2, QTableWidgetItem("Lead"))
     window._clear_preset_adjustments(0)
@@ -498,6 +515,105 @@ def test_preset_bulk_selection_buttons(app) -> None:
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Checked
         for row in range(window.preset_table.rowCount())
     )
+
+    window.close()
+
+
+def test_manual_adjustments_gate_table_editing_and_build_export_payload(app) -> None:
+    window = MainWindow()
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Clean", "Solo"))
+
+    assert not window.manual_adjustments.isChecked()
+    assert window.manual_adjustments.text() == "Manual adjustments"
+    assert window.preset_table.editTriggers() == window.preset_table.EditTrigger.NoEditTriggers
+    header = window.presets.layout().itemAt(0).layout()
+    assert header is not None
+    assert header.indexOf(window.manual_adjustments) < header.indexOf(window.select_all_button)
+
+    window.manual_adjustments.setChecked(True)
+    assert window.preset_table.editTriggers() == window.preset_table.EditTrigger.NoEditTriggers
+    assert all(
+        not window.preset_table.item(0, column).flags() & Qt.ItemFlag.ItemIsEditable
+        for column in range(1, 5)
+    )
+
+    answers = iter([("Song 2", True), ("Clean!", True), ("+1.5", True)])
+    for column in (2, 3, 4):
+        value, _accepted = next(answers)
+        window._manual_table_cell_double_clicked(0, column)
+        assert isinstance(window._manual_cell_editor, QLineEdit)
+        assert window._manual_cell_editor.parent() is window.preset_table.viewport()
+        assert window._manual_cell_editor.geometry() == window.preset_table.visualItemRect(
+            window.preset_table.item(0, column)
+        )
+        window._manual_cell_editor.setText(value)
+        window._finish_manual_cell_edit(commit=True)
+
+    window.update_progress(
+        ProgressEvent("log", message="[GAIN] 02B Clean | 0.0 dB -> 1.5 dB (Delta: +1.5 dB)")
+    )
+
+    adjustments = window._table_adjustments()
+    assert adjustments.preset_names == {"02B": "Song 2"}
+    assert adjustments.snapshot_names["02B"][0] == "Clean!"
+    assert adjustments.gain_deltas["02B"][0] == 1.5
+    window.preset_table.item(0, 2).setText("Invalid%")
+    assert window.preset_table.item(0, 2).text() == "Invalid"
+
+    window.close()
+
+
+def test_manual_adjustments_reject_invalid_helix_names(app) -> None:
+    window = MainWindow()
+    window.preset_table.insertRow(0)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Invalid%"))
+    window._clear_preset_adjustments(0)
+
+    with pytest.raises(ValueError, match="Invalid Helix name"):
+        window._table_adjustments()
+
+    window.close()
+
+
+def test_manual_adjustments_limit_helix_name_lengths(app) -> None:
+    window = MainWindow()
+    window.preset_table.insertRow(0)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Original"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Clean",))
+
+    window.manual_adjustments.setChecked(True)
+
+    window._manual_table_cell_double_clicked(0, 2)
+    assert isinstance(window._manual_cell_editor, QLineEdit)
+    assert window._manual_cell_editor.maxLength() == 16
+    window._manual_cell_editor.setText("PresetNameLongerThanSixteen")
+    window._finish_manual_cell_edit(commit=True)
+    assert window.preset_table.item(0, 2).text() == "PresetNameLonger"
+
+    window._manual_table_cell_double_clicked(0, 3)
+    assert isinstance(window._manual_cell_editor, QLineEdit)
+    assert window._manual_cell_editor.maxLength() == 10
+    window._manual_cell_editor.setText("SnapshotNameTooLong")
+    window._finish_manual_cell_edit(commit=True)
+    assert window.preset_table.item(0, 3).text() == "SnapshotNa"
+
+    window.preset_table.item(0, 2).setText("DirectNameLongerThanSixteen")
+    assert window.preset_table.item(0, 2).text() == "DirectNameLonger"
+
+    window.manual_adjustments.setChecked(False)
+    window.preset_table.item(0, 3).setText("UncheckedSnapshotName")
+    with pytest.raises(ValueError, match="exceeds 10 characters"):
+        window._table_adjustments()
 
     window.close()
 

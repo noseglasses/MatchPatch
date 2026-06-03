@@ -8,6 +8,8 @@ import zlib
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 
 def _load_legacy_module() -> ModuleType:
     script = Path(__file__).resolve().parents[1] / "Python" / "preset_handling.py"
@@ -50,6 +52,81 @@ def test_assignment_extraction_includes_snapshot_names() -> None:
     assignments = module.extract_preset_assignments(data)
 
     assert assignments[0]["snapshot_names"] == ["Rhythm", "Solo"]
+
+
+def test_metadata_extraction_keeps_wrapper_and_meta_nodes() -> None:
+    module = _load_legacy_module()
+    data = {
+        "meta": {"app": "HX Edit"},
+        "presets": [
+            {
+                "meta": {"name": "Lead"},
+                "tone": {"snapshot0": {"@name": "Rhythm"}},
+            }
+        ],
+    }
+    wrapper = {
+        "compression": {"type": "zlib"},
+        "encoded_data": "omitted",
+    }
+
+    metadata = module.extract_metadata("set.hls", json.dumps(data), json.dumps(wrapper))
+
+    assert metadata == {
+        "file_type": "hls",
+        "metadata": [
+            {"path": "$.meta", "value": {"app": "HX Edit"}},
+            {"path": "$.presets[0].meta", "value": {"name": "Lead"}},
+        ],
+        "wrapper": {"compression": {"type": "zlib"}},
+    }
+
+
+def test_manual_adjustments_rename_and_override_final_solo_delta() -> None:
+    module = _load_legacy_module()
+    data = {
+        "presets": [
+            {
+                "meta": {"name": "Lead"},
+                "tone": {
+                    "dsp0": {
+                        "block0": {},
+                        "inputA": {"@input": 1},
+                        "outputA": {"@output": 6, "gain": 0.0},
+                    },
+                    "snapshot0": {"@name": "Solo"},
+                },
+            }
+        ]
+    }
+    adjustments = {
+        "preset_names": {"01A": "Lead 2"},
+        "snapshot_names": {"01A": {"0": "Solo!"}},
+        "gain_deltas": {"01A": {"0": 4.5}},
+    }
+
+    module.apply_manual_adjustments(data, adjustments)
+    module.adjust_snapshot_gains(
+        data,
+        {"01A": {0: 1.0}},
+        solo_gain_bump_db=3.0,
+        manual_gain_deltas=adjustments["gain_deltas"],
+    )
+
+    assert data["presets"][0]["meta"]["name"] == "Lead 2"
+    snapshot = data["presets"][0]["tone"]["snapshot0"]
+    assert snapshot["@name"] == "Solo!"
+    assert snapshot["controllers"]["dsp0"]["outputA"]["gain"]["@value"] == 4.5
+
+
+def test_manual_adjustments_reject_invalid_helix_name() -> None:
+    module = _load_legacy_module()
+
+    with pytest.raises(ValueError, match="Invalid Helix name"):
+        module.apply_manual_adjustments(
+            {"presets": [{"tone": {}}]},
+            {"preset_names": {"01A": "Invalid%"}},
+        )
 
 
 def test_build_hls_text_updates_crc32_for_encoded_data() -> None:

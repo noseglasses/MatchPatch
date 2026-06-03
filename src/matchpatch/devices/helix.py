@@ -18,6 +18,7 @@ from matchpatch.devices.base import (
     DeviceProfile,
     NormalizationPolicy,
     PatchAssignment,
+    PatchFileAdjustments,
     PatchFileHandler,
     SteeringOptions,
 )
@@ -85,6 +86,13 @@ class HelixPatchFileHandler(PatchFileHandler):
             )
             for assignment in json.loads(completed.stdout)
         ]
+
+    def metadata(self, input_path: Path) -> dict[str, object]:
+        completed = self._run("-i", input_path, "--metadata", capture=True, log_output=False)
+        metadata = json.loads(completed.stdout)
+        if not isinstance(metadata, dict):
+            raise ValueError("Helix metadata output must be a JSON object")
+        return metadata
 
     def parse_patch_set(self, value: str) -> list[int]:
         preset_ids = []
@@ -154,10 +162,13 @@ class HelixPatchFileHandler(PatchFileHandler):
         ignore_bad_lufs: bool,
         target_lufs: float,
         policy: NormalizationPolicy = NormalizationPolicy(),
+        adjustments: PatchFileAdjustments | None = None,
     ) -> None:
         legacy_csv_path = self._create_legacy_analysis_csv(csv_path)
+        adjustments_path = None
 
         try:
+            adjustments_path = self._create_adjustments_json(csv_path, adjustments)
             args: list[object] = [
                 "-i",
                 input_path,
@@ -185,6 +196,8 @@ class HelixPatchFileHandler(PatchFileHandler):
             ]
 
             args.append("--ignore-bad-lufs")
+            if adjustments_path is not None:
+                args.extend(["--manual-adjustments", adjustments_path])
 
             try:
                 self._run(*args, capture=True)
@@ -196,6 +209,8 @@ class HelixPatchFileHandler(PatchFileHandler):
                 raise RuntimeError(message) from exc
         finally:
             legacy_csv_path.unlink(missing_ok=True)
+            if adjustments_path is not None:
+                adjustments_path.unlink(missing_ok=True)
 
     def _create_legacy_analysis_csv(self, csv_path: Path) -> Path:
         with csv_path.open("r", encoding="utf-8-sig", newline="") as source:
@@ -226,6 +241,32 @@ class HelixPatchFileHandler(PatchFileHandler):
                     row["HelixPreset"] = row["DevicePatch"]
                     writer.writerow({field: row.get(field, "") for field in fieldnames})
 
+        return Path(temporary.name)
+
+    def _create_adjustments_json(
+        self,
+        csv_path: Path,
+        adjustments: PatchFileAdjustments | None,
+    ) -> Path | None:
+        if adjustments is None:
+            return None
+
+        temporary = tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            suffix=".adjustments.json",
+            dir=csv_path.parent,
+            delete=False,
+        )
+        with temporary:
+            json.dump(
+                {
+                    "preset_names": adjustments.preset_names,
+                    "snapshot_names": adjustments.snapshot_names,
+                    "gain_deltas": adjustments.gain_deltas,
+                },
+                temporary,
+            )
         return Path(temporary.name)
 
     def automation_output_path(self, input_path: Path, postfix: str) -> Path:
@@ -302,6 +343,8 @@ class HelixDeviceProfile(DeviceProfile):
     name = "helix"
     display_name = "Line 6 Helix"
     max_snapshot_count = 8
+    preset_name_max_length = 16
+    snapshot_name_max_length = 10
 
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
         return HelixPatchFileHandler(project_dir)

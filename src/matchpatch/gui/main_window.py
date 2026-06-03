@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 import re
 import shutil
 from contextlib import contextmanager
@@ -16,6 +18,7 @@ from PySide6.QtCore import (
     QCoreApplication,
     QEasingCurve,
     QEvent,
+    QObject,
     QPropertyAnimation,
     QSize,
     QTimer,
@@ -24,11 +27,15 @@ from PySide6.QtGui import (
     QBrush,
     QCloseEvent,
     QColor,
+    QFont,
     QIcon,
+    QKeyEvent,
     QPainter,
     QPaintEvent,
     QPalette,
+    QSyntaxHighlighter,
     Qt,
+    QTextCharFormat,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -62,6 +69,7 @@ from PySide6.QtWidgets import (
 
 from matchpatch.config import config_value, load_config
 from matchpatch.devices import get_device_profile, list_device_profiles
+from matchpatch.devices.base import PatchFileAdjustments
 from matchpatch.gui.collapsible import CollapsibleSection
 from matchpatch.gui.device_panels import HelixSettingsPanel
 from matchpatch.gui.dialogs import ASSETS_DIR, AboutDialog, HelpDialog
@@ -90,6 +98,8 @@ GAIN_BAD_LUFS_PATTERN = re.compile(
     r"^\[GAIN\] (?P<patch>\d{2}[A-D]) (?P<label>.*?) \| bad LUFS(?: \(.*\))?$"
 )
 BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
+HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
+HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
 PROCESSING_DOT_RED = "#dc2626"
@@ -148,6 +158,8 @@ class MainWindow(QMainWindow):
         self.snapshot_count = 4
         self.preset_snapshot_positions: dict[str, int] = {}
         self._adjusted_presets: set[str] = set()
+        self._manual_cell_editor: QLineEdit | None = None
+        self._manual_cell_target: tuple[int, int] | None = None
         self.log_entries: list[tuple[str, str, str]] = []
         self._processing_dot_green = False
 
@@ -261,7 +273,9 @@ class MainWindow(QMainWindow):
         self.preset_table.setToolTip(
             "Select presets and inspect snapshot names and calculated output-gain adjustments."
         )
+        self.preset_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._configure_snapshot_columns(self.snapshot_count)
+        self.preset_table.cellDoubleClicked.connect(self._manual_table_cell_double_clicked)
         self.preset_table.itemChanged.connect(self._preset_item_changed)
         self.preset_table.setSortingEnabled(True)
         self.preset_table.setMinimumHeight(160)
@@ -282,12 +296,18 @@ class MainWindow(QMainWindow):
         )
         self.select_all_button.setToolTip("Include every preset in this setlist.")
         self.select_all_button.clicked.connect(lambda: self.set_all_presets_checked(True))
+        self.manual_adjustments = QCheckBox("Edit content")
+        self.manual_adjustments.setToolTip(
+            "Allow preset names, snapshot names, and gain adjustments to be edited manually."
+        )
+        self.manual_adjustments.toggled.connect(self._manual_adjustments_toggled)
         self.unselect_all_button = QPushButton("Unselect all")
         self.unselect_all_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
         )
         self.unselect_all_button.setToolTip("Exclude every preset in this setlist.")
         self.unselect_all_button.clicked.connect(lambda: self.set_all_presets_checked(False))
+        preset_header.addWidget(self.manual_adjustments)
         preset_header.addWidget(self.select_all_button)
         preset_header.addWidget(self.unselect_all_button)
         layout.addLayout(preset_header)
@@ -395,12 +415,26 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.log)
         return content
 
+    def _build_metadata(self) -> QWidget:
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        self.metadata_text = QTextEdit()
+        self.metadata_text.setReadOnly(True)
+        self.metadata_text.setMinimumHeight(180)
+        self.metadata_text.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.metadata_text.setFont(QFont("monospace"))
+        self.metadata_highlighter = JsonSyntaxHighlighter(self.metadata_text.document())
+        layout.addWidget(self.metadata_text)
+        self._set_metadata({})
+        return content
+
     def _build_advanced(self) -> CollapsibleSection:
         content = QWidget()
         layout = QVBoxLayout(content)
         self.advanced_tabs = CurrentPageHeightTabWidget()
         self.advanced_tabs.addTab(self._build_device_settings(), "Device")
         self.advanced_tabs.addTab(self._build_misc(), "Misc")
+        self.advanced_tabs.addTab(self._build_metadata(), "Meta Data")
         self.advanced_tabs.addTab(self._build_log(), "Log")
         self.advanced_tabs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.advanced_tabs.currentChanged.connect(self._schedule_resize_for_content)
@@ -594,6 +628,7 @@ class MainWindow(QMainWindow):
         self._discard_completed_export()
         self.preset_snapshot_positions.clear()
         self._clear_bad_lufs_highlights()
+        self._load_metadata()
         self.presets.hide()
         path = Path(self.input_path.text())
         if (
@@ -607,6 +642,8 @@ class MainWindow(QMainWindow):
         self.preset_table_note.setVisible(not is_single_preset)
         self.select_all_button.setVisible(not is_single_preset)
         self.unselect_all_button.setVisible(not is_single_preset)
+        self.manual_adjustments.setVisible(not is_single_preset)
+        self.manual_adjustments.setChecked(False)
         self.presets.updateGeometry()
         self._schedule_resize_for_content()
 
@@ -636,6 +673,7 @@ class MainWindow(QMainWindow):
                     self.preset_table.setItem(row, 2, QTableWidgetItem(assignment.name))
                     self._clear_preset_adjustments(row)
                     self._set_snapshot_names(row, assignment.snapshot_names)
+                self._refresh_preset_table_editable_flags()
         except Exception as exc:  # noqa: BLE001
             self.show_error(str(exc))
             return
@@ -643,6 +681,23 @@ class MainWindow(QMainWindow):
         self.preset_hint.setText("Select the presets to normalize.")
         self.presets.show()
         self._schedule_resize_for_content()
+
+    def _load_metadata(self) -> None:
+        path = Path(self.input_path.text())
+        if not path.exists():
+            self._set_metadata({})
+            return
+
+        try:
+            profile = get_device_profile(self.device.currentData())
+            handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+            handler.validate_input(path)
+            self._set_metadata(handler.metadata(path))
+        except Exception as exc:  # noqa: BLE001
+            self._set_metadata({"error": str(exc)})
+
+    def _set_metadata(self, metadata: dict[str, object]) -> None:
+        self.metadata_text.setPlainText(json.dumps(metadata, indent=2, ensure_ascii=False))
 
     def start_normalization(self) -> None:
         try:
@@ -845,6 +900,7 @@ class MainWindow(QMainWindow):
                 request,
                 result.retained_csv_path,
                 output_path,
+                adjustments=self._table_adjustments(),
                 on_progress=self.update_progress,
             )
         except Exception as exc:  # noqa: BLE001
@@ -970,6 +1026,174 @@ class MainWindow(QMainWindow):
                 if item is not None:
                     item.setCheckState(state)
 
+    def _manual_adjustments_toggled(self, checked: bool) -> None:
+        self.preset_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._refresh_preset_table_editable_flags()
+
+    def _refresh_preset_table_editable_flags(self) -> None:
+        for row in range(self.preset_table.rowCount()):
+            for column in range(self.preset_table.columnCount()):
+                item = self.preset_table.item(row, column)
+                if item is not None:
+                    self._set_preset_item_editable(item, False)
+
+    @staticmethod
+    def _is_manual_adjustment_column(column: int) -> bool:
+        return column == 2 or column >= 3
+
+    @staticmethod
+    def _set_preset_item_editable(item: QTableWidgetItem, editable: bool) -> None:
+        flags = item.flags()
+        if editable:
+            flags |= Qt.ItemFlag.ItemIsEditable
+        else:
+            flags &= ~Qt.ItemFlag.ItemIsEditable
+        item.setFlags(flags)
+
+    def _manual_adjustments_enabled(self) -> bool:
+        return hasattr(self, "manual_adjustments") and self.manual_adjustments.isChecked()
+
+    def _manual_table_cell_double_clicked(self, row: int, column: int) -> None:
+        if not self._manual_adjustments_enabled() or not self._is_manual_adjustment_column(column):
+            return
+
+        item = self.preset_table.item(row, column)
+        if item is None:
+            return
+
+        self._start_manual_cell_edit(row, column, item)
+
+    def _start_manual_cell_edit(self, row: int, column: int, item: QTableWidgetItem) -> None:
+        self._finish_manual_cell_edit(commit=True)
+        editor = QLineEdit(self.preset_table.viewport())
+        max_length = self._manual_name_max_length(column)
+        if max_length is not None:
+            editor.setMaxLength(max_length)
+        editor.setText(item.text())
+        editor.selectAll()
+        editor.setFrame(False)
+        editor.setGeometry(self.preset_table.visualItemRect(item))
+        editor.installEventFilter(self)
+        editor.returnPressed.connect(lambda: self._finish_manual_cell_edit(commit=True))
+        editor.show()
+        editor.setFocus(Qt.FocusReason.MouseFocusReason)
+        self._manual_cell_editor = editor
+        self._manual_cell_target = (row, column)
+
+    def _finish_manual_cell_edit(self, *, commit: bool) -> None:
+        editor = self._manual_cell_editor
+        target = self._manual_cell_target
+        if editor is None or target is None:
+            return
+
+        row, column = target
+        item = self.preset_table.item(row, column)
+        if commit and item is not None:
+            value = editor.text()
+            if column == 2:
+                item.setText(self._sanitize_helix_name(value, self._preset_name_max_length()))
+            elif column % 2:
+                item.setText(self._sanitize_helix_name(value, self._snapshot_name_max_length()))
+            else:
+                try:
+                    delta = float(value)
+                except ValueError:
+                    self.show_error(f"Invalid gain adjustment: {value!r}")
+                    editor.setFocus(Qt.FocusReason.OtherFocusReason)
+                    editor.selectAll()
+                    return
+                if not math.isfinite(delta):
+                    self.show_error(f"Invalid gain adjustment: {value!r}")
+                    editor.setFocus(Qt.FocusReason.OtherFocusReason)
+                    editor.selectAll()
+                    return
+                self._set_adjustment_value(item, value, delta)
+
+        self._manual_cell_editor = None
+        self._manual_cell_target = None
+        editor.removeEventFilter(self)
+        editor.deleteLater()
+
+    def _manual_name_max_length(self, column: int) -> int | None:
+        if column == 2:
+            return self._preset_name_max_length()
+        if column % 2:
+            return self._snapshot_name_max_length()
+        return None
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self._manual_cell_editor:
+            if event.type() == QEvent.Type.KeyPress:
+                key = event.key() if isinstance(event, QKeyEvent) else None
+                if key in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
+                    self._finish_manual_cell_edit(commit=True)
+                    return True
+                if key == Qt.Key.Key_Escape:
+                    self._finish_manual_cell_edit(commit=False)
+                    return True
+            if event.type() == QEvent.Type.FocusOut:
+                editor = self._manual_cell_editor
+                QTimer.singleShot(
+                    0,
+                    lambda: (
+                        self._finish_manual_cell_edit(commit=True)
+                        if editor is self._manual_cell_editor
+                        else None
+                    ),
+                )
+        return super().eventFilter(watched, event)
+
+    def _table_adjustments(self) -> PatchFileAdjustments:
+        preset_names = {}
+        snapshot_names = {}
+        gain_deltas = {}
+
+        for row in range(self.preset_table.rowCount()):
+            patch_item = self.preset_table.item(row, 1)
+            preset_item = self.preset_table.item(row, 2)
+            if patch_item is None or preset_item is None:
+                continue
+
+            patch = patch_item.text()
+            preset_names[patch] = self._validate_helix_name(
+                preset_item.text(),
+                self._preset_name_max_length(),
+            )
+            patch_snapshot_names = {}
+            patch_gain_deltas = {}
+            for snapshot_index, column in enumerate(range(3, self.preset_table.columnCount(), 2)):
+                name_item = self.preset_table.item(row, column)
+                adjustment_item = self.preset_table.item(row, column + 1)
+                if name_item is not None:
+                    patch_snapshot_names[snapshot_index] = self._validate_helix_name(
+                        name_item.text(),
+                        self._snapshot_name_max_length(),
+                    )
+                if adjustment_item is not None:
+                    if adjustment_item.text() == "⚠️":
+                        continue
+                    try:
+                        value = float(adjustment_item.text())
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"Invalid gain adjustment: {adjustment_item.text()!r}"
+                        ) from exc
+                    if not math.isfinite(value):
+                        raise ValueError(f"Invalid gain adjustment: {adjustment_item.text()!r}")
+                    patch_gain_deltas[snapshot_index] = value
+            snapshot_names[patch] = patch_snapshot_names
+            gain_deltas[patch] = patch_gain_deltas
+
+        return PatchFileAdjustments(preset_names, snapshot_names, gain_deltas)
+
+    @staticmethod
+    def _validate_helix_name(name: str, max_length: int | None = None) -> str:
+        if HELIX_NAME_PATTERN.fullmatch(name) is None:
+            raise ValueError(f"Invalid Helix name: {name!r}")
+        if max_length is not None and len(name) > max_length:
+            raise ValueError(f"Helix name exceeds {max_length} characters: {name!r}")
+        return name
+
     def _set_phase(self, phase: str) -> None:
         self.phase.setText(_phase_text(phase))
         standard_pixmap = PHASE_ICON.get(phase.lower())
@@ -1010,7 +1234,8 @@ class MainWindow(QMainWindow):
         adjustment_item = self.preset_table.item(row, adjustment_column)
         if name_item is None or adjustment_item is None:
             return
-        self._set_snapshot_name(name_item, label, is_solo)
+        if not name_item.text():
+            self._set_snapshot_name(name_item, label, is_solo)
         if match.re is GAIN_BAD_LUFS_PATTERN:
             adjustment_item.setText("⚠️")
             adjustment_item.setToolTip("This snapshot produced an unusable LUFS measurement.")
@@ -1104,6 +1329,14 @@ class MainWindow(QMainWindow):
             if adjustment is None:
                 adjustment = QTableWidgetItem()
                 self.preset_table.setItem(row, column + 1, adjustment)
+            self._set_preset_item_editable(
+                name,
+                False,
+            )
+            self._set_preset_item_editable(
+                adjustment,
+                False,
+            )
             self._set_adjustment_value(adjustment, "+0", 0)
 
     def _set_bad_lufs_highlight(self, row: int) -> None:
@@ -1151,10 +1384,15 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _set_snapshot_name(item: QTableWidgetItem, name: str, is_solo: bool) -> None:
-        item.setText(name)
-        item.setIcon(QIcon())
-        item.setToolTip("Solo snapshot" if is_solo else "")
         table = item.tableWidget()
+        signals_blocked = table.blockSignals(True) if table is not None else False
+        try:
+            item.setText(name)
+            item.setIcon(QIcon())
+            item.setToolTip("Solo snapshot" if is_solo else "")
+        finally:
+            if table is not None:
+                table.blockSignals(signals_blocked)
         if table is None:
             return
         if not is_solo:
@@ -1169,6 +1407,79 @@ class MainWindow(QMainWindow):
     def _preset_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() == 0 and item.checkState() != Qt.CheckState.Checked:
             self._clear_preset_adjustments(item.row())
+        elif self._manual_adjustments_enabled() and self._is_manual_adjustment_column(
+            item.column()
+        ):
+            if item.column() == 2:
+                sanitized = self._sanitize_helix_name(
+                    item.text(),
+                    self._preset_name_max_length(),
+                )
+                if sanitized != item.text():
+                    signals_blocked = self.preset_table.blockSignals(True)
+                    try:
+                        item.setText(sanitized)
+                    finally:
+                        self.preset_table.blockSignals(signals_blocked)
+            elif item.column() % 2:
+                sanitized = self._sanitize_helix_name(
+                    item.text(),
+                    self._snapshot_name_max_length(),
+                )
+                if sanitized != item.text():
+                    signals_blocked = self.preset_table.blockSignals(True)
+                    try:
+                        item.setText(sanitized)
+                    finally:
+                        self.preset_table.blockSignals(signals_blocked)
+                name_item = self.preset_table.item(item.row(), 2)
+                if name_item is not None:
+                    snapshot_names = list(name_item.data(Qt.ItemDataRole.UserRole) or ())
+                    snapshot_index = (item.column() - 3) // 2
+                    snapshot_names.extend(
+                        "" for _ in range(snapshot_index + 1 - len(snapshot_names))
+                    )
+                    snapshot_names[snapshot_index] = item.text()
+                    name_item.setData(Qt.ItemDataRole.UserRole, tuple(snapshot_names))
+                try:
+                    solo_pattern = re.compile(self.solo_regex.text())
+                except re.error:
+                    solo_pattern = None
+                self._set_snapshot_name(
+                    item,
+                    item.text(),
+                    solo_pattern is not None and solo_pattern.search(item.text()) is not None,
+                )
+            else:
+                try:
+                    value = float(item.text())
+                except ValueError:
+                    return
+                self._set_adjustment_value(item, item.text(), value)
+
+    def _preset_name_max_length(self) -> int | None:
+        return self._current_profile_name_max_length("preset_name_max_length")
+
+    def _snapshot_name_max_length(self) -> int | None:
+        return self._current_profile_name_max_length("snapshot_name_max_length")
+
+    def _current_profile_name_max_length(self, attribute: str) -> int | None:
+        device = self.device.currentData() if hasattr(self, "device") else None
+        if not device:
+            return None
+        try:
+            profile = get_device_profile(device)
+        except ValueError:
+            return None
+        value = getattr(profile, attribute, None)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    @staticmethod
+    def _sanitize_helix_name(name: str, max_length: int | None = None) -> str:
+        sanitized = "".join(
+            character for character in name if HELIX_NAME_CHAR_PATTERN.fullmatch(character)
+        )
+        return sanitized[:max_length] if max_length is not None else sanitized
 
     def _preset_row(self, patch: str) -> int | None:
         for row in range(self.preset_table.rowCount()):
@@ -1211,14 +1522,20 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _set_adjustment_value(item: QTableWidgetItem, text: str, value: float) -> None:
-        item.setText("0" if value == 0 else text)
-        item.setToolTip("")
-        font = item.font()
-        font.setBold(False)
-        font.setPointSize(max(QApplication.font().pointSize(), 9))
-        item.setFont(font)
-        color = "#15803d" if value > 0 else "#b91c1c" if value < 0 else None
-        item.setForeground(QBrush(QColor(color)) if color is not None else QBrush())
+        table = item.tableWidget()
+        signals_blocked = table.blockSignals(True) if table is not None else False
+        try:
+            item.setText("0" if value == 0 else text)
+            item.setToolTip("")
+            font = item.font()
+            font.setBold(False)
+            font.setPointSize(max(QApplication.font().pointSize(), 9))
+            item.setFont(font)
+            color = "#15803d" if value > 0 else "#b91c1c" if value < 0 else None
+            item.setForeground(QBrush(QColor(color)) if color is not None else QBrush())
+        finally:
+            if table is not None:
+                table.blockSignals(signals_blocked)
 
     def _resize_to_initial_content(self) -> None:
         screen = QApplication.primaryScreen()
@@ -1325,6 +1642,46 @@ class CurrentPageHeightTabWidget(QTabWidget):
                 current.minimumSizeHint().height() + self.tabBar().minimumSizeHint().height()
             )
         return hint
+
+
+class JsonSyntaxHighlighter(QSyntaxHighlighter):
+    """Lightweight JSON highlighting for the metadata tab."""
+
+    _TOKEN_PATTERN = re.compile(
+        r"(?P<key>\"(?:\\.|[^\"\\])*\"(?=\s*:))|"
+        r"(?P<string>\"(?:\\.|[^\"\\])*\")|"
+        r"(?P<number>-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|"
+        r"(?P<boolean>\btrue\b|\bfalse\b)|"
+        r"(?P<null>\bnull\b)|"
+        r"(?P<punctuation>[{}\[\],:])"
+    )
+
+    def __init__(self, document: object) -> None:
+        super().__init__(document)
+        self.formats = {
+            "key": self._format("#7c3aed", bold=True),
+            "string": self._format("#15803d"),
+            "number": self._format("#b45309"),
+            "boolean": self._format("#2563eb", bold=True),
+            "null": self._format("#6b7280", italic=True),
+            "punctuation": self._format("#374151"),
+        }
+
+    @staticmethod
+    def _format(color: str, *, bold: bool = False, italic: bool = False) -> QTextCharFormat:
+        text_format = QTextCharFormat()
+        text_format.setForeground(QColor(color))
+        if bold:
+            text_format.setFontWeight(QFont.Weight.Bold)
+        text_format.setFontItalic(italic)
+        return text_format
+
+    def highlightBlock(self, text: str) -> None:
+        for match in self._TOKEN_PATTERN.finditer(text):
+            token = match.lastgroup
+            if token is None:
+                continue
+            self.setFormat(match.start(), match.end() - match.start(), self.formats[token])
 
 
 class ContentHeightTableWidget(QTableWidget):
