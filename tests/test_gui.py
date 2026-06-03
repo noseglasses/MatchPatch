@@ -25,8 +25,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QSplitter,
     QStyle,
     QTableWidgetItem,
+    QWidget,
 )
 from shiboken6 import isValid
 
@@ -64,8 +66,10 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.device.currentData() == "helix"
     assert window.backend.currentText() == "hardware"
     assert window.general.title() == "General"
-    assert not window.advanced.is_expanded()
-    assert window.advanced.content.isHidden()
+    assert isinstance(window.advanced, QWidget)
+    assert not isinstance(window.advanced, main_window.QGroupBox)
+    assert window.advanced.isHidden()
+    assert not window.advanced_button.isChecked()
     assert [window.advanced_tabs.tabText(index) for index in range(4)] == [
         "Device",
         "Misc",
@@ -74,8 +78,17 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     ]
     assert window.presets.title() == "Presets"
     assert window.presets.isHidden()
-    assert window.content.layout().indexOf(window.presets) == (
-        window.content.layout().indexOf(window.advanced) + 1
+    assert isinstance(window.preset_advanced_splitter, QSplitter)
+    assert window.preset_advanced_splitter.orientation() == Qt.Orientation.Horizontal
+    assert window.preset_advanced_splitter.isHidden()
+    assert (
+        window.preset_advanced_splitter.sizePolicy().verticalPolicy()
+        == QSizePolicy.Policy.Expanding
+    )
+    assert window.preset_advanced_splitter.widget(0) is window.presets
+    assert window.preset_advanced_splitter.widget(1) is window.advanced
+    assert window.content.layout().indexOf(window.preset_advanced_splitter) == (
+        window.content.layout().indexOf(window.general) + 1
     )
     assert not window.findChildren(QMenuBar)
     assert "Setlist/Preset file" not in [
@@ -104,22 +117,34 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert toolbar.actions().index(window.help_spacer_action) < toolbar.actions().index(
         window.help_action
     )
+    assert toolbar.actions().index(window.advanced_action) == (
+        toolbar.actions().index(window.help_spacer_action) + 1
+    )
     help_spacer = toolbar.widgetForAction(window.help_spacer_action)
     assert help_spacer is not None
     assert help_spacer.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+    assert toolbar.widgetForAction(window.advanced_action) is window.advanced_button
     assert toolbar.widgetForAction(window.normalization_action) is window.start_cancel_stack
     assert window.start_cancel_stack.currentWidget() is window.start_button
     assert window.start_button.text() == ""
+    assert window.advanced_button.text() == ""
     assert not window.start_button.icon().isNull()
+    assert not window.advanced_button.icon().isNull()
     assert window.start_button.iconSize() == toolbar.iconSize()
+    assert window.advanced_button.iconSize() == main_window.QSize(24, 24)
     assert isinstance(window.start_button, main_window.QToolButton)
     assert isinstance(window.cancel_button, main_window.QToolButton)
+    assert isinstance(window.advanced_button, main_window.QToolButton)
     assert window.start_button.autoRaise()
     assert window.cancel_button.autoRaise()
+    assert window.advanced_button.autoRaise()
     assert window.start_button.toolTip().startswith("Start")
+    assert window.advanced_button.toolTip().startswith("Show")
     assert window.start_button.width() == window.start_button.height()
     assert window.cancel_button.width() == window.cancel_button.height()
+    assert window.advanced_button.width() == window.advanced_button.height()
     assert window.start_button.size() == window.cancel_button.size()
+    assert window.advanced_button.size() == window.start_button.size()
     assert window.start_cancel_stack.size() == window.start_button.size()
     for action in (window.help_action, window.about_action):
         button = toolbar.widgetForAction(action)
@@ -146,6 +171,8 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not hasattr(window, "ignore_bad_lufs")
     assert window.preset_table.verticalHeader().isHidden()
     assert not window.preset_table.wordWrap()
+    assert window.preset_table.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
+    assert window.advanced_tabs.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
     assert window.preset_table_note.text() == "Only non-empty presets are listed."
     assert window.preset_csv_label.text() == "CSV: "
     assert window.preset_csv_controls.layout().indexOf(window.preset_csv_label) >= 0
@@ -177,18 +204,39 @@ def test_initial_window_size_avoids_scrollbar_for_collapsed_layout(app) -> None:
     window.close()
 
 
-def test_window_shrinks_when_advanced_settings_are_folded(app) -> None:
+def test_window_shrinks_when_advanced_side_pane_is_hidden(app) -> None:
     window = MainWindow()
     window.show()
     app.processEvents()
 
-    window.advanced.set_expanded(True)
+    window.advanced_button.setChecked(True)
     app.processEvents()
     expanded_height = window.height()
-    window.advanced.set_expanded(False)
+    window.advanced_button.setChecked(False)
     app.processEvents()
 
     assert window.height() < expanded_height
+
+    window.close()
+
+
+def test_maximized_window_does_not_resize_when_advanced_side_pane_toggles(
+    monkeypatch, app
+) -> None:
+    window = MainWindow()
+    window.show()
+    app.processEvents()
+    window.resize(1200, 800)
+    app.processEvents()
+    initial_size = window.size()
+
+    monkeypatch.setattr(window, "isMaximized", lambda: True)
+
+    window.advanced_button.setChecked(True)
+    app.processEvents()
+
+    assert window.size() == initial_size
+    assert not window.advanced.isHidden()
 
     window.close()
 
@@ -249,6 +297,7 @@ def test_single_preset_load_displays_presets_panel_with_instruction_label(app) -
     app.processEvents()
 
     assert not window.presets.isHidden()
+    assert not window.preset_advanced_splitter.isHidden()
     assert window.preset_table.isHidden()
     assert not window.single_slot.isHidden()
     assert window.preset_csv_controls.isHidden()
@@ -286,11 +335,38 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
     window.load_assignments()
 
     assert not window.presets.isHidden()
+    assert not window.preset_advanced_splitter.isHidden()
     assert not window.preset_table.isHidden()
     assert not window.preset_csv_controls.isHidden()
     assert window.preset_hint.text() == "Select the presets to normalize."
     assert '"file_type": "hls"' in window.metadata_text.toPlainText()
     assert '"name": "Set"' in window.metadata_text.toPlainText()
+    assert window.advanced.isHidden()
+
+    window.show()
+    window.resize(1100, 900)
+    window.advanced_button.setChecked(True)
+    app.processEvents()
+
+    assert not window.preset_table.isHidden()
+    assert not window.advanced.isHidden()
+    assert not window.preset_advanced_splitter.isHidden()
+    assert window.preset_advanced_splitter.height() > window.preset_advanced_splitter.sizeHint().height()
+    assert window.presets.height() == window.preset_advanced_splitter.height()
+    assert window.advanced.height() == window.preset_advanced_splitter.height()
+    layout_bottom = (
+        window.content.height() - window.content.layout().contentsMargins().bottom()
+    )
+    assert window.preset_advanced_splitter.geometry().bottom() >= layout_bottom - 1
+    assert window.preset_advanced_splitter.handle(1) is not None
+    preset_width, advanced_width = window.preset_advanced_splitter.sizes()
+    assert preset_width > advanced_width > 0
+
+    window.advanced_button.setChecked(False)
+    app.processEvents()
+
+    assert not window.preset_table.isHidden()
+    assert window.advanced.isHidden()
 
     window.close()
 

@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
     QSpinBox,
     QStackedWidget,
     QStyle,
@@ -76,7 +77,6 @@ from PySide6.QtWidgets import (
 from matchpatch.config import config_value, load_config
 from matchpatch.devices import get_device_profile, list_device_profiles
 from matchpatch.devices.base import PatchFileAdjustments
-from matchpatch.gui.collapsible import CollapsibleSection
 from matchpatch.gui.device_panels import HelixSettingsPanel
 from matchpatch.gui.dialogs import ASSETS_DIR, AboutDialog, HelpDialog
 from matchpatch.gui.snapshot_header import SnapshotHeader
@@ -174,6 +174,21 @@ def _normalization_icon() -> QIcon:
     return QIcon(pixmap)
 
 
+def _advanced_icon() -> QIcon:
+    pixmap = QPixmap(32, 32)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    font = QFont(QApplication.font())
+    font.setPixelSize(27)
+    painter.setFont(font)
+    painter.setPen(QColor("#475569"))
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "⚙")
+    painter.end()
+    return QIcon(pixmap)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -212,8 +227,7 @@ class MainWindow(QMainWindow):
         self._build_footer()
         layout = QVBoxLayout(content)
         layout.addWidget(self._build_inputs())
-        layout.addWidget(self._build_advanced())
-        layout.addWidget(self._build_presets())
+        layout.addWidget(self._build_preset_advanced_splitter(), 1)
         layout.addWidget(self._build_progress())
         layout.addWidget(self._build_retained_csv())
         layout.addStretch()
@@ -275,6 +289,16 @@ class MainWindow(QMainWindow):
         help_spacer = QWidget(self)
         help_spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.help_spacer_action = toolbar.addWidget(help_spacer)
+
+        self.advanced_button = QToolButton(self)
+        self.advanced_button.setIcon(_advanced_icon())
+        self.advanced_button.setCheckable(True)
+        self.advanced_button.setToolTip(
+            "Show less frequently changed settings and diagnostic details."
+        )
+        self.advanced_button.setAccessibleName("Advanced")
+        self.advanced_button.toggled.connect(self._set_advanced_visible)
+        self.advanced_action = toolbar.addWidget(self.advanced_button)
         toolbar.addSeparator()
 
         self.help_action = QAction(
@@ -298,10 +322,11 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.about_action)
 
         square_button_size = toolbar.iconSize().width() + 14
-        for button in (self.start_button, self.cancel_button):
+        for button in (self.start_button, self.cancel_button, self.advanced_button):
             button.setAutoRaise(True)
             button.setIconSize(toolbar.iconSize())
             button.setFixedSize(square_button_size, square_button_size)
+        self.advanced_button.setIconSize(QSize(24, 24))
         self.start_cancel_stack.setFixedSize(square_button_size, square_button_size)
         for action in (self.help_action, self.about_action):
             button = toolbar.widgetForAction(action)
@@ -321,8 +346,21 @@ class MainWindow(QMainWindow):
         layout.setColumnStretch(1, 1)
         return group
 
+    def _build_preset_advanced_splitter(self) -> QSplitter:
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.preset_advanced_splitter = splitter
+        splitter.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._build_presets())
+        splitter.addWidget(self._build_advanced())
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.hide()
+        return splitter
+
     def _build_presets(self) -> QGroupBox:
         content = QGroupBox("Presets")
+        content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(content)
         self.preset_hint = QLabel("Choose an .hls or .hlx file.")
         self.preset_hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
@@ -339,7 +377,7 @@ class MainWindow(QMainWindow):
         self.preset_table.itemChanged.connect(self._preset_item_changed)
         self.preset_table.setSortingEnabled(True)
         self.preset_table.setMinimumHeight(160)
-        self.preset_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.preset_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preset_table.model().rowsInserted.connect(self._preset_table_size_changed)
         self.preset_table.model().rowsRemoved.connect(self._preset_table_size_changed)
         self.preset_table.model().modelReset.connect(self._preset_table_size_changed)
@@ -519,21 +557,48 @@ class MainWindow(QMainWindow):
         self._set_metadata({})
         return content
 
-    def _build_advanced(self) -> CollapsibleSection:
+    def _build_advanced(self) -> QWidget:
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.advanced_tabs = CurrentPageHeightTabWidget()
         self.advanced_tabs.addTab(self._build_device_settings(), "Device")
         self.advanced_tabs.addTab(self._build_misc(), "Misc")
         self.advanced_tabs.addTab(self._build_metadata(), "Meta Data")
         self.advanced_tabs.addTab(self._build_log(), "Log")
-        self.advanced_tabs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.advanced_tabs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self.advanced_tabs.currentChanged.connect(self._schedule_resize_for_content)
         layout.addWidget(self.advanced_tabs)
-        self.advanced = CollapsibleSection("Advanced", content)
-        self.advanced.toggle_button.toggled.connect(self._schedule_resize_for_content)
+        self.advanced = content
+        self.advanced.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self.advanced.setToolTip("Show less frequently changed settings and diagnostic details.")
+        self.advanced.setVisible(self.advanced_button.isChecked())
         return self.advanced
+
+    def _set_advanced_visible(self, visible: bool) -> None:
+        if hasattr(self, "advanced"):
+            self.advanced.setVisible(visible)
+            self._refresh_preset_advanced_splitter_visibility()
+            if visible:
+                self._fit_advanced_splitter_width()
+            self._schedule_resize_for_content()
+
+    def _refresh_preset_advanced_splitter_visibility(self) -> None:
+        if hasattr(self, "preset_advanced_splitter"):
+            self.preset_advanced_splitter.setVisible(
+                not self.presets.isHidden() or not self.advanced.isHidden()
+            )
+
+    def _fit_advanced_splitter_width(self) -> None:
+        if not hasattr(self, "preset_advanced_splitter") or self.presets.isHidden():
+            return
+        advanced_width = self.advanced.sizeHint().width()
+        splitter_width = self.preset_advanced_splitter.width()
+        if advanced_width <= 0 or splitter_width <= 0:
+            return
+        self.preset_advanced_splitter.setSizes(
+            [max(0, splitter_width - advanced_width), advanced_width]
+        )
 
     def _build_misc(self) -> QWidget:
         content = QWidget()
@@ -958,6 +1023,7 @@ class MainWindow(QMainWindow):
         self._clear_bad_lufs_highlights()
         self._load_metadata()
         self.presets.hide()
+        self._refresh_preset_advanced_splitter_visibility()
         is_single_preset = path.suffix.lower() == ".hlx"
         self.single_slot.setVisible(is_single_preset)
         self.preset_table.setVisible(not is_single_preset)
@@ -981,6 +1047,8 @@ class MainWindow(QMainWindow):
             self._set_preset_csv_buttons_enabled(False)
             self.preset_hint.setText("Enter the temporary Helix slot used during measurement.")
             self.presets.show()
+            self._refresh_preset_advanced_splitter_visibility()
+            QTimer.singleShot(0, self._fit_advanced_splitter_width)
             self.presets.updateGeometry()
             self._schedule_resize_for_content()
             return
@@ -1014,6 +1082,8 @@ class MainWindow(QMainWindow):
         self.preset_hint.setText("Select the presets to normalize.")
         self._set_preset_csv_buttons_enabled(self.preset_table.rowCount() > 0)
         self.presets.show()
+        self._refresh_preset_advanced_splitter_visibility()
+        QTimer.singleShot(0, self._fit_advanced_splitter_width)
         self._schedule_resize_for_content()
 
     def _set_preset_csv_buttons_enabled(self, enabled: bool) -> None:
@@ -2026,6 +2096,8 @@ class MainWindow(QMainWindow):
                 table.blockSignals(signals_blocked)
 
     def _resize_to_initial_content(self) -> None:
+        if self.isMaximized() or self.isFullScreen():
+            return
         screen = QApplication.primaryScreen()
         if screen is None:
             return
@@ -2044,8 +2116,8 @@ class MainWindow(QMainWindow):
         for widget in (
             self.presets,
             self.advanced_tabs,
-            self.advanced.content,
             self.advanced,
+            self.preset_advanced_splitter,
             self.content,
         ):
             layout = widget.layout()
