@@ -1,27 +1,35 @@
 # MatchPatch Agent Notes
 
-## Testing
-
-Use the existing WSL virtual environment for tests:
+Python package in `src/matchpatch`; legacy Helix JSON/HLS utilities live in `Python/`.
+Use existing WSL env, not bare `pytest` or a stale project `.venv`:
 
 ```bash
+scripts/sync-wsl.sh
 $HOME/.local/share/matchpatch/.venv-wsl/bin/pytest
 ```
 
-For GUI-focused changes, prefer the wrapper:
+For GUI work use:
 
 ```bash
-scripts/test-gui.sh
+scripts/test-gui.sh [pytest args]
 ```
 
-You can pass normal pytest arguments through it:
+Quality checks:
 
 ```bash
-scripts/test-gui.sh tests/test_gui.py::test_loaded_file_updates_window_title_and_save_as_state
+ruff check .
+ruff format --check .
+ty check
 ```
 
-Do not rely on bare `pytest`; it may not be on `PATH`. `uv run pytest` may also fail when the project-local `.venv` is stale or incomplete.
+Run them from the synced WSL env, or via the pre-push hook. GUI tests use PySide6
+with offscreen Qt. Prefer focused tests in `tests/test_gui.py` for window/widget
+changes, and broaden only when behavior crosses workflows.
 
-## GUI Tests
-
-GUI tests live in `tests/test_gui.py` and use PySide6. Prefer focused GUI tests for small window, dialog, and widget changes, then broaden only when the changed behavior crosses multiple workflows.
+MatchPatch normalizes Helix `.hls` setlists and `.hlx` presets. Core flow:
+`workflow.py` creates/uses measurement CSVs, `normalize.py` bridges WSL to the
+native Windows worker, `measure.py` records/analyzes audio, device profiles adapt
+processor files and steering. Keep new device-specific behavior behind
+`DeviceProfile`/`PatchFileHandler`/`DeviceController`. Preserve the user’s dirty
+worktree; do not revert unrelated edits. Prefer `rg`, focused patches, and tests
+that mock hardware unless the user explicitly asks for real-device integration.
