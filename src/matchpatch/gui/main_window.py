@@ -21,6 +21,7 @@ from PySide6.QtCore import (
     QCoreApplication,
     QEasingCurve,
     QEvent,
+    QModelIndex,
     QObject,
     QPropertyAnimation,
     QSize,
@@ -52,7 +53,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGraphicsOpacityEffect,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -79,7 +79,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from matchpatch.config import config_value, load_config
+from matchpatch.config import config_value, export_default_config, load_config
 from matchpatch.custom_adjustments import CustomAdjustments, load_custom_adjustments_file
 from matchpatch.devices import get_device_profile, list_device_profiles
 from matchpatch.devices.base import PatchFileAdjustments
@@ -165,7 +165,7 @@ class SaveCancelled(Exception):
 class AttentionFrameDelegate(QStyledItemDelegate):
     """Draw an attention frame around cells marked by the window."""
 
-    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         super().paint(painter, option, index)
         if not index.data(PRESET_TABLE_ATTENTION_ROLE):
             return
@@ -246,6 +246,8 @@ class MainWindow(QMainWindow):
         self.log_entries: list[tuple[str, str, str]] = []
         self._processing_dot_green = False
         self._loading_defaults = False
+        self._available_backend: str | None = None
+        self._pending_backend_check_request: NormalizationRequest | None = None
 
         self.input_path = QLineEdit()
         self.output_path = QLineEdit()
@@ -272,7 +274,6 @@ class MainWindow(QMainWindow):
         self.load_defaults()
         self._refresh_file_actions()
         QTimer.singleShot(0, self._resize_to_initial_content)
-        QTimer.singleShot(0, self._check_backend_on_startup)
 
     def _build_hardware_check_overlay(self) -> None:
         overlay = QWidget(self)
@@ -328,6 +329,7 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("File", self)
         toolbar.setMovable(False)
+        toolbar.setContentsMargins(0, 0, 0, 0)
         toolbar.setIconSize(QSize(18, 18))
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
 
@@ -416,18 +418,27 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.about_action)
 
         square_button_size = toolbar.iconSize().width() + 14
-        for button in (self.start_button, self.cancel_button):
+        for button in (self.start_button, self.cancel_button, self.advanced_button):
             button.setAutoRaise(True)
             button.setIconSize(toolbar.iconSize())
             button.setFixedSize(square_button_size, square_button_size)
-        self.advanced_button.setAutoRaise(True)
-        self.advanced_button.setIconSize(QSize(40, 40))
-        self.advanced_button.setFixedSize(46, 46)
         self.start_cancel_stack.setFixedSize(square_button_size, square_button_size)
-        for action in (self.help_action, self.about_action):
+        for action in (
+            self.open_action,
+            self.save_action,
+            self.save_as_action,
+            self.help_action,
+            self.about_action,
+        ):
             button = toolbar.widgetForAction(action)
             if button is not None:
                 button.setFixedSize(square_button_size, square_button_size)
+        toolbar_content_height = max(
+            self.start_cancel_stack.height(),
+            self.device.sizeHint().height(),
+            square_button_size,
+        )
+        toolbar.setFixedHeight(toolbar_content_height + 4)
 
     def _build_preset_advanced_splitter(self) -> QSplitter:
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -770,9 +781,17 @@ class MainWindow(QMainWindow):
         config_browse.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
         config_browse.setToolTip("Choose an optional TOML configuration file.")
         config_browse.clicked.connect(self.browse_config)
+        self.config_export_button = QPushButton("Export")
+        self.config_export_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        )
+        self.config_export_button.setToolTip(
+            "Save a TOML configuration file populated with default values."
+        )
+        self.config_export_button.clicked.connect(self.export_default_config)
         form.addRow(
             _label("Config file", "Optional TOML file providing saved MatchPatch defaults."),
-            _path_row(self.config_path, config_browse),
+            _path_row(self.config_path, config_browse, self.config_export_button),
         )
         self.custom_adjustments_path = QLineEdit()
         custom_adjustments_browse = QPushButton("Browse")
@@ -1201,6 +1220,25 @@ class MainWindow(QMainWindow):
             self.config_path.setText(path)
             self.load_defaults()
 
+    def export_default_config(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export default config",
+            str(Path(self.config_path.text().strip() or "matchpatch-defaults.toml")),
+            "TOML (*.toml)",
+        )
+        if not path:
+            return
+
+        try:
+            saved_path = export_default_config(path)
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(f"Could not export default config: {exc}")
+            return
+
+        self.config_path.setText(str(saved_path))
+        QMessageBox.information(self, "Export default config", f"Saved default config:\n{saved_path}")
+
     def browse_custom_adjustments(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -1226,7 +1264,7 @@ class MainWindow(QMainWindow):
     def backend_changed(self) -> None:
         self._refresh_backend_tooltip()
         if not self._loading_defaults:
-            self._check_selected_backend_availability()
+            self._available_backend = None
 
     def _refresh_backend_tooltip(self) -> None:
         if self.backend.currentText() == "loopback":
@@ -1277,24 +1315,12 @@ class MainWindow(QMainWindow):
     def _backend_check_enabled(self) -> bool:
         return os.getenv("QT_QPA_PLATFORM", "").lower() != "offscreen"
 
-    def _check_backend_on_startup(self) -> None:
-        self._check_selected_backend_availability()
-
-    def _backend_check_request(self) -> NormalizationRequest | None:
-        try:
-            args = apply_config(parse_args(self._base_argv("placeholder.hls")))
-            return replace(request_from_args(args), defer_export=True)
-        except Exception as exc:  # noqa: BLE001
-            self.show_error(str(exc))
-            return None
-
-    def _check_selected_backend_availability(self) -> None:
-        if not self._backend_check_enabled() or self.backend.currentText() != "hardware":
-            return
-
-        request = self._backend_check_request()
-        if request is not None:
-            self._start_hardware_check(request)
+    def _backend_check_required(self, request: NormalizationRequest) -> bool:
+        return (
+            self._backend_check_enabled()
+            and request.backend == "hardware"
+            and self._available_backend != request.backend
+        )
 
     def load_assignments(self) -> None:
         path = Path(self.input_path.text())
@@ -1445,6 +1471,11 @@ class MainWindow(QMainWindow):
             self.show_error(str(exc))
             return
 
+        if self._backend_check_required(request):
+            self._start_hardware_check(request)
+            return
+
+        self._available_backend = request.backend
         self._start_normalization_request(request)
 
     def _start_normalization_request(self, request: NormalizationRequest) -> None:
@@ -1498,6 +1529,7 @@ class MainWindow(QMainWindow):
         self._set_phase("starting")
         self._log("Checking backend availability", "info")
         self.hardware_check_worker = HardwareCheckWorker(request, self)
+        self._pending_backend_check_request = request
         self.hardware_check_worker.completed.connect(self._hardware_check_completed)
         self.hardware_check_worker.failed.connect(self._hardware_check_failed)
         self.hardware_check_worker.finished.connect(self._hardware_check_finished)
@@ -1506,12 +1538,20 @@ class MainWindow(QMainWindow):
 
     def _hardware_check_completed(self) -> None:
         self._hide_hardware_check_overlay()
+        request = self._pending_backend_check_request
+        self._pending_backend_check_request = None
+        if request is not None:
+            self._available_backend = request.backend
+        self._log("Backend availability check completed", "success")
+        if request is not None:
+            self._start_normalization_request(request)
+            return
         self.start_button.setEnabled(True)
         self._set_phase("ready")
-        self._log("Backend availability check completed", "success")
 
     def _hardware_check_failed(self, detail: str) -> None:
         self._hide_hardware_check_overlay()
+        self._pending_backend_check_request = None
         self.start_button.setEnabled(True)
         self._set_phase("ready")
         message = "No suitable device connected."
@@ -1692,6 +1732,11 @@ class MainWindow(QMainWindow):
             return False
         if not self._preset_table_has_unsaved_changes():
             if make_active and output_path != Path(self.input_path.text()):
+                preserved_single_preset_slot = (
+                    self._single_preset_slot_text()
+                    if Path(self.input_path.text()).suffix.lower() == ".hlx"
+                    else None
+                )
                 try:
                     self._copy_active_file_to(output_path)
                 except SaveCancelled:
@@ -1699,7 +1744,10 @@ class MainWindow(QMainWindow):
                 except Exception as exc:  # noqa: BLE001
                     self.show_error(str(exc))
                     return False
-                self._activate_saved_file(output_path)
+                self._activate_saved_file(
+                    output_path,
+                    preserved_single_preset_slot=preserved_single_preset_slot,
+                )
             return True
 
         if request is None:
@@ -1766,7 +1814,15 @@ class MainWindow(QMainWindow):
         self._set_phase("completed")
         self._log(f"Saved: {output_path.resolve()}", "success")
         if make_active:
-            self._activate_saved_file(output_path)
+            preserved_single_preset_slot = (
+                self._single_preset_slot_text()
+                if request.input_path.suffix.lower() == ".hlx"
+                else None
+            )
+            self._activate_saved_file(
+                output_path,
+                preserved_single_preset_slot=preserved_single_preset_slot,
+            )
         else:
             self._reset_preset_table_modified()
             self._refresh_file_actions()
@@ -1778,13 +1834,29 @@ class MainWindow(QMainWindow):
             raise SaveCancelled
         shutil.copy2(input_path, output_path)
 
-    def _activate_saved_file(self, path: Path) -> None:
+    def _activate_saved_file(
+        self,
+        path: Path,
+        *,
+        preserved_single_preset_slot: str | None = None,
+    ) -> None:
         self.input_path.setText(str(path))
         self._preset_load_discard_confirmed = True
         try:
             self.load_assignments()
         finally:
             self._preset_load_discard_confirmed = False
+        if preserved_single_preset_slot is None or path.suffix.lower() != ".hlx":
+            return
+        item = self.preset_table.item(0, 1)
+        if item is None:
+            return
+        signals_blocked = self.preset_table.blockSignals(True)
+        try:
+            item.setText(preserved_single_preset_slot)
+        finally:
+            self.preset_table.blockSignals(signals_blocked)
+        self._reset_preset_table_modified()
 
     def _set_active_file(self, path: Path) -> None:
         filename = path.name if str(path) else ""
@@ -3088,12 +3160,13 @@ def _interpolate_color(start: QColor, end: QColor, fraction: float) -> QColor:
     )
 
 
-def _path_row(field: QLineEdit, button: QPushButton) -> QWidget:
+def _path_row(field: QLineEdit, *buttons: QPushButton) -> QWidget:
     widget = QWidget()
     layout = QHBoxLayout(widget)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.addWidget(field)
-    layout.addWidget(button)
+    for button in buttons:
+        layout.addWidget(button)
     return widget
 
 

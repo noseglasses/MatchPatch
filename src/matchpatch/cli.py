@@ -7,6 +7,7 @@ import platform
 import sys
 
 from matchpatch import __version__
+from matchpatch.config import export_default_config
 from matchpatch.devices import list_device_profiles
 
 
@@ -44,9 +45,17 @@ def main() -> None:
         action="store_true",
         help="List supported audio processor profiles",
     )
+    parser.add_argument(
+        "--export-default-config",
+        metavar="PATH",
+        help="Write a TOML configuration file populated with MatchPatch defaults",
+    )
     args = parser.parse_args()
 
-    if args.environment:
+    if args.export_default_config:
+        path = export_default_config(args.export_default_config)
+        print(f"Wrote default config: {path}")
+    elif args.environment:
         print_environment()
     elif args.devices:
         print_devices()

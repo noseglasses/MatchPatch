@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenuBar,
     QMessageBox,
-    QPushButton,
     QSizePolicy,
     QSplitter,
     QStyle,
@@ -227,13 +226,14 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert toolbar.widgetForAction(window.advanced_action) is window.advanced_button
     assert toolbar.widgetForAction(window.normalization_action) is window.start_cancel_stack
     assert toolbar.iconSize() == main_window.QSize(18, 18)
+    assert toolbar.contentsMargins().isNull()
     assert window.start_cancel_stack.currentWidget() is window.start_button
     assert window.start_button.text() == ""
     assert window.advanced_button.text() == ""
     assert not window.start_button.icon().isNull()
     assert not window.advanced_button.icon().isNull()
     assert window.start_button.iconSize() == toolbar.iconSize()
-    assert window.advanced_button.iconSize() == main_window.QSize(40, 40)
+    assert window.advanced_button.iconSize() == toolbar.iconSize()
     assert isinstance(window.start_button, main_window.QToolButton)
     assert isinstance(window.cancel_button, main_window.QToolButton)
     assert isinstance(window.advanced_button, main_window.QToolButton)
@@ -246,12 +246,20 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.cancel_button.width() == window.cancel_button.height()
     assert window.advanced_button.width() == window.advanced_button.height()
     assert window.start_button.size() == window.cancel_button.size()
-    assert window.advanced_button.size() == main_window.QSize(46, 46)
+    assert window.advanced_button.size() == window.start_button.size()
     assert window.start_cancel_stack.size() == window.start_button.size()
-    for action in (window.help_action, window.about_action):
+    assert toolbar.minimumHeight() == window.advanced_button.height() + 4
+    assert toolbar.maximumHeight() == window.advanced_button.height() + 4
+    for action in (
+        window.open_action,
+        window.save_action,
+        window.save_as_action,
+        window.help_action,
+        window.about_action,
+    ):
         button = toolbar.widgetForAction(action)
         assert button is not None
-        assert button.width() == button.height()
+        assert button.size() == window.start_button.size()
     assert window.open_action.isEnabled()
     assert not window.save_action.isEnabled()
     assert not window.save_as_action.isEnabled()
@@ -883,6 +891,27 @@ measured_snapshots = 6
     assert window.device_panels["helix"].snapshot_wait.text() == "0.2"
     assert window.device_panels["helix"].measurement_wait.text() == "0.1"
     assert window.device_panels["helix"].audio_group.isEnabled()
+
+    window.close()
+
+
+def test_main_window_exports_default_config(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    path = tmp_path / "defaults.toml"
+    messages = []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(path), ""),
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args))
+
+    window.config_export_button.click()
+
+    assert window.config_path.text() == str(path)
+    assert "[normalize]" in path.read_text(encoding="utf-8")
+    assert "backend = \"hardware\"" in path.read_text(encoding="utf-8")
+    assert messages
 
     window.close()
 
@@ -1761,6 +1790,73 @@ def test_save_as_uses_file_selection_dialog(monkeypatch, app) -> None:
     window.close()
 
 
+def test_single_preset_save_as_preserves_target_preset_id(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hlx"
+    output_path = tmp_path / "output.hlx"
+    csv_path = tmp_path / "lufs_analysis.csv"
+    input_path.touch()
+    csv_path.touch()
+    exports = []
+
+    class Handler:
+        @staticmethod
+        def validate_input(path):
+            return None
+
+        @staticmethod
+        def validate_output(selected_input_path, selected_output_path):
+            assert selected_input_path == input_path
+            assert selected_output_path == output_path
+
+        @staticmethod
+        def list_assignments(path):
+            return [
+                SimpleNamespace(
+                    device_patch="01A",
+                    name="Saved",
+                    snapshot_names=("Clean", "Solo"),
+                )
+            ]
+
+        @staticmethod
+        def metadata(path):
+            return {"file_type": "hlx"}
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+
+    def export_adjusted_file(*args, **kwargs):
+        exports.append((args, kwargs))
+        output_path.touch()
+
+    monkeypatch.setattr(main_window, "export_adjusted_file", export_adjusted_file)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+
+    window.input_path.setText(str(input_path))
+    window.load_assignments()
+    window.preset_table.item(0, 1).setText("12a")
+    window._set_adjustment_value(window.preset_table.item(0, 4), "+1.0", 1.0)
+    window._mark_preset_table_modified()
+    window.completed_request = _request(input_path=input_path)
+    window.completed_result = NormalizationResult(None, tmp_path, csv_path)
+
+    assert window._save_to_path(output_path)
+
+    assert len(exports) == 1
+    assert window.input_path.text() == str(output_path)
+    assert window.preset_table.item(0, 1).text() == "12A"
+    assert window.preset_table.item(0, 2).text() == "Saved"
+    assert window.preset_table.item(0, 4).text() == "0"
+    assert not window._preset_table_has_unsaved_changes()
+
+    window.close()
+
+
 def test_output_save_picker_uses_save_button(monkeypatch, app) -> None:
     window = MainWindow()
     window.input_path.setText("/tmp/input.hls")
@@ -2004,28 +2100,46 @@ def test_worker_import_confirmation_blocks_until_answered(app) -> None:
     assert answers == [True]
 
 
-def test_hardware_normalization_skips_backend_check(monkeypatch, app) -> None:
+def test_first_hardware_normalization_checks_backend_once(monkeypatch, app) -> None:
     window = MainWindow()
     request = _request(backend="hardware")
+    checks = []
+    monkeypatch.setattr(window, "_backend_check_enabled", lambda: True)
     monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
     monkeypatch.setattr(main_window, "apply_config", lambda args: args)
     monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
     monkeypatch.setattr(
         gui_worker,
         "check_windows_hardware",
-        lambda request: (_ for _ in ()).throw(AssertionError("unexpected hardware check")),
+        lambda checked_request: checks.append(checked_request),
     )
     monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
 
     window.start_normalization()
 
+    for _ in range(100):
+        app.processEvents()
+        if window.worker is not None and window.hardware_check_worker is None:
+            break
+        time.sleep(0.01)
+
+    assert len(checks) == 1
+    assert checks[0].backend == "hardware"
+    assert checks[0].defer_export
+    assert window.worker is not None
+    assert window.hardware_check_overlay.isHidden()
+    window.worker_finished()
+
+    window.start_normalization()
+
+    assert len(checks) == 1
     assert window.worker is not None
     assert window.hardware_check_overlay.isHidden()
     window.worker_finished()
     window.close()
 
 
-def test_startup_backend_check_reports_unavailable_hardware(monkeypatch, app) -> None:
+def test_unavailable_backend_blocks_first_normalization(monkeypatch, app) -> None:
     window = MainWindow()
     request = _request(backend="hardware")
     popups = []
@@ -2041,8 +2155,13 @@ def test_startup_backend_check_reports_unavailable_hardware(monkeypatch, app) ->
         or (_ for _ in ()).throw(RuntimeError("no audio device")),
     )
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
+    monkeypatch.setattr(
+        main_window.NormalizationWorker,
+        "start",
+        lambda self: (_ for _ in ()).throw(AssertionError("unexpected normalization")),
+    )
 
-    window._check_backend_on_startup()
+    window.start_normalization()
 
     for _ in range(100):
         app.processEvents()
@@ -2063,7 +2182,7 @@ def test_startup_backend_check_reports_unavailable_hardware(monkeypatch, app) ->
     window.close()
 
 
-def test_switching_to_hardware_checks_backend(monkeypatch, app) -> None:
+def test_switching_backend_only_rechecks_on_next_normalization(monkeypatch, app) -> None:
     window = MainWindow()
     request = _request(backend="hardware")
     checks = []
@@ -2076,22 +2195,48 @@ def test_switching_to_hardware_checks_backend(monkeypatch, app) -> None:
         "check_windows_hardware",
         lambda checked_request: checks.append(checked_request),
     )
+    monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
 
     window.backend.setCurrentText("loopback")
     window.backend.setCurrentText("hardware")
 
+    for _ in range(10):
+        app.processEvents()
+        time.sleep(0.01)
+
+    assert checks == []
+    assert window.worker is None
+    assert window.hardware_check_worker is None
+
+    window.start_normalization()
+
     for _ in range(100):
         app.processEvents()
-        if checks and window.hardware_check_worker is None:
+        if window.worker is not None and window.hardware_check_worker is None:
             break
         time.sleep(0.01)
 
     assert len(checks) == 1
     assert checks[0].backend == "hardware"
     assert checks[0].defer_export
-    assert window.worker is None
+    assert window.worker is not None
     assert window.hardware_check_worker is None
     assert window.hardware_check_overlay.isHidden()
+    window.worker_finished()
+
+    window.backend.setCurrentText("loopback")
+    window.backend.setCurrentText("hardware")
+    window.start_normalization()
+
+    for _ in range(100):
+        app.processEvents()
+        if len(checks) == 2 and window.worker is not None and window.hardware_check_worker is None:
+            break
+        time.sleep(0.01)
+
+    assert len(checks) == 2
+    assert window.worker is not None
+    window.worker_finished()
 
     window.close()
 

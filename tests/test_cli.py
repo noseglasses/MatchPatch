@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tomllib
 
 from matchpatch import cli
 
@@ -34,6 +35,17 @@ def test_environment_command_prints_runtime(monkeypatch, capsys) -> None:
     assert "MatchPatch " in output
     assert "Platform:" in output
     assert "Python  :" in output
+
+
+def test_export_default_config_command_writes_toml(tmp_path, monkeypatch, capsys) -> None:
+    path = tmp_path / "defaults.toml"
+    monkeypatch.setattr(sys, "argv", ["matchpatch", "--export-default-config", str(path)])
+
+    cli.main()
+
+    output = capsys.readouterr().out
+    assert "Wrote default config:" in output
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["normalize"]["backend"] == "hardware"
 
 
 def test_no_command_prints_help(monkeypatch, capsys) -> None:
