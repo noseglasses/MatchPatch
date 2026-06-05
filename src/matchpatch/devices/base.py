@@ -151,6 +151,10 @@ class DeviceProfile(ABC):
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
         """Create the device-specific patch-file adapter."""
 
+    def format_patch_id(self, preset_id: int) -> str:
+        """Format a numeric preset ID for device-facing status text."""
+        return str(preset_id)
+
     @abstractmethod
     def default_audio_routing(self) -> AudioRouting:
         """Return the processor's USB measurement channel defaults."""

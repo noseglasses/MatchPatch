@@ -23,6 +23,7 @@ def test_helix_profile_defines_processor_boundaries() -> None:
     assert profile.max_snapshot_count == 8
     assert handler.parse_patch_set("01A,02B") == [1, 6]
     assert handler.format_patch_id(6) == "02B"
+    assert profile.format_patch_id(7) == "02C"
 
 
 def test_helix_profile_rejects_more_than_eight_snapshots() -> None:

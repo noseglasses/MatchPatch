@@ -141,3 +141,8 @@ def record_processed_audio(
     aligned_start = pre_roll_frames + latency_frames
     aligned_end = aligned_start + reference.shape[0]
     return recorded[aligned_start:aligned_end]
+
+
+def play_audio(audio: np.ndarray, sample_rate: int) -> None:
+    """Play audio through the system default output device."""
+    sd.play(np.asarray(audio), samplerate=sample_rate, blocking=True)

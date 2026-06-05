@@ -6,7 +6,11 @@ import threading
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from matchpatch.normalize import check_windows_hardware, run_windows_analysis
+from matchpatch.normalize import (
+    check_windows_hardware,
+    run_windows_analysis,
+    run_windows_optimization,
+)
 from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_presets
 
 
@@ -80,3 +84,52 @@ class NormalizationWorker(QThread):
         self.import_requested.emit(request)
         self._confirmation.wait()
         return self._confirmation_answer and not self._cancelled
+
+
+class MeasurementOptimizationWorker(QThread):
+    progress = Signal(object)
+    completed = Signal(str)
+    cancelled = Signal()
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        request: NormalizationRequest,
+        preset_id: int,
+        stability_runs: int,
+        termination_tolerance: float,
+        stability_tolerance: float,
+        pinned_parameters: tuple[str, ...] = (),
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.request = request
+        self.preset_id = preset_id
+        self.stability_runs = stability_runs
+        self.termination_tolerance = termination_tolerance
+        self.stability_tolerance = stability_tolerance
+        self.pinned_parameters = pinned_parameters
+        self._cancelled = False
+
+    def run(self) -> None:
+        try:
+            result = run_windows_optimization(
+                self.request,
+                self.preset_id,
+                stability_runs=self.stability_runs,
+                termination_tolerance=self.termination_tolerance,
+                stability_tolerance=self.stability_tolerance,
+                pinned_parameters=self.pinned_parameters,
+                on_progress=self.progress.emit,
+                cancel_requested=lambda: self._cancelled,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if self._cancelled:
+                self.cancelled.emit()
+            else:
+                self.failed.emit(str(exc))
+        else:
+            self.completed.emit(result)
+
+    def cancel(self) -> None:
+        self._cancelled = True

@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import threading
 import time
+import tomllib
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -18,6 +20,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QGroupBox,
     QHeaderView,
     QLabel,
     QLineEdit,
@@ -35,6 +38,7 @@ from matchpatch.gui import main_window
 from matchpatch.gui import worker as gui_worker
 from matchpatch.gui.main_window import MainWindow
 from matchpatch.gui.worker import NormalizationWorker
+from matchpatch.measurement_optimizer import OptimizationProgress, StabilityStatistics
 from matchpatch.normalize import DEFAULT_REFERENCE_DI, DEFAULT_WINDOWS_PYTHON
 from matchpatch.progress import ProgressEvent
 from matchpatch.workflow import ImportRequest, NormalizationRequest, NormalizationResult
@@ -57,6 +61,15 @@ def _request(**kwargs) -> NormalizationRequest:
     )
     values.update(kwargs)
     return NormalizationRequest(**values)
+
+
+def _write_silent_wav(path: Path, *, seconds: float, sample_rate: int = 48_000) -> None:
+    frames = round(seconds * sample_rate)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(b"\0\0" * frames * 2)
 
 
 def _mock_single_hlx_handler(
@@ -136,18 +149,61 @@ class _FakeSaveChangesMessageBox:
         return self._clicked_button
 
 
+def test_save_as_icon_uses_standard_save_disk_with_drawn_overlay(app) -> None:
+    image = main_window._save_as_icon().pixmap(56, 56).toImage()
+    save_image = (
+        QApplication.style()
+        .standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        .pixmap(56, 56)
+        .toImage()
+    )
+    sampled_colors = {
+        image.pixelColor(x, y).name()
+        for x in range(image.width())
+        for y in range(image.height())
+        if image.pixelColor(x, y).alpha() > 0
+    }
+
+    for x in range(24):
+        for y in range(24):
+            assert image.pixelColor(x, y) == save_image.pixelColor(x, y)
+    assert "#fbbf24" in sampled_colors
+
+
+def test_save_measurement_icon_draws_disk_and_chart_overlay(app) -> None:
+    image = main_window._save_measurement_icon().pixmap(56, 56).toImage()
+    save_image = (
+        QApplication.style()
+        .standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        .pixmap(56, 56)
+        .toImage()
+    )
+    sampled_colors = {
+        image.pixelColor(x, y).name()
+        for x in range(image.width())
+        for y in range(image.height())
+        if image.pixelColor(x, y).alpha() > 0
+    }
+
+    for x in range(24):
+        for y in range(24):
+            assert image.pixelColor(x, y) == save_image.pixelColor(x, y)
+    assert {"#38bdf8", "#22c55e", "#f59e0b"}.issubset(sampled_colors)
+
+
 def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     window = MainWindow()
 
     assert window.device.currentData() == "helix"
     assert window.backend.currentText() == "hardware"
     assert isinstance(window.advanced, QWidget)
-    assert not isinstance(window.advanced, main_window.QGroupBox)
+    assert not isinstance(window.advanced, QGroupBox)
     assert window.advanced.isHidden()
     assert not window.advanced_button.isChecked()
-    assert [window.advanced_tabs.tabText(index) for index in range(6)] == [
+    assert [window.advanced_tabs.tabText(index) for index in range(7)] == [
         "Device",
         "Files",
+        "Measurement",
         "LUFS",
         "Misc",
         "Meta Data",
@@ -163,17 +219,49 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.custom_adjustments_path)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.reference_di)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.keep_temp)
-    assert window.advanced_tabs.widget(2).isAncestorOf(window.snapshot_count_input)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.measurement_parameter_preset)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.apply_measurement_parameters_button)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.pre_roll)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.post_roll)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.round_trip_latency)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.preset_wait)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.snapshot_wait)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.measurement_wait)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.measurement_time_estimate)
+    assert window.advanced_tabs.widget(2).isAncestorOf(window.determine_parameters_button)
+    measurement_labels = {
+        label.text() for label in window.advanced_tabs.widget(2).findChildren(QLabel)
+    }
+    assert "Termination tolerance" not in measurement_labels
+    assert "Stability tolerance" not in measurement_labels
+    assert "Stability runs" not in measurement_labels
+    assert not window.advanced_tabs.widget(2).isAncestorOf(window.snapshot_count_input)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.target_lufs)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.solo_gain_bump_db)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.solo_regex)
     assert window.advanced_tabs.widget(3).isAncestorOf(window.target_lufs)
     assert window.advanced_tabs.widget(3).isAncestorOf(window.solo_gain_bump_db)
     assert window.advanced_tabs.widget(3).isAncestorOf(window.solo_regex)
-    assert not isinstance(window.presets, main_window.QGroupBox)
+    assert window.advanced_tabs.widget(4).isAncestorOf(window.snapshot_count_input)
+    assert not isinstance(window.presets, QGroupBox)
+    assert window.measurement_parameter_preset.currentText() == "Default"
+    assert window.pre_roll.text() == "0.3"
+    assert window.post_roll.text() == "0.5"
+    assert window.snapshot_wait.text() == "1.0"
+    assert window.measurement_wait.text() == "0.6"
+    assert window.preset_wait.text() == "1.3"
+    assert window.round_trip_latency.text() == "0.001"
+    expected_seconds = 1.0 + 0.6 + 0.3 + 0.5 + 0.001 + 1.3 / 4
+    expected_seconds += main_window._reference_audio_seconds(DEFAULT_REFERENCE_DI)
+    assert window.measurement_time_estimate.text() == (
+        "Estimated measurement time per snapshot: "
+        f"{main_window._format_short_seconds(expected_seconds)} (1 preset, 4 snapshots)"
+    )
     assert window.presets.layout().contentsMargins().isNull()
+    assert window.scroll_area.frameShape() == main_window.QFrame.Shape.NoFrame
     assert not window.presets.isHidden()
     assert not window.preset_empty_state.isHidden()
+    assert "border: none" in window.preset_empty_state.styleSheet()
     assert window.preset_header.isHidden()
     assert window.preset_table.isHidden()
     assert not window.preset_empty_logo.pixmap().isNull()
@@ -201,10 +289,14 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
         "Open",
         "Save",
         "Save As",
+        "Save Measurement File",
         "Help",
         "About",
     ]
     assert toolbar.actions().index(window.normalization_separator_action) == (
+        toolbar.actions().index(window.save_measurement_action) + 1
+    )
+    assert toolbar.actions().index(window.save_measurement_action) == (
         toolbar.actions().index(window.save_as_action) + 1
     )
     assert toolbar.actions().index(window.normalization_action) == (
@@ -217,12 +309,23 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
         toolbar.actions().index(window.help_spacer_action) + 1
     )
     assert toolbar.actions().index(window.advanced_action) == (
+        toolbar.actions().index(window.play_recorded_output_action) + 1
+    )
+    assert toolbar.actions().index(window.record_output_action) == (
         toolbar.actions().index(window.device_action) + 1
+    )
+    assert toolbar.actions().index(window.play_recorded_output_action) == (
+        toolbar.actions().index(window.record_output_action) + 1
     )
     help_spacer = toolbar.widgetForAction(window.help_spacer_action)
     assert help_spacer is not None
     assert help_spacer.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
     assert toolbar.widgetForAction(window.device_action) is window.device
+    assert toolbar.widgetForAction(window.record_output_action) is window.record_output_button
+    assert (
+        toolbar.widgetForAction(window.play_recorded_output_action)
+        is window.play_recorded_output_button
+    )
     assert toolbar.widgetForAction(window.advanced_action) is window.advanced_button
     assert toolbar.widgetForAction(window.normalization_action) is window.start_cancel_stack
     assert toolbar.iconSize() == main_window.QSize(18, 18)
@@ -230,22 +333,38 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.start_cancel_stack.currentWidget() is window.start_button
     assert window.start_button.text() == ""
     assert window.advanced_button.text() == ""
+    assert window.record_output_button.text() == ""
+    assert window.play_recorded_output_button.text() == ""
     assert not window.start_button.icon().isNull()
+    assert not window.record_output_button.icon().isNull()
+    assert not window.play_recorded_output_button.icon().isNull()
     assert not window.advanced_button.icon().isNull()
     assert window.start_button.iconSize() == toolbar.iconSize()
+    assert window.record_output_button.iconSize() == toolbar.iconSize()
+    assert window.play_recorded_output_button.iconSize() == toolbar.iconSize()
     assert window.advanced_button.iconSize() == toolbar.iconSize()
     assert isinstance(window.start_button, main_window.QToolButton)
     assert isinstance(window.cancel_button, main_window.QToolButton)
+    assert isinstance(window.record_output_button, main_window.QToolButton)
+    assert isinstance(window.play_recorded_output_button, main_window.QToolButton)
     assert isinstance(window.advanced_button, main_window.QToolButton)
     assert window.start_button.autoRaise()
     assert window.cancel_button.autoRaise()
+    assert window.record_output_button.autoRaise()
+    assert window.play_recorded_output_button.autoRaise()
     assert window.advanced_button.autoRaise()
     assert window.start_button.toolTip().startswith("Start")
+    assert window.record_output_button.toolTip().startswith("Record")
+    assert window.play_recorded_output_button.toolTip().startswith("Play")
     assert window.advanced_button.toolTip().startswith("Show")
     assert window.start_button.width() == window.start_button.height()
     assert window.cancel_button.width() == window.cancel_button.height()
+    assert window.record_output_button.width() == window.record_output_button.height()
+    assert window.play_recorded_output_button.width() == window.play_recorded_output_button.height()
     assert window.advanced_button.width() == window.advanced_button.height()
     assert window.start_button.size() == window.cancel_button.size()
+    assert window.record_output_button.size() == window.start_button.size()
+    assert window.play_recorded_output_button.size() == window.start_button.size()
     assert window.advanced_button.size() == window.start_button.size()
     assert window.start_cancel_stack.size() == window.start_button.size()
     assert toolbar.minimumHeight() == window.advanced_button.height() + 4
@@ -254,6 +373,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
         window.open_action,
         window.save_action,
         window.save_as_action,
+        window.save_measurement_action,
         window.help_action,
         window.about_action,
     ):
@@ -263,7 +383,11 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.open_action.isEnabled()
     assert not window.save_action.isEnabled()
     assert not window.save_as_action.isEnabled()
+    assert not window.save_measurement_action.isEnabled()
     assert not window.start_button.isEnabled()
+    assert not window.record_output_button.isEnabled()
+    assert not window.record_output_button.isChecked()
+    assert not window.play_recorded_output_button.isChecked()
     assert window.log_level.currentText() == "Info"
     assert window.metadata_text.toPlainText() == "{}"
     assert window.device_stack.count() == 1
@@ -292,6 +416,9 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.save_csv_button.isEnabled()
     assert window.load_csv_button.text() == ""
     assert window.save_csv_button.text() == ""
+    assert not window.save_as_action.icon().isNull()
+    assert not window.save_csv_button.icon().isNull()
+    assert window.save_csv_button.icon().cacheKey() == window.save_as_action.icon().cacheKey()
     assert window.select_diff_button.text() == "Select changed"
     assert not window.select_diff_button.icon().isNull()
     assert window.select_diff_button.isHidden()
@@ -388,9 +515,7 @@ def test_window_shrinks_when_advanced_side_pane_is_hidden(app) -> None:
     window.close()
 
 
-def test_maximized_window_does_not_resize_when_advanced_side_pane_toggles(
-    monkeypatch, app
-) -> None:
+def test_maximized_window_does_not_resize_when_advanced_side_pane_toggles(monkeypatch, app) -> None:
     window = MainWindow()
     window.show()
     app.processEvents()
@@ -456,9 +581,7 @@ def test_advanced_and_preset_panes_follow_their_content_height(app) -> None:
     window.close()
 
 
-def test_single_preset_load_displays_presets_panel_with_instruction_label(
-    monkeypatch, app
-) -> None:
+def test_single_preset_load_displays_presets_panel_with_instruction_label(monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="Lead", snapshot_names=("Clean", "Solo"))
     window.show()
@@ -589,12 +712,13 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
     assert not window.preset_table.isHidden()
     assert not window.advanced.isHidden()
     assert not window.preset_advanced_splitter.isHidden()
-    assert window.preset_advanced_splitter.height() > window.preset_advanced_splitter.sizeHint().height()
+    assert (
+        window.preset_advanced_splitter.height()
+        > window.preset_advanced_splitter.sizeHint().height()
+    )
     assert window.presets.height() == window.preset_advanced_splitter.height()
     assert window.advanced.height() == window.preset_advanced_splitter.height()
-    layout_bottom = (
-        window.content.height() - window.content.layout().contentsMargins().bottom()
-    )
+    layout_bottom = window.content.height() - window.content.layout().contentsMargins().bottom()
     assert window.preset_advanced_splitter.geometry().bottom() >= layout_bottom - 1
     assert window.preset_advanced_splitter.handle(1) is not None
     preset_width, advanced_width = window.preset_advanced_splitter.sizes()
@@ -820,6 +944,69 @@ def test_preset_progress_shows_most_recently_measured_preset_and_snapshot_names(
     window.close()
 
 
+def test_preset_progress_format_shows_duration_and_eta(app) -> None:
+    window = MainWindow()
+    window._measurement_progress_estimate = main_window._MeasurementProgressEstimate.from_request(
+        _request(
+            preset_wait=0.5,
+            snapshot_wait=0.2,
+            measurement_wait=0.4,
+            pre_roll=0.2,
+            post_roll=0.3,
+            round_trip_latency=0.1,
+            reference_di=Path("missing-reference.wav"),
+        )
+    )
+
+    window.update_progress(
+        ProgressEvent(
+            "preset_started",
+            preset_index=1,
+            preset_total=2,
+            snapshot_total=2,
+        )
+    )
+
+    assert window.preset_progress.format() == "%p% | total 6 s | ETA 6 s"
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_started",
+            preset_index=1,
+            preset_total=2,
+            snapshot=1,
+            snapshot_total=2,
+        )
+    )
+
+    assert window.preset_progress.format() == "%p% | total 6 s | ETA 6 s"
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            preset_index=1,
+            preset_total=2,
+            snapshot=1,
+            snapshot_total=2,
+        )
+    )
+
+    assert window.preset_progress.format() == "%p% | total 6 s | ETA 5 s"
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_started",
+            preset_index=2,
+            preset_total=2,
+            snapshot=2,
+            snapshot_total=2,
+        )
+    )
+
+    assert window.preset_progress.format() == "%p% | total 6 s | ETA 2 s"
+    window.update_progress(ProgressEvent("measurement_completed"))
+    assert window.preset_progress.format() == "%p%"
+
+    window.close()
+
+
 def test_progress_shows_measured_loudness_relative_to_target(app) -> None:
     window = MainWindow()
     window.target_lufs.setText("-18.0")
@@ -874,6 +1061,9 @@ target_lufs = -18.0
 [devices.helix.audio]
 device = "Configured Audio"
 
+[measurement]
+stability_tolerance_percent = 0.25
+
 [policy]
 measured_snapshots = 6
 """,
@@ -888,30 +1078,168 @@ measured_snapshots = 6
     assert window.snapshot_count_input.value() == 6
     assert window.preset_table.columnCount() == 15
     assert window.device_panels["helix"].audio_device.text() == "Configured Audio"
-    assert window.device_panels["helix"].snapshot_wait.text() == "0.2"
-    assert window.device_panels["helix"].measurement_wait.text() == "0.1"
+    assert window.pre_roll.text() == "0.3"
+    assert window.post_roll.text() == "0.5"
+    assert window.round_trip_latency.text() == "0.001"
+    assert window.preset_wait.text() == "1.3"
+    assert window.snapshot_wait.text() == "1.0"
+    assert window.measurement_wait.text() == "0.6"
+    assert window._optimization_stability_tolerance == 0.25
+    assert window.device_panels["helix"].preset_wait.text() == "1.3"
+    assert window.device_panels["helix"].snapshot_wait.text() == "1.0"
+    assert window.device_panels["helix"].measurement_wait.text() == "0.6"
+    argv = window._build_argv()
+    assert "None" not in argv
+    assert argv[argv.index("--preset-wait") + 1] == "1.3"
     assert window.device_panels["helix"].audio_group.isEnabled()
 
     window.close()
 
 
-def test_main_window_exports_default_config(tmp_path, monkeypatch, app) -> None:
+def test_main_window_applies_measurement_parameter_presets(monkeypatch, app) -> None:
     window = MainWindow()
-    path = tmp_path / "defaults.toml"
-    messages = []
-    monkeypatch.setattr(
-        QFileDialog,
-        "getSaveFileName",
-        lambda *args, **kwargs: (str(path), ""),
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    window.pre_roll.setText("9")
+    window.post_roll.setText("9")
+    window.snapshot_wait.setText("9")
+    window.measurement_wait.setText("9")
+    window.preset_wait.setText("9")
+    window.round_trip_latency.setText("9")
+
+    window.measurement_parameter_preset.setCurrentText("Fast")
+    window.apply_measurement_parameters_button.click()
+
+    assert warnings
+    assert warnings[0][1] == "Fast measurement parameters"
+    assert "reverb and delay" in warnings[0][2].lower()
+    assert window.pre_roll.text() == "0.01"
+    assert window.post_roll.text() == "0.06"
+    assert window.snapshot_wait.text() == "0.01"
+    assert window.measurement_wait.text() == "0.47"
+    assert window.preset_wait.text() == "0.21"
+    assert window.round_trip_latency.text() == "0.001"
+    assert window.device_panels["helix"].preset_wait.text() == "0.21"
+    assert window.device_panels["helix"].snapshot_wait.text() == "0.01"
+    assert window.device_panels["helix"].measurement_wait.text() == "0.47"
+
+    window.measurement_parameter_preset.setCurrentText("Default")
+    window.apply_measurement_parameters_button.click()
+
+    assert window.pre_roll.text() == "0.3"
+    assert window.post_roll.text() == "0.5"
+    assert window.snapshot_wait.text() == "1.0"
+    assert window.measurement_wait.text() == "0.6"
+    assert window.preset_wait.text() == "1.3"
+    assert window.round_trip_latency.text() == "0.001"
+
+    window.close()
+
+
+def test_measurement_time_estimate_updates_with_timing_and_loaded_counts(
+    tmp_path,
+    app,
+) -> None:
+    window = MainWindow()
+    reference_di = tmp_path / "reference.wav"
+    _write_silent_wav(reference_di, seconds=5.0)
+
+    window.reference_di.setText(str(reference_di))
+    window.preset_wait.setText("5")
+
+    assert window.measurement_time_estimate.text() == (
+        "Estimated measurement time per snapshot: 8.65 s (1 preset, 4 snapshots)"
     )
+    assert window.preset_measurement_time_estimate.text() == (
+        "Estimated total measurement time for selected presets: 34.6 s (1 preset, 4 snapshots)"
+    )
+
+    window.preset_table.insertRow(0)
+    window.preset_table.insertRow(1)
+    for row in range(2):
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked)
+        window.preset_table.setItem(row, 0, selected)
+    window.snapshot_count_input.setValue(2)
+
+    assert window.measurement_time_estimate.text() == (
+        "Estimated measurement time per snapshot: 9.90 s (2 presets, 2 snapshots)"
+    )
+    assert window.preset_measurement_time_estimate.text() == (
+        "Estimated total measurement time for selected presets: 39.6 s (2 presets, 2 snapshots)"
+    )
+
+    window.preset_table.item(1, 0).setCheckState(Qt.CheckState.Unchecked)
+
+    assert window.preset_measurement_time_estimate.text() == (
+        "Estimated total measurement time for selected presets: 19.8 s (1 preset, 2 snapshots)"
+    )
+
+    shorter_reference_di = tmp_path / "shorter.wav"
+    _write_silent_wav(shorter_reference_di, seconds=1.0)
+    window.reference_di.setText(str(shorter_reference_di))
+
+    assert window.measurement_time_estimate.text() == (
+        "Estimated measurement time per snapshot: 5.90 s (2 presets, 2 snapshots)"
+    )
+    assert window.preset_measurement_time_estimate.text() == (
+        "Estimated total measurement time for selected presets: 11.8 s (1 preset, 2 snapshots)"
+    )
+
+    window.measurement_wait.setText("bad")
+
+    assert window.measurement_time_estimate.text() == (
+        "Estimated measurement time per snapshot: invalid timing value"
+    )
+    assert window.preset_measurement_time_estimate.text() == (
+        "Estimated total measurement time for selected presets: invalid timing value"
+    )
+
+    window.close()
+
+
+def test_main_window_exports_current_config_by_default(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    path = tmp_path / "current.toml"
+    messages = []
+    window.backend.setCurrentText("loopback")
+    window.reference_di.setText("modified.wav")
+    window.target_lufs.setText("-18.5")
+    window.pre_roll.setText("0.7")
+    window.preset_wait.setText("1.2")
+    window.device_panels["helix"].audio_device.setText("Modified Helix")
+    monkeypatch.setattr(window, "_choose_config_export_path", lambda: (str(path), False))
     monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args))
 
     window.config_export_button.click()
 
     assert window.config_path.text() == str(path)
-    assert "[normalize]" in path.read_text(encoding="utf-8")
-    assert "backend = \"hardware\"" in path.read_text(encoding="utf-8")
-    assert messages
+    saved = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert saved["normalize"]["backend"] == "loopback"
+    assert saved["normalize"]["reference_di"] == "modified.wav"
+    assert saved["normalize"]["target_lufs"] == -18.5
+    assert saved["analysis"]["pre_roll_seconds"] == 0.7
+    assert saved["devices"]["helix"]["steering"]["preset_wait_seconds"] == 1.2
+    assert saved["devices"]["helix"]["audio"]["device"] == "Modified Helix"
+    assert "Saved current configuration" in messages[0][2]
+
+    window.close()
+
+
+def test_main_window_exports_default_config_when_requested(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    path = tmp_path / "defaults.toml"
+    messages = []
+    window.backend.setCurrentText("loopback")
+    monkeypatch.setattr(window, "_choose_config_export_path", lambda: (str(path), True))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args))
+
+    window.config_export_button.click()
+
+    saved = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert saved["normalize"]["backend"] == "hardware"
+    assert "Saved default configuriation" in messages[0][2]
 
     window.close()
 
@@ -1005,13 +1333,12 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(monkeypa
     window._set_snapshot_names(0, ("Clean", "Solo"))
 
     assert not window.manual_adjustments.isChecked()
-    assert window.manual_adjustments.text() == "Edit content"
+    assert window.manual_adjustments.text() == "Edit manually"
     assert window.preset_table.editTriggers() == window.preset_table.EditTrigger.NoEditTriggers
-    preset_table_note_row = window.presets.layout().itemAt(3).layout()
+    assert window.presets.layout().indexOf(window.preset_measurement_time_estimate) == 3
+    preset_table_note_row = window.presets.layout().itemAt(4).layout()
     assert preset_table_note_row is not None
-    assert preset_table_note_row.indexOf(
-        window.manual_adjustments
-    ) < preset_table_note_row.indexOf(
+    assert preset_table_note_row.indexOf(window.manual_adjustments) < preset_table_note_row.indexOf(
         window.preset_csv_controls
     )
 
@@ -1404,8 +1731,11 @@ def test_gain_log_updates_preset_correction_columns(monkeypatch, app) -> None:
     window.close()
 
 
-def test_single_preset_gain_log_updates_table_when_apply_log_uses_wrapped_slot(app) -> None:
+def test_single_preset_gain_log_updates_table_when_apply_log_uses_wrapped_slot(
+    monkeypatch, app
+) -> None:
     window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
     window.input_path.setText("/tmp/example.hlx")
     window.preset_table.setRowCount(1)
     selected = QTableWidgetItem()
@@ -1422,6 +1752,50 @@ def test_single_preset_gain_log_updates_table_when_apply_log_uses_wrapped_slot(a
     assert window.preset_table.item(0, 3).text() == "Clean"
     assert window.preset_table.item(0, 4).text() == "+2.5"
     assert window._table_adjustments().gain_deltas["12A"][0] == 2.5
+
+    window.close()
+
+
+def test_selected_preset_adjustments_are_pending_until_measured(monkeypatch, app) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    window.preset_table.insertRow(0)
+    window.preset_table.insertRow(1)
+    for row, preset_id in enumerate(("02B", "02C")):
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked if row == 0 else Qt.CheckState.Unchecked)
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+
+    for row in range(window.preset_table.rowCount()):
+        window._clear_preset_adjustments(row)
+        window._mark_selected_preset_adjustments_pending(row)
+
+    assert [window.preset_table.item(0, column).text() for column in (4, 6, 8, 10)] == [
+        "?",
+        "?",
+        "?",
+        "?",
+    ]
+    assert [window.preset_table.item(1, column).text() for column in (4, 6, 8, 10)] == [
+        "0",
+        "0",
+        "0",
+        "0",
+    ]
+
+    window.update_progress(
+        ProgressEvent("log", message="[GAIN] 02B Clean | 0.0 dB -> 1.5 dB (Delta: +1.5 dB)")
+    )
+
+    assert window.preset_table.item(0, 4).text() == "+1.5"
+    assert [window.preset_table.item(0, column).text() for column in (6, 8, 10)] == [
+        "?",
+        "?",
+        "?",
+    ]
 
     window.close()
 
@@ -1499,9 +1873,7 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
     window.close()
 
 
-def test_closing_main_window_can_cancel_discarding_manual_table_changes(
-    monkeypatch, app
-) -> None:
+def test_closing_main_window_can_cancel_discarding_manual_table_changes(monkeypatch, app) -> None:
     window = MainWindow()
     window.preset_table.insertRow(0)
     window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
@@ -1790,6 +2162,191 @@ def test_save_as_uses_file_selection_dialog(monkeypatch, app) -> None:
     window.close()
 
 
+def test_save_measurement_dialog_uses_loaded_suffix_and_save_label(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hlx"
+    output_path = tmp_path / "measurement.hlx"
+    dialogs = []
+
+    class FileDialog:
+        Option = QFileDialog.Option
+        AcceptMode = QFileDialog.AcceptMode
+        FileMode = QFileDialog.FileMode
+        DialogLabel = QFileDialog.DialogLabel
+
+        def __init__(self, *args):
+            self.args = args
+            self.settings = []
+            dialogs.append(self)
+
+        def setOption(self, option):
+            self.settings.append(("option", option))
+
+        def setAcceptMode(self, mode):
+            self.settings.append(("accept_mode", mode))
+
+        def setFileMode(self, mode):
+            self.settings.append(("file_mode", mode))
+
+        def setNameFilter(self, file_filter):
+            self.settings.append(("name_filter", file_filter))
+
+        def selectFile(self, path):
+            self.settings.append(("select_file", path))
+
+        def setLabelText(self, label, text):
+            self.settings.append(("label", label, text))
+
+        def exec(self):
+            return True
+
+        def selectedFiles(self):
+            return [str(output_path)]
+
+    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
+    window.input_path.setText(str(input_path))
+
+    assert window._choose_measurement_save_path() == output_path
+    assert dialogs[0].args[1] == "Save measurement file"
+    assert dialogs[0].settings == [
+        ("option", FileDialog.Option.DontUseNativeDialog),
+        ("accept_mode", FileDialog.AcceptMode.AcceptSave),
+        ("file_mode", FileDialog.FileMode.AnyFile),
+        ("name_filter", "Helix .hlx (*.hlx)"),
+        ("select_file", str(tmp_path / "input_measurement.hlx")),
+        ("label", FileDialog.DialogLabel.Accept, "Save"),
+    ]
+    window.close()
+
+
+def test_save_measurement_file_creates_matching_measurement_file(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hls"
+    output_path = tmp_path / "manual_measurement.hls"
+    input_path.touch()
+    created = []
+    validated = []
+
+    class FileDialog:
+        Option = QFileDialog.Option
+        AcceptMode = QFileDialog.AcceptMode
+        FileMode = QFileDialog.FileMode
+        DialogLabel = QFileDialog.DialogLabel
+
+        def __init__(self, *args):
+            pass
+
+        def setOption(self, option):
+            pass
+
+        def setAcceptMode(self, mode):
+            pass
+
+        def setFileMode(self, mode):
+            pass
+
+        def setNameFilter(self, file_filter):
+            pass
+
+        def selectFile(self, path):
+            pass
+
+        def setLabelText(self, label, text):
+            pass
+
+        def exec(self):
+            return True
+
+        def selectedFiles(self):
+            return [str(output_path)]
+
+    class Handler:
+        def validate_output(self, selected_input_path, selected_output_path):
+            validated.append((selected_input_path, selected_output_path))
+
+        def create_measurement_file(self, selected_input_path, selected_output_path):
+            created.append((selected_input_path, selected_output_path))
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    request = NormalizationRequest(
+        device="helix",
+        input_path=input_path,
+        backend="loopback",
+        windows_python=str(DEFAULT_WINDOWS_PYTHON),
+        reference_di=DEFAULT_REFERENCE_DI,
+    )
+    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: argv)
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    window.input_path.setText(str(input_path))
+    window._loaded_input_path = str(input_path)
+    window._refresh_file_actions()
+
+    assert window.save_measurement_action.isEnabled()
+    assert window.save_measurement_file()
+    assert validated == [(input_path, output_path)]
+    assert created == [(input_path, output_path)]
+    window.close()
+
+
+def test_save_measurement_file_rejects_mismatched_suffix(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hls"
+    output_path = tmp_path / "measurement.hlx"
+    errors = []
+
+    class FileDialog:
+        Option = QFileDialog.Option
+        AcceptMode = QFileDialog.AcceptMode
+        FileMode = QFileDialog.FileMode
+        DialogLabel = QFileDialog.DialogLabel
+
+        def __init__(self, *args):
+            pass
+
+        def setOption(self, option):
+            pass
+
+        def setAcceptMode(self, mode):
+            pass
+
+        def setFileMode(self, mode):
+            pass
+
+        def setNameFilter(self, file_filter):
+            pass
+
+        def selectFile(self, path):
+            pass
+
+        def setLabelText(self, label, text):
+            pass
+
+        def exec(self):
+            return True
+
+        def selectedFiles(self):
+            return [str(output_path)]
+
+    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
+    monkeypatch.setattr(window, "show_error", errors.append)
+    window.input_path.setText(str(input_path))
+
+    assert window._choose_measurement_save_path() is None
+    assert errors == ["Measurement file must use the .hls extension"]
+    window.close()
+
+
 def test_single_preset_save_as_preserves_target_preset_id(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     input_path = tmp_path / "input.hlx"
@@ -2056,6 +2613,681 @@ def test_cancellation_sets_status_without_redundant_popup(monkeypatch, app) -> N
     window.close()
 
 
+def test_measurement_optimization_dialog_shows_latest_statistics(app) -> None:
+    dialog = main_window.MeasurementOptimizationDialog()
+    statistics = StabilityStatistics(
+        snapshot1_lufs_mean=-18.1234,
+        snapshot1_lufs_std=0.0023,
+        snapshot1_crest_mean=11.5678,
+        snapshot1_crest_std=0.0045,
+        snapshot2_lufs_mean=-21.9876,
+        snapshot2_lufs_std=0.0067,
+        snapshot2_crest_mean=14.1234,
+        snapshot2_crest_std=0.0089,
+        tolerance_percent=0.5,
+        snapshot1_lufs_tolerance=0.0906,
+        snapshot1_lufs_max_deviation=0.0023,
+        snapshot1_crest_tolerance=0.0578,
+        snapshot1_crest_max_deviation=0.0045,
+        snapshot2_lufs_tolerance=0.1099,
+        snapshot2_lufs_max_deviation=0.0067,
+        snapshot2_crest_tolerance=0.0706,
+        snapshot2_crest_max_deviation=0.0089,
+    )
+
+    dialog.update_progress(
+        OptimizationProgress(
+            "candidate_completed",
+            "Measurement wait: 0.5 s unstable",
+            parameter="measurement_wait",
+            candidate=0.5,
+            stable=False,
+            statistics=statistics,
+        )
+    )
+
+    assert dialog.table.columnCount() == 4
+    assert dialog.table.horizontalHeaderItem(3).text() == "Latest stats"
+    assert dialog.table.columnWidth(3) == 900
+    assert dialog.table.textElideMode() == Qt.TextElideMode.ElideNone
+    assert dialog.table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    stats_item = dialog.table.item(0, 3)
+    assert stats_item is not None
+    assert "tol 0.5%" in stats_item.text()
+    assert "S1 LUFS mean -18.123, std 0.0023" in stats_item.text()
+    assert "S2 crest mean 14.123, std 0.0089" in stats_item.text()
+
+    dialog.set_finished()
+    dialog.accept()
+    dialog.deleteLater()
+
+
+def test_measurement_optimization_dialog_shows_runtime_estimate(app) -> None:
+    dialog = main_window.MeasurementOptimizationDialog(
+        main_window.MeasurementOptimizationSettings(
+            pre_roll=0.2,
+            post_roll=0.1,
+            round_trip_latency=0.02,
+            preset_wait=0.5,
+            snapshot_wait=0.2,
+            measurement_wait=0.1,
+            stability_runs=3,
+            termination_tolerance=10.0,
+            stability_tolerance=2.0,
+        )
+    )
+
+    notice = dialog.runtime_notice.text()
+
+    assert notice.startswith("Parameter optimization is running")
+    assert "up to 24 bisection checks" in notice
+    assert "across 6 parameters" in notice
+    assert "about <strong>14 min 32 s</strong>" in notice
+    assert "can be shorter" in notice
+    assert "background: #eff6ff" in dialog.runtime_notice.styleSheet()
+    assert "color: #1d4ed8" in dialog.runtime_notice.styleSheet()
+
+    dialog.set_finished()
+    dialog.accept()
+    dialog.deleteLater()
+
+
+def test_measurement_optimization_dialog_status_text_is_selectable(app) -> None:
+    dialog = main_window.MeasurementOptimizationDialog()
+
+    dialog.set_status("Parameter study failed: backend detail")
+
+    flags = dialog.status.textInteractionFlags()
+    assert flags & Qt.TextInteractionFlag.TextSelectableByMouse
+    assert flags & Qt.TextInteractionFlag.TextSelectableByKeyboard
+    assert dialog.status.wordWrap()
+    assert dialog.status.text() == "Parameter study failed: backend detail"
+
+    dialog.set_finished()
+    dialog.accept()
+    dialog.deleteLater()
+
+
+def test_measurement_optimization_dialog_apply_emits_result(app) -> None:
+    dialog = main_window.MeasurementOptimizationDialog()
+    applied = []
+    dialog.applied.connect(applied.append)
+
+    assert not dialog.apply_button.isEnabled()
+
+    dialog.set_result("[analysis]\npre_roll_seconds = 0.7")
+    dialog.apply_button.click()
+
+    assert applied == ["[analysis]\npre_roll_seconds = 0.7"]
+
+    dialog.accept()
+    dialog.deleteLater()
+
+
+def test_main_window_applies_optimized_timing_parameters(monkeypatch, app) -> None:
+    window = MainWindow()
+    messages = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args))
+
+    window._apply_measurement_optimization_result(
+        "[analysis]\n"
+        "pre_roll_seconds = 0.7\n"
+        "post_roll_seconds = 0.8\n"
+        "round_trip_latency_seconds = 0.09\n"
+        "\n"
+        "[devices.helix.steering]\n"
+        "preset_wait_seconds = 1.1\n"
+        "snapshot_wait_seconds = 1.2\n"
+        "measurement_wait_seconds = 1.3\n"
+    )
+
+    assert window.pre_roll.text() == "0.7"
+    assert window.post_roll.text() == "0.8"
+    assert window.round_trip_latency.text() == "0.09"
+    assert window.preset_wait.text() == "1.1"
+    assert window.snapshot_wait.text() == "1.2"
+    assert window.measurement_wait.text() == "1.3"
+    assert window.device_panels["helix"].preset_wait.text() == "1.1"
+    assert window.device_panels["helix"].snapshot_wait.text() == "1.2"
+    assert window.device_panels["helix"].measurement_wait.text() == "1.3"
+    assert messages
+
+    window.close()
+
+
+def test_optimization_dialog_action_button_becomes_close(monkeypatch, app) -> None:
+    dialog = main_window.MeasurementOptimizationDialog()
+    answers = [
+        QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.Yes,
+    ]
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: answers.pop(0))
+
+    assert dialog.action_button.text() == "Abort"
+
+    dialog.set_finished()
+
+    assert dialog.action_button.text() == "Close"
+
+    first_event = QCloseEvent()
+    dialog.closeEvent(first_event)
+
+    assert not first_event.isAccepted()
+
+    second_event = QCloseEvent()
+    dialog.closeEvent(second_event)
+
+    assert second_event.isAccepted()
+
+    dialog.deleteLater()
+
+
+def test_optimization_dialog_abort_button_confirms_abort(monkeypatch, app) -> None:
+    dialog = main_window.MeasurementOptimizationDialog()
+    cancelled = []
+    answers = [
+        QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.Yes,
+    ]
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: answers.pop(0))
+    dialog.cancelled.connect(lambda: cancelled.append(True))
+
+    dialog.action_button.click()
+
+    assert cancelled == []
+    assert dialog.action_button.isEnabled()
+
+    dialog.action_button.click()
+
+    assert cancelled == [True]
+    assert not dialog.isVisible()
+
+    dialog.set_finished()
+    dialog.accept()
+    dialog.deleteLater()
+
+
+def test_determine_optimal_parameters_passes_stability_tolerance(monkeypatch, app) -> None:
+    window = MainWindow()
+    captured = {}
+
+    class Signal:
+        def connect(self, callback) -> None:
+            return None
+
+    class Worker:
+        def __init__(
+            self,
+            request,
+            preset_id,
+            stability_runs,
+            termination_tolerance,
+            stability_tolerance,
+            pinned_parameters=(),
+            parent=None,
+        ) -> None:
+            captured["request"] = request
+            captured["preset_id"] = preset_id
+            captured["stability_runs"] = stability_runs
+            captured["termination_tolerance"] = termination_tolerance
+            captured["stability_tolerance"] = stability_tolerance
+            captured["pinned_parameters"] = pinned_parameters
+            captured["parent"] = parent
+            self.progress = Signal()
+            self.completed = Signal()
+            self.cancelled = Signal()
+            self.failed = Signal()
+            self.finished = Signal()
+
+        def start(self) -> None:
+            captured["started"] = True
+
+        def deleteLater(self) -> None:
+            return None
+
+        def cancel(self) -> None:
+            captured["cancelled"] = True
+
+        def wait(self) -> None:
+            captured["waited"] = True
+
+    request = _request()
+    monkeypatch.setattr(main_window, "MeasurementOptimizationWorker", Worker)
+    monkeypatch.setattr(window, "_validate_single_preset_slot_for_run", lambda: True)
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(window, "_optimization_preset_id", lambda request: 7)
+    monkeypatch.setattr(
+        window,
+        "_show_measurement_optimization_setup",
+        lambda request, preset_id: main_window.MeasurementOptimizationSettings(
+            pre_roll=0.3,
+            post_roll=0.4,
+            round_trip_latency=0.05,
+            preset_wait=0.6,
+            snapshot_wait=0.7,
+            measurement_wait=0.8,
+            stability_runs=4,
+            termination_tolerance=12.5,
+            stability_tolerance=0.25,
+            pinned_parameters=("pre_roll", "measurement_wait"),
+        ),
+    )
+    window.determine_optimal_parameters()
+
+    assert captured["request"].device == request.device
+    assert captured["request"].defer_export
+    assert captured["request"].pre_roll == 0.3
+    assert captured["request"].post_roll == 0.4
+    assert captured["request"].round_trip_latency == 0.05
+    assert captured["request"].preset_wait == 0.6
+    assert captured["request"].snapshot_wait == 0.7
+    assert captured["request"].measurement_wait == 0.8
+    assert captured["preset_id"] == 7
+    assert captured["stability_runs"] == 4
+    assert captured["termination_tolerance"] == 12.5
+    assert captured["stability_tolerance"] == 0.25
+    assert captured["pinned_parameters"] == ("pre_roll", "measurement_wait")
+    assert captured["parent"] is window
+    assert captured["started"]
+
+    window.close()
+
+
+def test_first_hardware_optimization_checks_backend_once(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(backend="hardware")
+    checks = []
+    captured = {}
+
+    class Signal:
+        def connect(self, callback) -> None:
+            return None
+
+    class Worker:
+        def __init__(
+            self,
+            request,
+            preset_id,
+            stability_runs,
+            termination_tolerance,
+            stability_tolerance,
+            pinned_parameters=(),
+            parent=None,
+        ) -> None:
+            captured["request"] = request
+            captured["preset_id"] = preset_id
+            captured["pinned_parameters"] = pinned_parameters
+            self.progress = Signal()
+            self.completed = Signal()
+            self.cancelled = Signal()
+            self.failed = Signal()
+            self.finished = Signal()
+
+        def start(self) -> None:
+            captured["started"] = True
+
+        def deleteLater(self) -> None:
+            return None
+
+        def cancel(self) -> None:
+            captured["cancelled"] = True
+
+        def wait(self) -> None:
+            captured["waited"] = True
+
+    monkeypatch.setattr(window, "_backend_check_enabled", lambda: True)
+    monkeypatch.setattr(window, "_validate_single_preset_slot_for_run", lambda: True)
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(window, "_optimization_preset_id", lambda request: 7)
+    monkeypatch.setattr(main_window, "MeasurementOptimizationWorker", Worker)
+    monkeypatch.setattr(
+        window,
+        "_show_measurement_optimization_setup",
+        lambda request, preset_id: main_window.MeasurementOptimizationSettings(
+            pre_roll=0.3,
+            post_roll=0.4,
+            round_trip_latency=0.05,
+            preset_wait=0.6,
+            snapshot_wait=0.7,
+            measurement_wait=0.8,
+            stability_runs=4,
+            termination_tolerance=12.5,
+            stability_tolerance=0.25,
+            pinned_parameters=("measurement_wait",),
+        ),
+    )
+    monkeypatch.setattr(
+        gui_worker,
+        "check_windows_hardware",
+        lambda checked_request: checks.append(checked_request),
+    )
+
+    window.determine_optimal_parameters()
+
+    for _ in range(100):
+        app.processEvents()
+        if captured.get("started") and window.hardware_check_worker is None:
+            break
+        time.sleep(0.01)
+
+    assert len(checks) == 1
+    assert checks[0].backend == "hardware"
+    assert captured["request"].backend == "hardware"
+    assert captured["request"].defer_export
+    assert captured["request"].measurement_wait == 0.8
+    assert captured["preset_id"] == 7
+    assert captured["pinned_parameters"] == ("measurement_wait",)
+    assert captured["started"]
+    assert window.hardware_check_overlay.isHidden()
+
+    window.close()
+
+
+def test_failed_hardware_optimization_restores_parameter_setup(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(backend="hardware")
+    checks = []
+    popups = []
+    dialogs = []
+    adjusted_settings = main_window.MeasurementOptimizationSettings(
+        pre_roll=0.3,
+        post_roll=0.4,
+        round_trip_latency=0.05,
+        preset_wait=0.6,
+        snapshot_wait=0.7,
+        measurement_wait=0.8,
+        stability_runs=4,
+        termination_tolerance=12.5,
+        stability_tolerance=0.25,
+        pinned_parameters=("pre_roll", "measurement_wait"),
+    )
+
+    class SetupDialog:
+        def __init__(self, settings, preset_label, preset_id, parent=None) -> None:
+            self.initial_settings = settings
+            self.preset_label = preset_label
+            self.preset_id = preset_id
+            self.parent = parent
+            dialogs.append(self)
+
+        def exec(self):
+            if len(dialogs) == 1:
+                return main_window.QDialog.DialogCode.Accepted
+            return main_window.QDialog.DialogCode.Rejected
+
+        def settings(self):
+            return adjusted_settings
+
+    monkeypatch.setattr(window, "_backend_check_enabled", lambda: True)
+    monkeypatch.setattr(window, "_validate_single_preset_slot_for_run", lambda: True)
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(window, "_optimization_preset_id", lambda request: 7)
+    monkeypatch.setattr(main_window, "MeasurementOptimizationSetupDialog", SetupDialog)
+    monkeypatch.setattr(
+        gui_worker,
+        "check_windows_hardware",
+        lambda checked_request: (
+            checks.append(checked_request) or (_ for _ in ()).throw(RuntimeError("no audio device"))
+        ),
+    )
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
+    monkeypatch.setattr(
+        main_window.MeasurementOptimizationWorker,
+        "start",
+        lambda self: (_ for _ in ()).throw(AssertionError("unexpected optimization")),
+    )
+
+    window.determine_optimal_parameters()
+
+    for _ in range(100):
+        app.processEvents()
+        if len(dialogs) == 2 and window.hardware_check_worker is None:
+            break
+        time.sleep(0.01)
+
+    assert len(checks) == 1
+    assert len(popups) == 1
+    assert len(dialogs) == 2
+    assert dialogs[1].initial_settings == adjusted_settings
+    assert dialogs[1].preset_id == 7
+    assert window.optimization_worker is None
+    assert window.hardware_check_worker is None
+    assert window.hardware_check_overlay.isHidden()
+
+    window.close()
+
+
+def test_optimization_dialog_close_confirms_abort(monkeypatch, app) -> None:
+    dialog = main_window.MeasurementOptimizationDialog()
+    cancelled = []
+    answers = [
+        QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.Yes,
+    ]
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: answers.pop(0))
+    dialog.cancelled.connect(lambda: cancelled.append(True))
+
+    assert dialog.action_button.text() == "Abort"
+
+    first_event = QCloseEvent()
+    dialog.closeEvent(first_event)
+
+    assert not first_event.isAccepted()
+    assert cancelled == []
+    assert dialog.cancel_button.isEnabled()
+
+    second_event = QCloseEvent()
+    dialog.closeEvent(second_event)
+
+    assert second_event.isAccepted()
+    assert cancelled == [True]
+    assert not dialog.isVisible()
+
+    dialog.set_finished()
+    assert dialog.action_button.text() == "Close"
+    dialog.accept()
+    dialog.deleteLater()
+
+
+def test_consecutive_optimization_reuses_previous_start_parameters(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request()
+    previous_settings = main_window.MeasurementOptimizationSettings(
+        pre_roll=0.33,
+        post_roll=0.44,
+        round_trip_latency=0.055,
+        preset_wait=0.66,
+        snapshot_wait=0.77,
+        measurement_wait=0.88,
+        stability_runs=5,
+        termination_tolerance=7.5,
+        stability_tolerance=0.25,
+        pinned_parameters=("pre_roll",),
+    )
+    captured = {}
+
+    class SetupDialog:
+        def __init__(self, settings, preset_label, preset_id, parent=None) -> None:
+            captured["settings"] = settings
+            captured["preset_label"] = preset_label
+            captured["preset_id"] = preset_id
+            captured["parent"] = parent
+
+        def exec(self):
+            return main_window.QDialog.DialogCode.Accepted
+
+        def settings(self):
+            return previous_settings
+
+    window._last_measurement_optimization_settings = previous_settings
+    monkeypatch.setattr(main_window, "MeasurementOptimizationSetupDialog", SetupDialog)
+
+    settings = window._show_measurement_optimization_setup(request, 7)
+
+    assert captured["settings"] == previous_settings
+    assert captured["preset_label"] == "02C"
+    assert captured["preset_id"] == 7
+    assert captured["parent"] is window
+    assert settings == previous_settings
+
+    window.close()
+
+
+def test_cancelled_modified_optimization_setup_is_reused_next_time(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request()
+    modified_settings = main_window.MeasurementOptimizationSettings(
+        pre_roll=0.31,
+        post_roll=0.41,
+        round_trip_latency=0.051,
+        preset_wait=0.61,
+        snapshot_wait=0.71,
+        measurement_wait=0.81,
+        stability_runs=4,
+        termination_tolerance=9.5,
+        stability_tolerance=0.75,
+        pinned_parameters=("pre_roll", "measurement_wait"),
+    )
+    captured = []
+
+    class SetupDialog:
+        def __init__(self, settings, preset_label, preset_id, parent=None) -> None:
+            captured.append(settings)
+
+        def exec(self):
+            if len(captured) == 1:
+                return main_window.QDialog.DialogCode.Rejected
+            return main_window.QDialog.DialogCode.Accepted
+
+        def settings(self):
+            return modified_settings
+
+    monkeypatch.setattr(main_window, "MeasurementOptimizationSetupDialog", SetupDialog)
+
+    assert window._show_measurement_optimization_setup(request, 7) is None
+    settings = window._show_measurement_optimization_setup(request, 7)
+
+    assert window._last_measurement_optimization_settings == modified_settings
+    assert captured[1] == modified_settings
+    assert settings == modified_settings
+
+    window.close()
+
+
+def test_measurement_optimization_setup_dialog_returns_adjusted_values(app) -> None:
+    dialog = main_window.MeasurementOptimizationSetupDialog(
+        main_window.MeasurementOptimizationSettings(
+            pre_roll=0.2,
+            post_roll=0.1,
+            round_trip_latency=0.02,
+            preset_wait=0.5,
+            snapshot_wait=0.2,
+            measurement_wait=0.1,
+            stability_runs=3,
+            termination_tolerance=10.0,
+            stability_tolerance=2.0,
+        ),
+        "02C",
+        7,
+    )
+
+    dialog._parameter_inputs["pre_roll"].setValue(0.35)
+    dialog._parameter_inputs["measurement_wait"].setValue(0.45)
+    dialog._parameter_pins["pre_roll"].setChecked(True)
+    dialog._parameter_pins["measurement_wait"].setChecked(True)
+    dialog.stability_runs.setValue(5)
+    dialog.termination_tolerance.setValue(7.5)
+    dialog.stability_tolerance.setValue(0.5)
+
+    settings = dialog.settings()
+
+    assert dialog.run_button.text() == "Run"
+    assert dialog.optimization_preset_hint.text() == (
+        "Optimization will use preset 02C (preset number 7). Before running it, "
+        "make sure the matching measurement preset or setlist is already loaded "
+        'on the device. You can save one from the main window toolbar with "Save '
+        'Measurement File".'
+    )
+    assert settings.pre_roll == 0.35
+    assert settings.measurement_wait == 0.45
+    assert settings.pinned_parameters == ("pre_roll", "measurement_wait")
+    assert settings.stability_runs == 5
+    assert settings.termination_tolerance == 7.5
+    assert settings.stability_tolerance == 0.5
+
+    dialog.deleteLater()
+
+
+def test_measurement_optimization_setup_dialog_return_focuses_next_parameter_input(
+    app,
+) -> None:
+    dialog = main_window.MeasurementOptimizationSetupDialog(
+        main_window.MeasurementOptimizationSettings(
+            pre_roll=0.2,
+            post_roll=0.1,
+            round_trip_latency=0.02,
+            preset_wait=0.5,
+            snapshot_wait=0.2,
+            measurement_wait=0.1,
+            stability_runs=3,
+            termination_tolerance=10.0,
+            stability_tolerance=2.0,
+        ),
+        "02C",
+        7,
+    )
+    dialog.show()
+    app.processEvents()
+
+    editor = dialog._parameter_inputs["pre_roll"].lineEdit()
+    editor.setFocus()
+    QTest.keyClick(editor, Qt.Key.Key_Return)
+    app.processEvents()
+
+    next_editor = dialog._parameter_inputs["post_roll"].lineEdit()
+    assert next_editor.hasFocus()
+    assert next_editor.selectedText()
+    assert dialog.isVisible()
+    assert dialog.result() != main_window.QDialog.DialogCode.Accepted
+
+    dialog.deleteLater()
+
+
+def test_determine_optimal_parameters_cancel_setup_aborts(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(backend="hardware")
+    checks = []
+
+    monkeypatch.setattr(window, "_backend_check_enabled", lambda: True)
+    monkeypatch.setattr(window, "_validate_single_preset_slot_for_run", lambda: True)
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(window, "_optimization_preset_id", lambda request: 7)
+    monkeypatch.setattr(
+        window, "_show_measurement_optimization_setup", lambda request, preset_id: None
+    )
+    monkeypatch.setattr(
+        gui_worker,
+        "check_windows_hardware",
+        lambda checked_request: checks.append(checked_request),
+    )
+
+    window.determine_optimal_parameters()
+
+    assert checks == []
+    assert window.hardware_check_worker is None
+    assert window.optimization_worker is None
+
+    window.close()
+
+
 def test_bad_lufs_is_logged_as_warning(app) -> None:
     window = MainWindow()
     window.update_progress(ProgressEvent("log", message="[GAIN] 02B Clean | bad LUFS"))
@@ -2151,8 +3383,9 @@ def test_unavailable_backend_blocks_first_normalization(monkeypatch, app) -> Non
     monkeypatch.setattr(
         gui_worker,
         "check_windows_hardware",
-        lambda checked_request: checks.append(checked_request)
-        or (_ for _ in ()).throw(RuntimeError("no audio device")),
+        lambda checked_request: (
+            checks.append(checked_request) or (_ for _ in ()).throw(RuntimeError("no audio device"))
+        ),
     )
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
     monkeypatch.setattr(

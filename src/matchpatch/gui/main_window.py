@@ -9,12 +9,13 @@ import os
 import re
 import shutil
 import tempfile
+import tomllib
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from html import escape
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -25,7 +26,9 @@ from PySide6.QtCore import (
     QObject,
     QPropertyAnimation,
     QSize,
+    QThread,
     QTimer,
+    Signal,
 )
 from PySide6.QtGui import (
     QAction,
@@ -36,6 +39,7 @@ from PySide6.QtGui import (
     QIcon,
     QKeyEvent,
     QPainter,
+    QPainterPath,
     QPaintEvent,
     QPalette,
     QPen,
@@ -46,11 +50,17 @@ from PySide6.QtGui import (
     QTextCharFormat,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QAbstractSpinBox,
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
@@ -79,14 +89,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from matchpatch.config import config_value, export_default_config, load_config
+from matchpatch.config import Config, config_value, default_config, export_config, load_config
 from matchpatch.custom_adjustments import CustomAdjustments, load_custom_adjustments_file
 from matchpatch.devices import get_device_profile, list_device_profiles
 from matchpatch.devices.base import PatchFileAdjustments
 from matchpatch.gui.device_panels import HelixSettingsPanel
 from matchpatch.gui.dialogs import ASSETS_DIR, AboutDialog, HelpDialog
 from matchpatch.gui.snapshot_header import SnapshotHeader
-from matchpatch.gui.worker import HardwareCheckWorker, NormalizationWorker
+from matchpatch.gui.worker import (
+    HardwareCheckWorker,
+    MeasurementOptimizationWorker,
+    NormalizationWorker,
+)
+from matchpatch.measurement_optimizer import (
+    TIMING_PARAMETERS,
+    OptimizationProgress,
+    StabilityStatistics,
+)
 from matchpatch.normalize import (
     apply_config,
     parse_args,
@@ -117,11 +136,213 @@ BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
 MANUAL_NAME_MODIFIED_BACKGROUND = QColor("#fef3c7")
 HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
 HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
+MEASUREMENT_TIMING_PRESETS: dict[str, dict[str, float]] = {
+    "Default": {
+        "pre_roll": 0.3,
+        "post_roll": 0.5,
+        "snapshot_wait": 1.0,
+        "measurement_wait": 0.6,
+        "preset_wait": 1.3,
+        "round_trip_latency": 0.001,
+    },
+    "Fast": {
+        "pre_roll": 0.01,
+        "post_roll": 0.06,
+        "snapshot_wait": 0.01,
+        "measurement_wait": 0.47,
+        "preset_wait": 0.21,
+        "round_trip_latency": 0.001,
+    },
+}
+
+
+@dataclass(frozen=True)
+class MeasurementOptimizationSettings:
+    pre_roll: float
+    post_roll: float
+    round_trip_latency: float
+    preset_wait: float
+    snapshot_wait: float
+    measurement_wait: float
+    stability_runs: int
+    termination_tolerance: float
+    stability_tolerance: float
+    pinned_parameters: tuple[str, ...] = ()
+
+
+def _optimization_start_values_from_settings(
+    settings: MeasurementOptimizationSettings,
+    parameters: tuple[Any, ...] = TIMING_PARAMETERS,
+) -> dict[str, float]:
+    values = {parameter.name: float(getattr(settings, parameter.name)) for parameter in parameters}
+    for parameter in parameters:
+        values[parameter.name] = max(
+            values[parameter.name],
+            parameter.lower_bound(values),
+            parameter.stable_start(values),
+        )
+    return values
+
+
+def _max_bisection_runs(
+    start: float,
+    low: float,
+    termination_tolerance_percent: float,
+) -> int:
+    tolerance = abs(start) * termination_tolerance_percent / 100.0
+    if tolerance == 0:
+        tolerance = termination_tolerance_percent / 1000.0
+    if start - low <= tolerance:
+        return 0
+    return max(0, math.ceil(math.log2((start - low) / tolerance)))
+
+
+def _optimization_duration_estimate(settings: MeasurementOptimizationSettings) -> str:
+    values = _optimization_start_values_from_settings(settings)
+    optimized_parameters = tuple(
+        parameter
+        for parameter in TIMING_PARAMETERS
+        if parameter.name not in settings.pinned_parameters
+    )
+    total_runs = 0
+    for parameter in optimized_parameters:
+        start = values[parameter.name]
+        bisection_runs = _max_bisection_runs(
+            start,
+            parameter.lower_bound(values),
+            settings.termination_tolerance,
+        )
+        total_runs += bisection_runs
+
+    total_seconds = (
+        total_runs * settings.stability_runs * _two_snapshot_optimization_run_seconds(values)
+    )
+    parameter_count = len(optimized_parameters)
+    duration = escape(_format_duration(total_seconds))
+    return (
+        "Parameter optimization is running and can take some time. "
+        f"Worst-case estimate: up to {total_runs} bisection checks across "
+        f"{parameter_count} parameters, about <strong>{duration}</strong> "
+        "of measurement time from the selected start values. Actual duration depends "
+        "on the parameters and can be shorter."
+    )
+
+
+def _two_snapshot_optimization_run_seconds(values: dict[str, float]) -> float:
+    snapshot_capture_seconds = (
+        values["snapshot_wait"]
+        + values["measurement_wait"]
+        + values["pre_roll"]
+        + values["post_roll"]
+        + values["round_trip_latency"]
+    )
+    return 2 * values["preset_wait"] + 2 * snapshot_capture_seconds
+
+
+def _format_duration(seconds: float) -> str:
+    rounded = max(0, math.ceil(seconds))
+    minutes, remaining_seconds = divmod(rounded, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours} h {minutes} min"
+    if minutes:
+        return f"{minutes} min {remaining_seconds} s"
+    return f"{remaining_seconds} s"
+
+
+def _format_short_seconds(seconds: float) -> str:
+    if seconds < 10:
+        return f"{seconds:.2f} s"
+    if seconds < 60:
+        return f"{seconds:.1f} s"
+    return _format_duration(seconds)
+
+
+@dataclass(frozen=True)
+class _MeasurementProgressEstimate:
+    preset_wait: float
+    snapshot_wait: float
+    measurement_wait: float
+    pre_roll: float
+    post_roll: float
+    round_trip_latency: float
+    reference_audio_seconds: float = 0.0
+
+    @classmethod
+    def from_request(cls, request: NormalizationRequest) -> _MeasurementProgressEstimate:
+        return cls(
+            preset_wait=_float_or_zero(request.preset_wait),
+            snapshot_wait=_float_or_zero(request.snapshot_wait),
+            measurement_wait=_float_or_zero(request.measurement_wait),
+            pre_roll=_float_or_zero(request.pre_roll),
+            post_roll=_float_or_zero(request.post_roll),
+            round_trip_latency=_float_or_zero(request.round_trip_latency),
+            reference_audio_seconds=_reference_audio_seconds(request.reference_di),
+        )
+
+    @property
+    def snapshot_seconds(self) -> float:
+        return (
+            self.snapshot_wait
+            + self.measurement_wait
+            + self.pre_roll
+            + self.post_roll
+            + self.round_trip_latency
+            + self.reference_audio_seconds
+        )
+
+    def total_seconds(self, preset_total: int, snapshot_total: int) -> float:
+        return (
+            preset_total * self.preset_wait + preset_total * snapshot_total * self.snapshot_seconds
+        )
+
+    def seconds_per_snapshot(self, preset_total: int, snapshot_total: int) -> float:
+        measured_snapshots = max(1, preset_total) * max(1, snapshot_total)
+        return self.total_seconds(preset_total, snapshot_total) / measured_snapshots
+
+    def remaining_seconds(
+        self, event: ProgressEvent, preset_total: int, snapshot_total: int
+    ) -> float:
+        completed_presets = max(0, (event.preset_index or 1) - 1)
+        completed_snapshots = completed_presets * snapshot_total
+        if event.snapshot is not None:
+            completed_snapshots += max(0, event.snapshot - 1)
+            if event.kind == "snapshot_completed":
+                completed_snapshots += 1
+        remaining_preset_waits = (
+            preset_total - completed_presets
+            if event.snapshot is None
+            else preset_total - (event.preset_index or 1)
+        )
+        remaining_snapshots = max(0, preset_total * snapshot_total - completed_snapshots)
+        return max(0, remaining_preset_waits) * self.preset_wait + (
+            remaining_snapshots * self.snapshot_seconds
+        )
+
+
+def _float_or_zero(value: float | None) -> float:
+    return float(value) if value is not None else 0.0
+
+
+def _reference_audio_seconds(path: Path | str) -> float:
+    try:
+        import soundfile as sf
+
+        info = sf.info(str(path))
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+    if info.frames <= 0 or info.samplerate <= 0:
+        return 0.0
+    return max(0.0, info.frames / info.samplerate)
+
+
 PRESET_TABLE_CSV_DELIMITER = "|"
 PRESET_TABLE_ATTENTION_ROLE = Qt.ItemDataRole.UserRole + 1
 ADJUSTMENT_VALUE_ROLE = Qt.ItemDataRole.UserRole + 2
 MANUAL_NAME_MODIFIED_ROLE = Qt.ItemDataRole.UserRole + 3
 BAD_LUFS_HIGHLIGHT_ROLE = Qt.ItemDataRole.UserRole + 4
+RECORDED_OUTPUT_PATH_ROLE = Qt.ItemDataRole.UserRole + 5
 CUSTOM_ADJUSTMENT_COLOR = "#2563eb"
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
@@ -176,6 +397,24 @@ class AttentionFrameDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+class AudioPlaybackWorker(QThread):
+    failed = Signal(str)
+
+    def __init__(self, path: Path, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.path = path
+
+    def run(self) -> None:
+        try:
+            import sounddevice as sd
+            import soundfile as sf
+
+            audio, sample_rate = sf.read(self.path, dtype="float32", always_2d=True)
+            sd.play(audio, samplerate=sample_rate, blocking=True)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
 def _phase_text(phase: str) -> str:
     if phase == "normalization_cancelled_by_user":
         return "Normalization cancelled by user"
@@ -219,6 +458,109 @@ def _advanced_icon() -> QIcon:
     return QIcon(pixmap)
 
 
+def _speaker_icon() -> QIcon:
+    pixmap = QPixmap(56, 56)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#475569"))
+    body = QPainterPath()
+    body.moveTo(11, 24)
+    body.lineTo(21, 24)
+    body.lineTo(34, 13)
+    body.lineTo(34, 43)
+    body.lineTo(21, 32)
+    body.lineTo(11, 32)
+    body.closeSubpath()
+    painter.drawPath(body)
+    painter.setPen(QPen(QColor("#2563eb"), 4))
+    painter.drawArc(35, 19, 10, 18, -45 * 16, 90 * 16)
+    painter.drawArc(38, 13, 16, 30, -45 * 16, 90 * 16)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _record_icon() -> QIcon:
+    pixmap = QPixmap(56, 56)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor("#991b1b"), 2))
+    painter.setBrush(QColor("#dc2626"))
+    painter.drawEllipse(14, 14, 28, 28)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _save_as_icon() -> QIcon:
+    pixmap = QPixmap(56, 56)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    save_pixmap = (
+        QApplication.style()
+        .standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        .pixmap(pixmap.size())
+    )
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.drawPixmap(0, 0, save_pixmap)
+
+    painter.save()
+    painter.translate(42, 40)
+    painter.rotate(-35)
+    painter.setPen(QPen(QColor("#92400e"), 1))
+    painter.setBrush(QColor("#fbbf24"))
+    painter.drawRoundedRect(-4, -14, 8, 24, 2, 2)
+    painter.setBrush(QColor("#fef3c7"))
+    tip = QPainterPath()
+    tip.moveTo(-4, -14)
+    tip.lineTo(0, -21)
+    tip.lineTo(4, -14)
+    tip.closeSubpath()
+    painter.drawPath(tip)
+    painter.setBrush(QColor("#475569"))
+    painter.drawRoundedRect(-4, 9, 8, 5, 1, 1)
+    painter.restore()
+
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _save_measurement_icon() -> QIcon:
+    pixmap = QPixmap(56, 56)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    save_pixmap = (
+        QApplication.style()
+        .standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        .pixmap(pixmap.size())
+    )
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.drawPixmap(0, 0, save_pixmap)
+
+    painter.setPen(QPen(QColor("#334155"), 1))
+    painter.setBrush(QColor("#f8fafc"))
+    painter.drawRoundedRect(29, 27, 22, 22, 4, 4)
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#38bdf8"))
+    painter.drawRoundedRect(34, 38, 3, 7, 1, 1)
+    painter.setBrush(QColor("#22c55e"))
+    painter.drawRoundedRect(39, 34, 3, 11, 1, 1)
+    painter.setBrush(QColor("#f59e0b"))
+    painter.drawRoundedRect(44, 31, 3, 14, 1, 1)
+    painter.setPen(QPen(QColor("#475569"), 1))
+    painter.drawLine(33, 45, 48, 45)
+    painter.end()
+    return QIcon(pixmap)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -230,6 +572,9 @@ class MainWindow(QMainWindow):
         self.resize(820, min(760, max(560, available_height - 100)))
         self.hardware_check_worker: HardwareCheckWorker | None = None
         self.worker: NormalizationWorker | None = None
+        self.optimization_worker: MeasurementOptimizationWorker | None = None
+        self.optimization_dialog: MeasurementOptimizationDialog | None = None
+        self.playback_worker: AudioPlaybackWorker | None = None
         self.completed_request: NormalizationRequest | None = None
         self.completed_result: NormalizationResult | None = None
         self.device_panels: dict[str, HelixSettingsPanel] = {}
@@ -248,6 +593,20 @@ class MainWindow(QMainWindow):
         self._loading_defaults = False
         self._available_backend: str | None = None
         self._pending_backend_check_request: NormalizationRequest | None = None
+        self._pending_backend_check_action = "normalization"
+        self._pending_optimization_preset_id: int | None = None
+        self._pending_optimization_settings: MeasurementOptimizationSettings | None = None
+        self._optimization_stability_runs = 3
+        self._optimization_termination_tolerance = 10.0
+        self._optimization_stability_tolerance = 2.0
+        self._last_measurement_optimization_settings: MeasurementOptimizationSettings | None = None
+        self._measurement_progress_estimate: _MeasurementProgressEstimate | None = None
+        self._playback_toggle_path: Path | None = None
+        self._recording_paths: dict[tuple[str, int], Path] = {}
+        self._save_as_icon = _save_as_icon()
+        self._save_measurement_icon = _save_measurement_icon()
+        self._speaker_icon = _speaker_icon()
+        self._record_icon = _record_icon()
 
         self.input_path = QLineEdit()
         self.output_path = QLineEdit()
@@ -259,6 +618,7 @@ class MainWindow(QMainWindow):
         self.content = content
         scroll = QScrollArea()
         self.scroll_area = scroll
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidgetResizable(True)
         scroll.setWidget(content)
         self.setCentralWidget(scroll)
@@ -352,13 +712,24 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.save_action)
 
         self.save_as_action = QAction(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton),
+            self._save_as_icon,
             "Save As",
             self,
         )
         self.save_as_action.setToolTip("Save the active Helix file under a new name.")
         self.save_as_action.triggered.connect(self.save_active_file_as)
         toolbar.addAction(self.save_as_action)
+
+        self.save_measurement_action = QAction(
+            self._save_measurement_icon,
+            "Save Measurement File",
+            self,
+        )
+        self.save_measurement_action.setToolTip(
+            "Save the measurement Helix file generated by normalization."
+        )
+        self.save_measurement_action.triggered.connect(self.save_measurement_file)
+        toolbar.addAction(self.save_measurement_action)
 
         self.normalization_separator_action = toolbar.addSeparator()
         self.start_button = QToolButton(self)
@@ -386,6 +757,25 @@ class MainWindow(QMainWindow):
         self.device.currentIndexChanged.connect(self.device_changed)
         self.device_action = toolbar.addWidget(self.device)
 
+        self.record_output_button = QToolButton(self)
+        self.record_output_button.setIcon(self._record_icon)
+        self.record_output_button.setCheckable(True)
+        self.record_output_button.setToolTip(
+            "Record measured processor output for each snapshot during normalization."
+        )
+        self.record_output_button.setAccessibleName("Record measured output")
+        self.record_output_action = toolbar.addWidget(self.record_output_button)
+
+        self.play_recorded_output_button = QToolButton(self)
+        self.play_recorded_output_button.setIcon(self._speaker_icon)
+        self.play_recorded_output_button.setCheckable(True)
+        self.play_recorded_output_button.setToolTip(
+            "Play measured processor output through the computer speakers after each recording."
+        )
+        self.play_recorded_output_button.setAccessibleName("Play measured output")
+        self.play_recorded_output_button.toggled.connect(self._playback_toggle_changed)
+        self.play_recorded_output_action = toolbar.addWidget(self.play_recorded_output_button)
+
         self.advanced_button = QToolButton(self)
         self.advanced_button.setIcon(_advanced_icon())
         self.advanced_button.setCheckable(True)
@@ -411,14 +801,18 @@ class MainWindow(QMainWindow):
             "About",
             self,
         )
-        self.about_action.setToolTip(
-            "Show project version, license, and repository information."
-        )
+        self.about_action.setToolTip("Show project version, license, and repository information.")
         self.about_action.triggered.connect(self.show_about)
         toolbar.addAction(self.about_action)
 
         square_button_size = toolbar.iconSize().width() + 14
-        for button in (self.start_button, self.cancel_button, self.advanced_button):
+        for button in (
+            self.start_button,
+            self.cancel_button,
+            self.record_output_button,
+            self.play_recorded_output_button,
+            self.advanced_button,
+        ):
             button.setAutoRaise(True)
             button.setIconSize(toolbar.iconSize())
             button.setFixedSize(square_button_size, square_button_size)
@@ -427,6 +821,7 @@ class MainWindow(QMainWindow):
             self.open_action,
             self.save_action,
             self.save_as_action,
+            self.save_measurement_action,
             self.help_action,
             self.about_action,
         ):
@@ -477,11 +872,17 @@ class MainWindow(QMainWindow):
         self.preset_table.model().rowsInserted.connect(self._preset_table_size_changed)
         self.preset_table.model().rowsRemoved.connect(self._preset_table_size_changed)
         self.preset_table.model().modelReset.connect(self._preset_table_size_changed)
+        self.preset_table.model().rowsInserted.connect(self._refresh_measurement_time_estimate)
+        self.preset_table.model().rowsRemoved.connect(self._refresh_measurement_time_estimate)
+        self.preset_table.model().modelReset.connect(self._refresh_measurement_time_estimate)
         self.preset_table_note = QLabel("Only non-empty presets are listed.")
-        self.save_csv_button = QPushButton()
-        self.save_csv_button.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        self.preset_measurement_time_estimate = QLabel()
+        self.preset_measurement_time_estimate.setWordWrap(True)
+        self.preset_measurement_time_estimate.setToolTip(
+            "Estimated total measurement time for the currently selected presets."
         )
+        self.save_csv_button = QPushButton()
+        self.save_csv_button.setIcon(self._save_as_icon)
         self.save_csv_button.setToolTip("Save the preset table as pipe-delimited CSV.")
         self.save_csv_button.clicked.connect(self.save_preset_table_csv)
         self.load_csv_button = QPushButton()
@@ -519,7 +920,7 @@ class MainWindow(QMainWindow):
         )
         self.select_all_button.setToolTip("Include every preset in this setlist.")
         self.select_all_button.clicked.connect(lambda: self.set_all_presets_checked(True))
-        self.manual_adjustments = QCheckBox("Edit content")
+        self.manual_adjustments = QCheckBox("Edit manually")
         self.manual_adjustments.setToolTip(
             "Allow preset names, snapshot names, and gain adjustments to be edited manually."
         )
@@ -544,6 +945,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.preset_header)
         layout.addWidget(self.preset_empty_state)
         layout.addWidget(self.preset_table)
+        layout.addWidget(self.preset_measurement_time_estimate)
         preset_table_note_row = QHBoxLayout()
         preset_table_note_row.addWidget(self.preset_table_note)
         preset_table_note_row.addStretch()
@@ -558,8 +960,9 @@ class MainWindow(QMainWindow):
 
     def _build_preset_empty_state(self) -> QWidget:
         pane = QWidget()
+        pane.setObjectName("presetEmptyState")
         pane.setAutoFillBackground(True)
-        pane.setStyleSheet("background: white;")
+        pane.setStyleSheet("QWidget#presetEmptyState { background: #fefefe; border: none; }")
         pane.setMinimumHeight(160)
         pane.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -607,17 +1010,19 @@ class MainWindow(QMainWindow):
         row_height = max(
             self.preset_header.sizeHint().height(),
             self.preset_table_note.sizeHint().height(),
+            self.preset_measurement_time_estimate.sizeHint().height(),
             self.preset_csv_controls.sizeHint().height(),
             self.manual_adjustments.sizeHint().height(),
         )
         spacing = self.presets.layout().spacing() if self.presets.layout() is not None else 0
-        self.preset_empty_state.setMinimumHeight(table_height + row_height * 2 + spacing * 2)
+        self.preset_empty_state.setMinimumHeight(table_height + row_height * 3 + spacing * 3 + 4)
 
     def _show_preset_empty_state(self) -> None:
         self.preset_header.hide()
         self.preset_empty_state.show()
         self.preset_table.hide()
         self.preset_table_note.hide()
+        self.preset_measurement_time_estimate.hide()
         self.preset_csv_controls.hide()
         self.single_slot.hide()
         self.select_all_button.hide()
@@ -632,6 +1037,7 @@ class MainWindow(QMainWindow):
         self.preset_header.show()
         self.single_slot.hide()
         self.preset_table.show()
+        self.preset_measurement_time_estimate.show()
         self.preset_table.setColumnHidden(0, single_preset)
         self.preset_table_note.setVisible(not single_preset)
         self.preset_csv_controls.show()
@@ -760,6 +1166,7 @@ class MainWindow(QMainWindow):
         self.advanced_tabs = CurrentPageHeightTabWidget()
         self.advanced_tabs.addTab(self._build_device_settings(), "Device")
         self.advanced_tabs.addTab(self._build_files(), "Files")
+        self.advanced_tabs.addTab(self._build_measurement(), "Measurement")
         self.advanced_tabs.addTab(self._build_lufs(), "LUFS")
         self.advanced_tabs.addTab(self._build_misc(), "Misc")
         self.advanced_tabs.addTab(self._build_metadata(), "Meta Data")
@@ -786,9 +1193,9 @@ class MainWindow(QMainWindow):
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
         )
         self.config_export_button.setToolTip(
-            "Save a TOML configuration file populated with default values."
+            "Save a TOML configuration file populated with the active GUI values."
         )
-        self.config_export_button.clicked.connect(self.export_default_config)
+        self.config_export_button.clicked.connect(self.export_config)
         form.addRow(
             _label("Config file", "Optional TOML file providing saved MatchPatch defaults."),
             _path_row(self.config_path, config_browse, self.config_export_button),
@@ -810,6 +1217,7 @@ class MainWindow(QMainWindow):
             _path_row(self.custom_adjustments_path, custom_adjustments_browse),
         )
         self.reference_di = QLineEdit()
+        self.reference_di.textChanged.connect(self._refresh_measurement_time_estimate)
         reference_browse = QPushButton("Browse")
         reference_browse.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
@@ -862,11 +1270,227 @@ class MainWindow(QMainWindow):
         self.snapshot_count_input.setRange(1, 8)
         self.snapshot_count_input.setValue(self.snapshot_count)
         self.snapshot_count_input.valueChanged.connect(self._snapshot_count_changed)
+        self.snapshot_count_input.valueChanged.connect(self._refresh_measurement_time_estimate)
         form.addRow(
             _label("Snapshots", "Number of snapshots to measure and normalize."),
             self.snapshot_count_input,
         )
         return content
+
+    def _build_measurement(self) -> QWidget:
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(_label("Parameters", "Choose a measurement timing preset."))
+        self.measurement_parameter_preset = QComboBox()
+        self.measurement_parameter_preset.addItems(list(MEASUREMENT_TIMING_PRESETS))
+        self.measurement_parameter_preset.currentTextChanged.connect(
+            self._measurement_parameter_preset_changed
+        )
+        preset_row.addWidget(self.measurement_parameter_preset)
+        self.apply_measurement_parameters_button = QPushButton("Apply")
+        self.apply_measurement_parameters_button.clicked.connect(
+            self.apply_measurement_parameter_preset
+        )
+        preset_row.addWidget(self.apply_measurement_parameters_button)
+        preset_row.addStretch()
+        layout.addLayout(preset_row)
+
+        form = QFormLayout()
+        layout.addLayout(form)
+
+        self.analysis_window = QLineEdit("3.0")
+        form.addRow(
+            _label(
+                "Analysis window (s)",
+                "LUFS analysis window used during measurements; not optimized automatically.",
+            ),
+            self.analysis_window,
+        )
+        self.analysis_interval = QLineEdit("0.1")
+        form.addRow(
+            _label(
+                "Analysis interval (s)",
+                "Step size between LUFS analysis windows; not optimized automatically.",
+            ),
+            self.analysis_interval,
+        )
+        self.pre_roll = QLineEdit(str(MEASUREMENT_TIMING_PRESETS["Default"]["pre_roll"]))
+        form.addRow(
+            _label("Pre-roll (s)", "Silence recorded before the reference DI playback."),
+            self.pre_roll,
+        )
+        self.post_roll = QLineEdit(str(MEASUREMENT_TIMING_PRESETS["Default"]["post_roll"]))
+        form.addRow(
+            _label("Post-roll (s)", "Silence recorded after the reference DI playback."),
+            self.post_roll,
+        )
+        self.round_trip_latency = QLineEdit(
+            str(MEASUREMENT_TIMING_PRESETS["Default"]["round_trip_latency"])
+        )
+        form.addRow(
+            _label("Round-trip latency (s)", "Recorded signal offset caused by audio I/O latency."),
+            self.round_trip_latency,
+        )
+        self.preset_wait = QLineEdit(str(MEASUREMENT_TIMING_PRESETS["Default"]["preset_wait"]))
+        form.addRow(
+            _label("Preset wait (s)", "Pause after switching presets before continuing."),
+            self.preset_wait,
+        )
+        self.snapshot_wait = QLineEdit(str(MEASUREMENT_TIMING_PRESETS["Default"]["snapshot_wait"]))
+        form.addRow(
+            _label("Snapshot wait (s)", "Pause after switching snapshots before continuing."),
+            self.snapshot_wait,
+        )
+        self.measurement_wait = QLineEdit(
+            str(MEASUREMENT_TIMING_PRESETS["Default"]["measurement_wait"])
+        )
+        form.addRow(
+            _label(
+                "Measurement wait (s)", "Pause before capturing loudness after a snapshot change."
+            ),
+            self.measurement_wait,
+        )
+        self.measurement_time_estimate = QLabel()
+        self.measurement_time_estimate.setWordWrap(True)
+        self.measurement_time_estimate.setToolTip(
+            "Estimated total measurement timing divided by loaded presets and snapshots."
+        )
+        layout.addWidget(self.measurement_time_estimate)
+        for timing_input in (
+            self.pre_roll,
+            self.post_roll,
+            self.round_trip_latency,
+            self.preset_wait,
+            self.snapshot_wait,
+            self.measurement_wait,
+        ):
+            timing_input.textChanged.connect(self._refresh_measurement_time_estimate)
+        self._refresh_measurement_time_estimate()
+        self.determine_parameters_button = QPushButton("Determine optimal parameters")
+        self.determine_parameters_button.clicked.connect(self.determine_optimal_parameters)
+        layout.addWidget(self.determine_parameters_button)
+        layout.addStretch()
+        return content
+
+    def _measurement_parameter_preset_changed(self, preset_name: str) -> None:
+        if preset_name != "Fast":
+            return
+        QMessageBox.warning(
+            self,
+            "Fast measurement parameters",
+            "Fast measurement parameters can lead to unstable measurements when effects "
+            "with trails are used. Reverb and delay may make one snapshot's output bleed "
+            "into the next snapshot's measurement.\n\nUse Default parameters or determine optimized parameters for your snapshots that are using trails if unsure.",
+        )
+
+    def apply_measurement_parameter_preset(self) -> None:
+        preset_name = self.measurement_parameter_preset.currentText()
+        values = MEASUREMENT_TIMING_PRESETS.get(preset_name)
+        if values is None:
+            return
+        self._apply_measurement_timing_values(values)
+
+    def _apply_measurement_timing_values(self, values: dict[str, object]) -> None:
+        device = self.device.currentData()
+        panel = self.device_panels.get(device)
+        for name, value in values.items():
+            text = str(value)
+            getattr(self, name).setText(text)
+            if panel is not None and hasattr(panel, name):
+                getattr(panel, name).setText(text)
+
+    def _refresh_measurement_time_estimate(self) -> None:
+        if not hasattr(self, "measurement_time_estimate"):
+            return
+
+        try:
+            estimate = _MeasurementProgressEstimate(
+                preset_wait=self._timing_input_value(self.preset_wait),
+                snapshot_wait=self._timing_input_value(self.snapshot_wait),
+                measurement_wait=self._timing_input_value(self.measurement_wait),
+                pre_roll=self._timing_input_value(self.pre_roll),
+                post_roll=self._timing_input_value(self.post_roll),
+                round_trip_latency=self._timing_input_value(self.round_trip_latency),
+                reference_audio_seconds=_reference_audio_seconds(self.reference_di.text()),
+            )
+        except ValueError:
+            self.measurement_time_estimate.setText(
+                "Estimated measurement time per snapshot: invalid timing value"
+            )
+            self._refresh_preset_measurement_time_estimate(None)
+            return
+
+        preset_total = self._loaded_preset_count_for_estimate()
+        snapshot_total = self._snapshot_count_for_estimate()
+        seconds = estimate.seconds_per_snapshot(preset_total, snapshot_total)
+        self.measurement_time_estimate.setText(
+            "Estimated measurement time per snapshot: "
+            f"{_format_short_seconds(seconds)} "
+            f"({preset_total} preset{'s' if preset_total != 1 else ''}, "
+            f"{snapshot_total} snapshot{'s' if snapshot_total != 1 else ''})"
+        )
+        self._refresh_preset_measurement_time_estimate(estimate)
+
+    def _refresh_preset_measurement_time_estimate(
+        self, estimate: _MeasurementProgressEstimate | None = None
+    ) -> None:
+        if not hasattr(self, "preset_measurement_time_estimate"):
+            return
+
+        if estimate is None:
+            try:
+                estimate = _MeasurementProgressEstimate(
+                    preset_wait=self._timing_input_value(self.preset_wait),
+                    snapshot_wait=self._timing_input_value(self.snapshot_wait),
+                    measurement_wait=self._timing_input_value(self.measurement_wait),
+                    pre_roll=self._timing_input_value(self.pre_roll),
+                    post_roll=self._timing_input_value(self.post_roll),
+                    round_trip_latency=self._timing_input_value(self.round_trip_latency),
+                    reference_audio_seconds=_reference_audio_seconds(self.reference_di.text()),
+                )
+            except ValueError:
+                self.preset_measurement_time_estimate.setText(
+                    "Estimated total measurement time for selected presets: invalid timing value"
+                )
+                return
+
+        preset_total = self._selected_preset_count_for_estimate()
+        snapshot_total = self._snapshot_count_for_estimate()
+        seconds = estimate.total_seconds(preset_total, snapshot_total)
+        self.preset_measurement_time_estimate.setText(
+            "Estimated total measurement time for selected presets: "
+            f"{_format_short_seconds(seconds)} "
+            f"({preset_total} preset{'s' if preset_total != 1 else ''}, "
+            f"{snapshot_total} snapshot{'s' if snapshot_total != 1 else ''})"
+        )
+
+    @staticmethod
+    def _timing_input_value(widget: QLineEdit) -> float:
+        value = float(widget.text())
+        if not math.isfinite(value):
+            raise ValueError
+        return max(0.0, value)
+
+    def _loaded_preset_count_for_estimate(self) -> int:
+        if not hasattr(self, "preset_table"):
+            return 1
+        return max(1, self.preset_table.rowCount())
+
+    def _selected_preset_count_for_estimate(self) -> int:
+        if not hasattr(self, "preset_table") or self.preset_table.rowCount() == 0:
+            return 1
+        selected = 0
+        for row in range(self.preset_table.rowCount()):
+            item = self.preset_table.item(row, 0)
+            if item is not None and item.checkState() == Qt.CheckState.Checked:
+                selected += 1
+        return selected
+
+    def _snapshot_count_for_estimate(self) -> int:
+        if hasattr(self, "snapshot_count_input"):
+            return max(1, self.snapshot_count_input.value())
+        return max(1, self.snapshot_count)
 
     def _build_lufs(self) -> QWidget:
         content = QWidget()
@@ -959,10 +1583,67 @@ class MainWindow(QMainWindow):
             return None
         return save_path
 
+    def _choose_measurement_save_path(self) -> Path | None:
+        input_path = Path(self.input_path.text())
+        suffix = input_path.suffix.lower()
+        if suffix not in {".hls", ".hlx"}:
+            self.show_error("Open a Helix .hls or .hlx file before saving a measurement file")
+            return None
+        file_filter = f"Helix {suffix} (*{suffix})"
+        suggested_path = input_path.with_name(input_path.stem + "_measurement" + suffix)
+        dialog = QFileDialog(self, "Save measurement file")
+        dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setNameFilter(file_filter)
+        dialog.selectFile(str(suggested_path))
+        dialog.setLabelText(QFileDialog.DialogLabel.Accept, "Save")
+        path = dialog.selectedFiles()[0] if dialog.exec() and dialog.selectedFiles() else ""
+        if not path:
+            return None
+        save_path = Path(path)
+        if save_path.suffix.lower() != suffix:
+            self.show_error(f"Measurement file must use the {suffix} extension")
+            return None
+        return save_path
+
     def browse_output(self) -> None:
         path = self._choose_save_as_path(accept_label="Save")
         if path is not None:
             self.output_path.setText(str(path))
+
+    def save_measurement_file(self) -> bool:
+        if not self._loaded_input_path:
+            self.show_error("Open a Helix .hls or .hlx file before saving a measurement file")
+            return False
+        if not self._validate_single_preset_slot_for_run():
+            return False
+
+        output_path = self._choose_measurement_save_path()
+        if output_path is None:
+            return False
+
+        try:
+            args = apply_config(parse_args(self._build_argv()))
+            request = request_from_args(args)
+            profile = get_device_profile(request.device)
+            handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+            handler.validate_output(request.input_path, output_path)
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return False
+
+        if not self._confirm_overwrite(output_path):
+            return False
+
+        try:
+            handler.create_measurement_file(request.input_path, output_path)
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return False
+
+        self._log(f"Measurement file saved: {output_path.resolve()}", "success")
+        return True
 
     def save_preset_table_csv(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -1177,10 +1858,7 @@ class MainWindow(QMainWindow):
                             displayed_value = _parse_adjustment_display_text(adjustment.text())
                         except ValueError:
                             displayed_value = None
-                        if (
-                            displayed_value == float(stored_value)
-                            and "(" not in adjustment.text()
-                        ):
+                        if displayed_value == float(stored_value) and "(" not in adjustment.text():
                             adjustment_value = adjustment.text()
                         else:
                             adjustment_value = _format_adjustment(float(stored_value))
@@ -1220,24 +1898,98 @@ class MainWindow(QMainWindow):
             self.config_path.setText(path)
             self.load_defaults()
 
-    def export_default_config(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export default config",
-            str(Path(self.config_path.text().strip() or "matchpatch-defaults.toml")),
-            "TOML (*.toml)",
-        )
-        if not path:
+    def export_config(self) -> None:
+        selection = self._choose_config_export_path()
+        if selection is None:
             return
+        path, save_default = selection
+        config = default_config() if save_default else self._active_gui_config()
+        message = "Saved default configuriation" if save_default else "Saved current configuration"
 
         try:
-            saved_path = export_default_config(path)
+            saved_path = export_config(path, config)
         except Exception as exc:  # noqa: BLE001
-            self.show_error(f"Could not export default config: {exc}")
+            self.show_error(f"Could not export config: {exc}")
             return
 
         self.config_path.setText(str(saved_path))
-        QMessageBox.information(self, "Export default config", f"Saved default config:\n{saved_path}")
+        QMessageBox.information(self, "Export config", f"{message}:\n{saved_path}")
+
+    def _choose_config_export_path(self) -> tuple[str, bool] | None:
+        dialog = QFileDialog(self, "Export config")
+        dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setNameFilter("TOML (*.toml)")
+        dialog.selectFile(str(Path(self.config_path.text().strip() or "matchpatch.toml")))
+        dialog.setLabelText(QFileDialog.DialogLabel.Accept, "Save")
+        save_default = QCheckBox("Save default configuration", dialog)
+        save_default.setChecked(False)
+        layout = dialog.layout()
+        if isinstance(layout, QGridLayout):
+            layout.addWidget(save_default, layout.rowCount(), 0, 1, -1)
+        elif layout is not None:
+            layout.addWidget(save_default)
+        path = dialog.selectedFiles()[0] if dialog.exec() and dialog.selectedFiles() else ""
+        if not path:
+            return None
+        return path, save_default.isChecked()
+
+    def _active_gui_config(self) -> Config:
+        args = apply_config(parse_args(self._build_config_export_argv()))
+        config = default_config()
+        config["normalize"] = {
+            "backend": args.backend,
+            "windows_python": str(args.windows_python),
+            "reference_di": str(args.reference_di),
+            "custom_adjustments_file": (
+                str(args.custom_adjustments_file) if args.custom_adjustments_file else None
+            ),
+            "target_lufs": args.target_lufs,
+        }
+        if args.timeout is not None:
+            config["normalize"]["timeout_seconds"] = args.timeout
+        config["analysis"] = {
+            "window_seconds": args.analysis_options.window_seconds,
+            "interval_seconds": args.analysis_options.interval_seconds,
+            "minimum_valid_lufs": args.analysis_options.minimum_valid_lufs,
+            "pre_roll_seconds": args.pre_roll,
+            "post_roll_seconds": args.post_roll,
+            "round_trip_latency_seconds": args.round_trip_latency,
+        }
+        config["measurement"] = {
+            "stability_runs": self._optimization_stability_runs,
+            "termination_tolerance_percent": self._optimization_termination_tolerance,
+            "stability_tolerance_percent": self._optimization_stability_tolerance,
+        }
+        config["policy"] = {
+            "measured_snapshots": args.policy.snapshot_count,
+            "solo_regex": args.policy.solo_regex,
+            "solo_gain_bump_db": args.policy.solo_gain_bump_db,
+            "crest_factor_reference_db": args.policy.crest_factor_reference_db,
+            "crest_factor_correction_ratio": args.policy.crest_factor_correction_ratio,
+            "max_crest_factor_correction_db": args.policy.max_crest_factor_correction_db,
+            "gain_deadband_db": args.policy.gain_deadband_db,
+        }
+        devices = config["devices"]
+        assert isinstance(devices, dict)
+        devices[args.device] = {
+            "audio": {
+                "device": args.audio_device,
+                "sample_rate": args.sample_rate,
+                "input_mapping": list(_parse_config_channel_mapping(args.input_mapping)),
+                "output_mapping": list(_parse_config_channel_mapping(args.output_mapping)),
+                "blocksize": args.blocksize,
+            },
+            "steering": {
+                "output": args.steering_output,
+                "channel": args.steering_channel,
+                "preset_wait_seconds": args.preset_wait,
+                "snapshot_wait_seconds": args.snapshot_wait,
+                "measurement_wait_seconds": args.measurement_wait,
+            },
+        }
+        return config
 
     def browse_custom_adjustments(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1304,12 +2056,75 @@ class MainWindow(QMainWindow):
         self.target_lufs.setText(str(args.target_lufs))
         self.solo_gain_bump_db.setText(str(args.policy.solo_gain_bump_db))
         self.solo_regex.setText(args.policy.solo_regex)
+        self.analysis_window.setText(str(args.analysis_options.window_seconds))
+        self.analysis_interval.setText(str(args.analysis_options.interval_seconds))
+        self._optimization_stability_runs = int(
+            config_value(config, "measurement", "stability_runs", default=3)
+        )
+        self._optimization_termination_tolerance = float(
+            config_value(
+                config,
+                "measurement",
+                "termination_tolerance_percent",
+                default=10.0,
+            )
+        )
+        self._optimization_stability_tolerance = float(
+            config_value(
+                config,
+                "measurement",
+                "stability_tolerance_percent",
+                default=2.0,
+            )
+        )
         profile = get_device_profile(args.device)
         self.snapshot_count_input.setMaximum(getattr(profile, "max_snapshot_count", None) or 999)
         self.snapshot_count_input.setValue(args.policy.snapshot_count)
         panel = self.device_panels.get(args.device)
         if panel is not None:
             panel.populate(args)
+        device_steering = ("devices", args.device, "steering")
+        default_timing = MEASUREMENT_TIMING_PRESETS["Default"]
+        self._apply_measurement_timing_values(
+            {
+                "pre_roll": config_value(
+                    config,
+                    "analysis",
+                    "pre_roll_seconds",
+                    default=default_timing["pre_roll"],
+                ),
+                "post_roll": config_value(
+                    config,
+                    "analysis",
+                    "post_roll_seconds",
+                    default=default_timing["post_roll"],
+                ),
+                "round_trip_latency": config_value(
+                    config,
+                    "analysis",
+                    "round_trip_latency_seconds",
+                    default=default_timing["round_trip_latency"],
+                ),
+                "preset_wait": config_value(
+                    config,
+                    *device_steering,
+                    "preset_wait_seconds",
+                    default=default_timing["preset_wait"],
+                ),
+                "snapshot_wait": config_value(
+                    config,
+                    *device_steering,
+                    "snapshot_wait_seconds",
+                    default=default_timing["snapshot_wait"],
+                ),
+                "measurement_wait": config_value(
+                    config,
+                    *device_steering,
+                    "measurement_wait_seconds",
+                    default=default_timing["measurement_wait"],
+                ),
+            }
+        )
         self._refresh_backend_tooltip()
 
     def _backend_check_enabled(self) -> bool:
@@ -1338,6 +2153,7 @@ class MainWindow(QMainWindow):
 
         self._discard_completed_export()
         self.preset_snapshot_positions.clear()
+        self._recording_paths.clear()
         self._clear_bad_lufs_highlights()
         self._load_metadata()
         is_single_preset = path.suffix.lower() == ".hlx"
@@ -1460,23 +2276,276 @@ class MainWindow(QMainWindow):
         if not self._validate_single_preset_slot_for_run():
             return
 
-        if self._preset_table_has_unsaved_changes() and not self._prompt_save_before_normalization():
+        if (
+            self._preset_table_has_unsaved_changes()
+            and not self._prompt_save_before_normalization()
+        ):
             return
 
         try:
             args = apply_config(parse_args(self._build_argv()))
-            request = replace(request_from_args(args), defer_export=True)
+            request = self._request_with_audio_capture_options(
+                replace(request_from_args(args), defer_export=True)
+            )
             self._custom_adjustments = self._load_custom_adjustments(request)
         except Exception as exc:  # noqa: BLE001
             self.show_error(str(exc))
             return
 
         if self._backend_check_required(request):
-            self._start_hardware_check(request)
+            self._start_hardware_check(request, action="normalization")
             return
 
         self._available_backend = request.backend
         self._start_normalization_request(request)
+
+    def determine_optimal_parameters(self) -> None:
+        if not self._validate_single_preset_slot_for_run():
+            return
+
+        try:
+            args = apply_config(parse_args(self._build_argv()))
+            request = self._request_with_audio_capture_options(
+                replace(request_from_args(args), defer_export=True),
+                record_device_output=False,
+            )
+            preset_id = self._optimization_preset_id(request)
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return
+
+        settings = self._show_measurement_optimization_setup(request, preset_id)
+        if settings is None:
+            return
+        request = self._request_with_measurement_optimization_settings(request, settings)
+        self._apply_measurement_optimization_settings(settings)
+
+        if self._backend_check_required(request):
+            self._start_hardware_check(
+                request,
+                action="optimization",
+                optimization_preset_id=preset_id,
+                optimization_settings=settings,
+            )
+            return
+
+        self.determine_parameters_button.setEnabled(False)
+        self._available_backend = request.backend
+        self._start_measurement_optimization_request(request, preset_id, settings)
+
+    def _start_measurement_optimization_request(
+        self,
+        request: NormalizationRequest,
+        preset_id: int,
+        settings: MeasurementOptimizationSettings,
+    ) -> None:
+        self.start_button.setEnabled(True)
+        self.determine_parameters_button.setEnabled(False)
+        self._last_measurement_optimization_settings = settings
+        self.optimization_dialog = MeasurementOptimizationDialog(settings, self)
+        self.optimization_dialog.set_play_recorded_output(
+            self.play_recorded_output_button.isChecked()
+        )
+        self.optimization_dialog.play_recorded_output_changed.connect(
+            self.play_recorded_output_button.setChecked
+        )
+        self.optimization_dialog.cancelled.connect(self._cancel_measurement_optimization)
+        self.optimization_dialog.applied.connect(self._apply_measurement_optimization_result)
+        self.optimization_dialog.show()
+        self.optimization_worker = MeasurementOptimizationWorker(
+            request,
+            preset_id,
+            settings.stability_runs,
+            settings.termination_tolerance,
+            settings.stability_tolerance,
+            settings.pinned_parameters,
+            self,
+        )
+        self.optimization_worker.progress.connect(self._update_measurement_optimization)
+        self.optimization_worker.completed.connect(self._measurement_optimization_completed)
+        self.optimization_worker.cancelled.connect(self._measurement_optimization_cancelled)
+        self.optimization_worker.failed.connect(self._measurement_optimization_failed)
+        self.optimization_worker.finished.connect(self._measurement_optimization_finished)
+        self.optimization_worker.finished.connect(self.optimization_worker.deleteLater)
+        self.optimization_worker.start()
+
+    def _request_with_audio_capture_options(
+        self,
+        request: NormalizationRequest,
+        *,
+        record_device_output: bool | None = None,
+    ) -> NormalizationRequest:
+        return replace(
+            request,
+            play_recorded_output=self.play_recorded_output_button.isChecked(),
+            record_device_output=(
+                self.record_output_button.isChecked()
+                if record_device_output is None
+                else record_device_output
+            ),
+            playback_toggle_path=self._ensure_playback_toggle_path(),
+        )
+
+    def _ensure_playback_toggle_path(self) -> Path:
+        if self._playback_toggle_path is None:
+            temporary = tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                prefix="matchpatch_playback_",
+                suffix=".txt",
+                delete=False,
+            )
+            self._playback_toggle_path = Path(temporary.name)
+            temporary.close()
+        self._write_playback_toggle()
+        return self._playback_toggle_path
+
+    def _playback_toggle_changed(self, checked: bool) -> None:
+        self._write_playback_toggle(checked)
+
+    def _write_playback_toggle(self, checked: bool | None = None) -> None:
+        if self._playback_toggle_path is None:
+            return
+        enabled = self.play_recorded_output_button.isChecked() if checked is None else checked
+        try:
+            self._playback_toggle_path.write_text("1" if enabled else "0", encoding="utf-8")
+        except OSError as exc:
+            self._log(f"Could not update playback toggle: {exc}", "warning")
+
+    def _show_measurement_optimization_setup(
+        self,
+        request: NormalizationRequest,
+        preset_id: int,
+        initial_settings: MeasurementOptimizationSettings | None = None,
+    ) -> MeasurementOptimizationSettings | None:
+        preset_label = get_device_profile(request.device).format_patch_id(preset_id)
+        settings = (
+            initial_settings
+            or self._last_measurement_optimization_settings
+            or MeasurementOptimizationSettings(
+                pre_roll=float(request.pre_roll if request.pre_roll is not None else 0.2),
+                post_roll=float(request.post_roll if request.post_roll is not None else 0.1),
+                round_trip_latency=float(
+                    request.round_trip_latency if request.round_trip_latency is not None else 0.02
+                ),
+                preset_wait=float(request.preset_wait if request.preset_wait is not None else 0.5),
+                snapshot_wait=float(
+                    request.snapshot_wait if request.snapshot_wait is not None else 0.2
+                ),
+                measurement_wait=float(
+                    request.measurement_wait if request.measurement_wait is not None else 0.1
+                ),
+                stability_runs=self._optimization_stability_runs,
+                termination_tolerance=self._optimization_termination_tolerance,
+                stability_tolerance=self._optimization_stability_tolerance,
+            )
+        )
+        dialog = MeasurementOptimizationSetupDialog(
+            settings,
+            preset_label,
+            preset_id,
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            cancelled_settings = dialog.settings()
+            if cancelled_settings != settings:
+                self._last_measurement_optimization_settings = cancelled_settings
+            return None
+        return dialog.settings()
+
+    def _request_with_measurement_optimization_settings(
+        self,
+        request: NormalizationRequest,
+        settings: MeasurementOptimizationSettings,
+    ) -> NormalizationRequest:
+        return replace(
+            request,
+            pre_roll=settings.pre_roll,
+            post_roll=settings.post_roll,
+            round_trip_latency=settings.round_trip_latency,
+            preset_wait=settings.preset_wait,
+            snapshot_wait=settings.snapshot_wait,
+            measurement_wait=settings.measurement_wait,
+        )
+
+    def _apply_measurement_optimization_settings(
+        self, settings: MeasurementOptimizationSettings
+    ) -> None:
+        self.pre_roll.setText(f"{settings.pre_roll:g}")
+        self.post_roll.setText(f"{settings.post_roll:g}")
+        self.round_trip_latency.setText(f"{settings.round_trip_latency:g}")
+        self.preset_wait.setText(f"{settings.preset_wait:g}")
+        self.snapshot_wait.setText(f"{settings.snapshot_wait:g}")
+        self.measurement_wait.setText(f"{settings.measurement_wait:g}")
+        self._optimization_stability_runs = settings.stability_runs
+        self._optimization_termination_tolerance = settings.termination_tolerance
+        self._optimization_stability_tolerance = settings.stability_tolerance
+
+    def _optimization_preset_id(self, request: NormalizationRequest) -> int:
+        preset_set = request.preset_set or self._selected_preset_set()
+        if not preset_set:
+            raise ValueError("Select at least one preset before determining optimal parameters")
+
+        profile = get_device_profile(request.device)
+        handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+        return handler.parse_patch_set(preset_set)[0]
+
+    def _update_measurement_optimization(self, event: OptimizationProgress) -> None:
+        if self.optimization_dialog is not None:
+            self.optimization_dialog.update_progress(event)
+
+    def _measurement_optimization_completed(self, toml_text: str) -> None:
+        if self.optimization_dialog is not None:
+            self.optimization_dialog.set_result(toml_text)
+
+    def _apply_measurement_optimization_result(self, toml_text: str) -> None:
+        try:
+            config = tomllib.loads(toml_text)
+        except tomllib.TOMLDecodeError as exc:
+            self.show_error(f"Could not apply optimized parameters: {exc}")
+            return
+
+        device = self.device.currentData()
+        applied = False
+        for parameter in TIMING_PARAMETERS:
+            table_path = tuple(device if part == "{device}" else part for part in parameter.table)
+            value = _nested_config_value(config, (*table_path, parameter.key))
+            if value is None:
+                continue
+            getattr(self, parameter.name).setText(str(value))
+            panel = self.device_panels.get(device)
+            if panel is not None and hasattr(panel, parameter.name):
+                getattr(panel, parameter.name).setText(str(value))
+            applied = True
+
+        if not applied:
+            self.show_error("Optimized parameters did not contain measurement timing values")
+            return
+        QMessageBox.information(
+            self,
+            "Apply optimized parameters",
+            "Applied optimized timing parameters to Advanced > Measurement.",
+        )
+
+    def _measurement_optimization_cancelled(self) -> None:
+        if self.optimization_dialog is not None:
+            self.optimization_dialog.set_status("Parameter study cancelled.")
+            self.optimization_dialog.set_finished()
+
+    def _measurement_optimization_failed(self, detail: str) -> None:
+        if self.optimization_dialog is not None:
+            self.optimization_dialog.set_status(f"Parameter study failed: {detail}")
+            self.optimization_dialog.set_finished()
+        else:
+            self.show_error(detail)
+
+    def _measurement_optimization_finished(self) -> None:
+        self.optimization_worker = None
+        self.determine_parameters_button.setEnabled(True)
+
+    def _cancel_measurement_optimization(self) -> None:
+        if self.optimization_worker is not None:
+            self.optimization_worker.cancel()
 
     def _start_normalization_request(self, request: NormalizationRequest) -> None:
         try:
@@ -1497,6 +2566,7 @@ class MainWindow(QMainWindow):
         with self._sorting_paused():
             for row in range(self.preset_table.rowCount()):
                 self._clear_preset_adjustments(row)
+                self._mark_selected_preset_adjustments_pending(row)
         self.retained_csv.clear()
         self.retained_csv_pane.hide()
         self._reset_loudness_bars()
@@ -1510,6 +2580,7 @@ class MainWindow(QMainWindow):
             )
         self._start_busy_phase()
         self.completed_request = request
+        self._measurement_progress_estimate = _MeasurementProgressEstimate.from_request(request)
         self.worker = NormalizationWorker(request, self)
         self.worker.progress.connect(self.update_progress)
         self.worker.import_requested.connect(self.confirm_import)
@@ -1520,16 +2591,27 @@ class MainWindow(QMainWindow):
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
-    def _start_hardware_check(self, request: NormalizationRequest) -> None:
+    def _start_hardware_check(
+        self,
+        request: NormalizationRequest,
+        *,
+        action: str,
+        optimization_preset_id: int | None = None,
+        optimization_settings: MeasurementOptimizationSettings | None = None,
+    ) -> None:
         if self.hardware_check_worker is not None or self.worker is not None:
             return
 
         self.start_button.setEnabled(False)
+        self.determine_parameters_button.setEnabled(False)
         self._show_hardware_check_overlay()
         self._set_phase("starting")
         self._log("Checking backend availability", "info")
         self.hardware_check_worker = HardwareCheckWorker(request, self)
         self._pending_backend_check_request = request
+        self._pending_backend_check_action = action
+        self._pending_optimization_preset_id = optimization_preset_id
+        self._pending_optimization_settings = optimization_settings
         self.hardware_check_worker.completed.connect(self._hardware_check_completed)
         self.hardware_check_worker.failed.connect(self._hardware_check_failed)
         self.hardware_check_worker.finished.connect(self._hardware_check_finished)
@@ -1539,20 +2621,62 @@ class MainWindow(QMainWindow):
     def _hardware_check_completed(self) -> None:
         self._hide_hardware_check_overlay()
         request = self._pending_backend_check_request
+        action = self._pending_backend_check_action
+        optimization_preset_id = self._pending_optimization_preset_id
+        optimization_settings = self._pending_optimization_settings
         self._pending_backend_check_request = None
+        self._pending_backend_check_action = "normalization"
+        self._pending_optimization_preset_id = None
+        self._pending_optimization_settings = None
         if request is not None:
             self._available_backend = request.backend
         self._log("Backend availability check completed", "success")
+        if request is not None and action == "optimization":
+            if optimization_settings is None:
+                setup_preset_id = (
+                    optimization_preset_id
+                    if optimization_preset_id is not None
+                    else self._optimization_preset_id(request)
+                )
+                optimization_settings = self._show_measurement_optimization_setup(
+                    request, setup_preset_id
+                )
+                if optimization_settings is None:
+                    self.start_button.setEnabled(True)
+                    self.determine_parameters_button.setEnabled(True)
+                    self._set_phase("ready")
+                    return
+                request = self._request_with_measurement_optimization_settings(
+                    request, optimization_settings
+                )
+                self._apply_measurement_optimization_settings(optimization_settings)
+            self._start_measurement_optimization_request(
+                request,
+                optimization_preset_id
+                if optimization_preset_id is not None
+                else self._optimization_preset_id(request),
+                optimization_settings,
+            )
+            return
         if request is not None:
             self._start_normalization_request(request)
             return
         self.start_button.setEnabled(True)
+        self.determine_parameters_button.setEnabled(True)
         self._set_phase("ready")
 
     def _hardware_check_failed(self, detail: str) -> None:
         self._hide_hardware_check_overlay()
+        request = self._pending_backend_check_request
+        action = self._pending_backend_check_action
+        optimization_preset_id = self._pending_optimization_preset_id
+        optimization_settings = self._pending_optimization_settings
         self._pending_backend_check_request = None
+        self._pending_backend_check_action = "normalization"
+        self._pending_optimization_preset_id = None
+        self._pending_optimization_settings = None
         self.start_button.setEnabled(True)
+        self.determine_parameters_button.setEnabled(True)
         self._set_phase("ready")
         message = "No suitable device connected."
         detail = detail.strip()
@@ -1562,9 +2686,69 @@ class MainWindow(QMainWindow):
             "Error",
             f"{message}\n\nConnect a compatible audio processor and try again.",
         )
+        if (
+            request is not None
+            and action == "optimization"
+            and optimization_preset_id is not None
+            and optimization_settings is not None
+        ):
+            QTimer.singleShot(
+                0,
+                lambda: self._restore_measurement_optimization_setup(
+                    request,
+                    optimization_preset_id,
+                    optimization_settings,
+                ),
+            )
 
     def _hardware_check_finished(self) -> None:
         self.hardware_check_worker = None
+
+    def _restore_measurement_optimization_setup(
+        self,
+        request: NormalizationRequest,
+        preset_id: int,
+        settings: MeasurementOptimizationSettings,
+    ) -> None:
+        if self.hardware_check_worker is not None:
+            QTimer.singleShot(
+                0,
+                lambda: self._restore_measurement_optimization_setup(
+                    request,
+                    preset_id,
+                    settings,
+                ),
+            )
+            return
+
+        restored_settings = self._show_measurement_optimization_setup(
+            request,
+            preset_id,
+            settings,
+        )
+        if restored_settings is None:
+            return
+
+        retry_request = self._request_with_measurement_optimization_settings(
+            request,
+            restored_settings,
+        )
+        self._apply_measurement_optimization_settings(restored_settings)
+        if self._backend_check_required(retry_request):
+            self._start_hardware_check(
+                retry_request,
+                action="optimization",
+                optimization_preset_id=preset_id,
+                optimization_settings=restored_settings,
+            )
+            return
+
+        self._available_backend = retry_request.backend
+        self._start_measurement_optimization_request(
+            retry_request,
+            preset_id,
+            restored_settings,
+        )
 
     def _show_hardware_check_overlay(self) -> None:
         self._position_hardware_check_overlay()
@@ -1633,6 +2817,7 @@ class MainWindow(QMainWindow):
             value = (event.preset_index - 1) * event.snapshot_total + snapshot
             self.preset_progress.setRange(0, total)
             self.preset_progress.setValue(value)
+            self._update_measurement_progress_format(event)
         elif event.kind == "measurement_completed":
             self._hide_progress()
 
@@ -1661,6 +2846,8 @@ class MainWindow(QMainWindow):
         if event.kind == "temp_retained" and event.path:
             self.retained_csv.setText(event.path)
             self.retained_csv_pane.show()
+        if event.kind == "snapshot_recorded" and event.path:
+            self._set_recorded_output(event)
 
         if "bad LUFS" in message or message.startswith("[WARNING]"):
             level = "warning"
@@ -1668,10 +2855,77 @@ class MainWindow(QMainWindow):
             level = "error" if event.kind in {"error_log", "preset_failed"} else "debug"
         self._log(message, level)
 
+    def _set_recorded_output(self, event: ProgressEvent) -> None:
+        if not event.device_patch or event.snapshot is None or event.path is None:
+            return
+        row = self._preset_row(event.device_patch)
+        if row is None:
+            return
+        column = 3 + (event.snapshot - 1) * 2 + 1
+        item = self.preset_table.item(row, column)
+        if item is None:
+            return
+        path = Path(event.path)
+        item.setData(RECORDED_OUTPUT_PATH_ROLE, str(path))
+        self._recording_paths[(event.device_patch, event.snapshot - 1)] = path
+        self._refresh_adjustment_cell_widget(item)
+
+    def _refresh_adjustment_cell_widget(self, item: QTableWidgetItem) -> None:
+        table = item.tableWidget()
+        if table is None:
+            return
+        table.removeCellWidget(item.row(), item.column())
+        recorded_path = item.data(RECORDED_OUTPUT_PATH_ROLE)
+        has_custom_adjustment = item.toolTip().startswith("Custom loudness adjustment:")
+        if not recorded_path:
+            if has_custom_adjustment:
+                label = QLabel(_custom_adjustment_label_text(item.text()))
+                label.setContentsMargins(3, 0, 0, 0)
+                label.setToolTip(item.toolTip())
+                label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                table.setCellWidget(item.row(), item.column(), label)
+            return
+
+        content = QWidget(table)
+        layout = QHBoxLayout(content)
+        layout.setContentsMargins(2, 0, 2, 0)
+        layout.setSpacing(2)
+        label = QLabel(
+            _custom_adjustment_label_text(item.text()) if has_custom_adjustment else item.text()
+        )
+        label.setToolTip(item.toolTip())
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(label, 1)
+        if recorded_path:
+            button = QToolButton(content)
+            button.setIcon(self._speaker_icon)
+            button.setAutoRaise(True)
+            button.setIconSize(QSize(14, 14))
+            button.setFixedSize(22, 22)
+            button.setToolTip("Play recorded snapshot output.")
+            button.clicked.connect(
+                lambda checked=False, path=Path(recorded_path): self._play_recording(path)
+            )
+            layout.addWidget(button)
+        table.setCellWidget(item.row(), item.column(), content)
+
+    def _play_recording(self, path: Path) -> None:
+        if self.playback_worker is not None and self.playback_worker.isRunning():
+            return
+        self.playback_worker = AudioPlaybackWorker(path, self)
+        self.playback_worker.failed.connect(self.show_error)
+        self.playback_worker.finished.connect(self._playback_finished)
+        self.playback_worker.finished.connect(self.playback_worker.deleteLater)
+        self.playback_worker.start()
+
+    def _playback_finished(self) -> None:
+        self.playback_worker = None
+
     def _show_indeterminate_progress(self, message: str) -> None:
         progress_was_hidden = self.progress_group.isHidden()
         self.current.setText(message)
         self.preset_progress.setRange(0, 0)
+        self.preset_progress.resetFormat()
         self.progress_group.show()
         if progress_was_hidden:
             self._schedule_resize_for_content()
@@ -1679,8 +2933,26 @@ class MainWindow(QMainWindow):
     def _hide_progress(self) -> None:
         if self.progress_group.isHidden():
             return
+        self.preset_progress.resetFormat()
         self.progress_group.hide()
         self._schedule_resize_for_content()
+
+    def _update_measurement_progress_format(self, event: ProgressEvent) -> None:
+        estimate = self._measurement_progress_estimate
+        if estimate is None or event.preset_total is None or event.snapshot_total is None:
+            self.preset_progress.resetFormat()
+            return
+
+        total_seconds = estimate.total_seconds(event.preset_total, event.snapshot_total)
+        remaining_seconds = estimate.remaining_seconds(
+            event,
+            event.preset_total,
+            event.snapshot_total,
+        )
+        self.preset_progress.setFormat(
+            "%p% | total "
+            f"{_format_duration(total_seconds)} | ETA {_format_duration(remaining_seconds)}"
+        )
 
     def confirm_import(self, request: ImportRequest) -> None:
         self._stop_busy_phase()
@@ -1868,8 +3140,14 @@ class MainWindow(QMainWindow):
             self.save_action.setEnabled(has_file and self._preset_table_has_unsaved_changes())
         if hasattr(self, "save_as_action"):
             self.save_as_action.setEnabled(has_file)
+        if hasattr(self, "save_measurement_action"):
+            self.save_measurement_action.setEnabled(bool(self._loaded_input_path))
         if hasattr(self, "start_button"):
             self.start_button.setEnabled(bool(self._loaded_input_path) and self.worker is None)
+        if hasattr(self, "record_output_button"):
+            self.record_output_button.setEnabled(bool(self._loaded_input_path))
+        if hasattr(self, "play_recorded_output_button"):
+            self.play_recorded_output_button.setEnabled(True)
 
     def _prompt_save_before_normalization(self) -> bool:
         result = self._prompt_save_or_discard_preset_table_changes("starting normalization")
@@ -1958,6 +3236,7 @@ class MainWindow(QMainWindow):
         self._stop_busy_phase(self._processing_dot_color)
         self.start_cancel_stack.setCurrentWidget(self.start_button)
         self.worker = None
+        self._measurement_progress_estimate = None
         self._refresh_file_actions()
 
     def _discard_completed_export(self) -> None:
@@ -1994,7 +3273,10 @@ class MainWindow(QMainWindow):
         if self.hardware_check_worker is not None:
             event.ignore()
             return
-        if self._preset_table_has_unsaved_changes() and not self._confirm_discard_preset_table_changes():
+        if (
+            self._preset_table_has_unsaved_changes()
+            and not self._confirm_discard_preset_table_changes()
+        ):
             event.ignore()
             return
         if self.worker is not None:
@@ -2002,8 +3284,12 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self.worker.cancel()
+        if self.optimization_worker is not None:
+            self.optimization_worker.cancel()
         if self.worker is not None:
             self.worker.wait()
+        if self.optimization_worker is not None:
+            self.optimization_worker.wait()
         self._discard_completed_export()
         super().closeEvent(event)
         QApplication.quit()
@@ -2025,17 +3311,24 @@ class MainWindow(QMainWindow):
         ]
         if self.config_path.text().strip():
             argv.extend(["--config", self.config_path.text().strip()])
-        if (
-            hasattr(self, "custom_adjustments_path")
-            and self.custom_adjustments_path.text().strip()
-        ):
-            argv.extend(
-                ["--custom-adjustments-file", self.custom_adjustments_path.text().strip()]
-            )
+        if hasattr(self, "custom_adjustments_path") and self.custom_adjustments_path.text().strip():
+            argv.extend(["--custom-adjustments-file", self.custom_adjustments_path.text().strip()])
         return argv
 
     def _build_argv(self) -> list[str]:
         argv = self._base_argv(self.input_path.text().strip())
+        self._append_gui_config_arguments(argv)
+        preset_set = self._selected_preset_set()
+        if preset_set:
+            argv.extend(["--preset-set", preset_set])
+        return argv
+
+    def _build_config_export_argv(self) -> list[str]:
+        argv = self._base_argv(self.input_path.text().strip() or "placeholder.hls")
+        self._append_gui_config_arguments(argv)
+        return argv
+
+    def _append_gui_config_arguments(self, argv: list[str]) -> None:
         argv.extend(["--reference-di", self.reference_di.text()])
         argv.extend(["--target-lufs", self.target_lufs.text()])
         argv.extend(["--solo-gain-bump-db", self.solo_gain_bump_db.text()])
@@ -2043,14 +3336,18 @@ class MainWindow(QMainWindow):
         argv.extend(["--snapshot-count", str(self.snapshot_count_input.value())])
         if self.keep_temp.isChecked():
             argv.append("--keep-temp")
-        preset_set = self._selected_preset_set()
-        if preset_set:
-            argv.extend(["--preset-set", preset_set])
 
         panel = self.device_panels.get(self.device.currentData())
         if panel is not None:
             panel.append_arguments(argv)
-        return argv
+        _append_optional_argument(argv, "--analysis-window", self.analysis_window.text())
+        _append_optional_argument(argv, "--analysis-interval", self.analysis_interval.text())
+        _append_optional_argument(argv, "--pre-roll", self.pre_roll.text())
+        _append_optional_argument(argv, "--post-roll", self.post_roll.text())
+        _append_optional_argument(argv, "--round-trip-latency", self.round_trip_latency.text())
+        _append_optional_argument(argv, "--preset-wait", self.preset_wait.text())
+        _append_optional_argument(argv, "--snapshot-wait", self.snapshot_wait.text())
+        _append_optional_argument(argv, "--measurement-wait", self.measurement_wait.text())
 
     def _selected_preset_set(self) -> str:
         if Path(self.input_path.text()).suffix.lower() == ".hlx":
@@ -2226,8 +3523,7 @@ class MainWindow(QMainWindow):
     def _manual_table_cell_double_clicked(self, row: int, column: int) -> None:
         single_preset_slot = Path(self.input_path.text()).suffix.lower() == ".hlx" and column == 1
         if not single_preset_slot and (
-            not self._manual_adjustments_enabled()
-            or not self._is_manual_adjustment_column(column)
+            not self._manual_adjustments_enabled() or not self._is_manual_adjustment_column(column)
         ):
             return
 
@@ -2430,6 +3726,7 @@ class MainWindow(QMainWindow):
             font.setBold(True)
             font.setPointSize(max(font.pointSize(), QApplication.font().pointSize(), 9) + 5)
             adjustment_item.setFont(font)
+            self._refresh_adjustment_cell_widget(adjustment_item)
             self._set_bad_lufs_highlight(row)
             self._adjusted_presets.add(match["patch"])
             self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
@@ -2454,6 +3751,7 @@ class MainWindow(QMainWindow):
             custom_adjustment,
             display_adjustment if custom_adjustment is not None else None,
         )
+        self._refresh_adjustment_cell_widget(adjustment_item)
         self._adjusted_presets.add(match["patch"])
         self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
 
@@ -2554,7 +3852,37 @@ class MainWindow(QMainWindow):
                 adjustment,
                 False,
             )
+            adjustment.setData(RECORDED_OUTPUT_PATH_ROLE, None)
             self._set_adjustment_value(adjustment, "+0", 0)
+
+    def _mark_selected_preset_adjustments_pending(self, row: int) -> None:
+        selected = self.preset_table.item(row, 0)
+        if selected is None or selected.checkState() != Qt.CheckState.Checked:
+            return
+        for column in range(4, self.preset_table.columnCount(), 2):
+            item = self.preset_table.item(row, column)
+            if item is not None:
+                self._set_adjustment_pending(item)
+
+    @staticmethod
+    def _set_adjustment_pending(item: QTableWidgetItem) -> None:
+        table = item.tableWidget()
+        signals_blocked = table.blockSignals(True) if table is not None else False
+        try:
+            item.setText("?")
+            item.setData(ADJUSTMENT_VALUE_ROLE, None)
+            item.setData(RECORDED_OUTPUT_PATH_ROLE, None)
+            item.setToolTip("This selected snapshot has not been measured yet.")
+            font = item.font()
+            font.setBold(False)
+            font.setPointSize(max(QApplication.font().pointSize(), 9))
+            item.setFont(font)
+            item.setForeground(QBrush(QColor("#6b7280")))
+            if table is not None:
+                table.removeCellWidget(item.row(), item.column())
+        finally:
+            if table is not None:
+                table.blockSignals(signals_blocked)
 
     def _set_bad_lufs_highlight(self, row: int) -> None:
         signals_blocked = self.preset_table.blockSignals(True)
@@ -2659,6 +3987,8 @@ class MainWindow(QMainWindow):
         if item.data(PRESET_TABLE_ATTENTION_ROLE):
             item.setData(PRESET_TABLE_ATTENTION_ROLE, None)
             self.preset_table.viewport().update(self.preset_table.visualItemRect(item))
+        if item.column() == 0:
+            self._refresh_preset_measurement_time_estimate()
         if Path(self.input_path.text()).suffix.lower() == ".hlx" and item.column() == 1:
             normalized = item.text().strip().upper()
             if normalized != item.text():
@@ -2944,8 +4274,7 @@ class MainWindow(QMainWindow):
 
     def _preset_table_content_signature(self) -> tuple[tuple[str, ...], ...]:
         return tuple(
-            tuple(self._preset_table_csv_row(row))
-            for row in range(self.preset_table.rowCount())
+            tuple(self._preset_table_csv_row(row)) for row in range(self.preset_table.rowCount())
         )
 
 
@@ -3026,6 +4355,388 @@ class ContentHeightTableWidget(QTableWidget):
             )
         )
         return hint
+
+
+class MeasurementOptimizationSetupDialog(QDialog):
+    def __init__(
+        self,
+        settings: MeasurementOptimizationSettings,
+        preset_label: str,
+        preset_id: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Parameter study setup")
+        self.resize(520, 360)
+        self._parameter_inputs: dict[str, QDoubleSpinBox] = {}
+        self._parameter_pins: dict[str, QCheckBox] = {}
+        self._parameter_input_order: list[QDoubleSpinBox] = []
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        layout.addLayout(form)
+
+        for parameter in TIMING_PARAMETERS:
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+            input_widget = QDoubleSpinBox()
+            input_widget.setRange(0.0, 3600.0)
+            input_widget.setDecimals(6)
+            input_widget.setSingleStep(0.01)
+            input_widget.setSuffix(" s")
+            input_widget.setValue(float(getattr(settings, parameter.name)))
+            input_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self._ignore_return_key_for_spin_box(input_widget)
+            pin_widget = QCheckBox("Pin")
+            pin_widget.setChecked(parameter.name in settings.pinned_parameters)
+            pin_widget.setToolTip(
+                "Use this value as the optimal value and skip optimizing this parameter."
+            )
+            row_layout.addWidget(input_widget)
+            row_layout.addWidget(pin_widget)
+            form.addRow(parameter.label, row_widget)
+            self._parameter_inputs[parameter.name] = input_widget
+            self._parameter_input_order.append(input_widget)
+            self._parameter_pins[parameter.name] = pin_widget
+
+        self.stability_runs = QSpinBox()
+        self.stability_runs.setRange(2, 50)
+        self.stability_runs.setValue(settings.stability_runs)
+        self._ignore_return_key_for_spin_box(self.stability_runs)
+        form.addRow("Stability runs", self.stability_runs)
+
+        self.termination_tolerance = QDoubleSpinBox()
+        self.termination_tolerance.setRange(0.1, 100.0)
+        self.termination_tolerance.setDecimals(1)
+        self.termination_tolerance.setSuffix(" %")
+        self.termination_tolerance.setValue(settings.termination_tolerance)
+        self._ignore_return_key_for_spin_box(self.termination_tolerance)
+        form.addRow("Termination tolerance", self.termination_tolerance)
+
+        self.stability_tolerance = QDoubleSpinBox()
+        self.stability_tolerance.setRange(0.0, 100.0)
+        self.stability_tolerance.setDecimals(3)
+        self.stability_tolerance.setSuffix(" %")
+        self.stability_tolerance.setValue(settings.stability_tolerance)
+        self._ignore_return_key_for_spin_box(self.stability_tolerance)
+        form.addRow("Stability tolerance", self.stability_tolerance)
+
+        self.optimization_preset_hint = QLabel(
+            "Optimization will use preset "
+            f"{preset_label} (preset number {preset_id}). "
+            "Before running it, make sure the matching measurement preset or setlist "
+            "is already loaded on the device. You can save one from the main window "
+            'toolbar with "Save Measurement File".'
+        )
+        self.optimization_preset_hint.setTextFormat(Qt.TextFormat.PlainText)
+        self.optimization_preset_hint.setWordWrap(True)
+        self.optimization_preset_hint.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.optimization_preset_hint.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        layout.addWidget(self.optimization_preset_hint)
+
+        buttons = QDialogButtonBox()
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        self.run_button = buttons.addButton(
+            "Run",
+            QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+        self.run_button.setDefault(True)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _ignore_return_key_for_spin_box(self, spin_box: QAbstractSpinBox) -> None:
+        spin_box.installEventFilter(self)
+        spin_box.lineEdit().installEventFilter(self)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.KeyPress:
+            key = event.key() if isinstance(event, QKeyEvent) else None
+            if key in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
+                if self._focus_next_parameter_input(watched):
+                    return True
+                return True
+        return super().eventFilter(watched, event)
+
+    def _focus_next_parameter_input(self, watched: QObject) -> bool:
+        for index, input_widget in enumerate(self._parameter_input_order[:-1]):
+            if watched not in {input_widget, input_widget.lineEdit()}:
+                continue
+            next_input = self._parameter_input_order[index + 1]
+            next_input.setFocus(Qt.FocusReason.TabFocusReason)
+            next_input.lineEdit().selectAll()
+            return True
+        return False
+
+    def settings(self) -> MeasurementOptimizationSettings:
+        return MeasurementOptimizationSettings(
+            pre_roll=self._parameter_inputs["pre_roll"].value(),
+            post_roll=self._parameter_inputs["post_roll"].value(),
+            round_trip_latency=self._parameter_inputs["round_trip_latency"].value(),
+            preset_wait=self._parameter_inputs["preset_wait"].value(),
+            snapshot_wait=self._parameter_inputs["snapshot_wait"].value(),
+            measurement_wait=self._parameter_inputs["measurement_wait"].value(),
+            stability_runs=self.stability_runs.value(),
+            termination_tolerance=self.termination_tolerance.value(),
+            stability_tolerance=self.stability_tolerance.value(),
+            pinned_parameters=tuple(
+                parameter.name
+                for parameter in TIMING_PARAMETERS
+                if self._parameter_pins[parameter.name].isChecked()
+            ),
+        )
+
+
+class MeasurementOptimizationDialog(QDialog):
+    cancelled = Signal()
+    applied = Signal(str)
+    play_recorded_output_changed = Signal(bool)
+
+    def __init__(
+        self,
+        settings: MeasurementOptimizationSettings | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._finished = False
+        self.setWindowTitle("Determine optimal parameters")
+        self.resize(640, 520)
+        layout = QVBoxLayout(self)
+        toolbar = QToolBar("Measurement", self)
+        toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(18, 18))
+        self.play_recorded_output_button = QToolButton(self)
+        self.play_recorded_output_button.setIcon(_speaker_icon())
+        self.play_recorded_output_button.setCheckable(True)
+        self.play_recorded_output_button.setAutoRaise(True)
+        self.play_recorded_output_button.setIconSize(toolbar.iconSize())
+        button_size = toolbar.iconSize().width() + 14
+        self.play_recorded_output_button.setFixedSize(button_size, button_size)
+        self.play_recorded_output_button.setToolTip(
+            "Play measured processor output through the computer speakers after each recording."
+        )
+        self.play_recorded_output_button.toggled.connect(self.play_recorded_output_changed)
+        toolbar.addWidget(self.play_recorded_output_button)
+        layout.addWidget(toolbar)
+        self.status = QLabel("Starting parameter study...")
+        self.status.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Parameter", "Value", "Status", "Latest stats"])
+        self.table.verticalHeader().hide()
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        self.table.setColumnWidth(3, 900)
+        layout.addWidget(self.table)
+        self.runtime_notice = QLabel(
+            _optimization_duration_estimate(settings)
+            if settings is not None
+            else "Parameter optimization is running and can take some time. Actual duration "
+            "depends on the parameters and can be shorter."
+        )
+        self.runtime_notice.setWordWrap(True)
+        self.runtime_notice.setTextFormat(Qt.TextFormat.RichText)
+        self.runtime_notice.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.runtime_notice.setStyleSheet(
+            "QLabel {"
+            "background: #eff6ff;"
+            "border: 1px solid #3b82f6;"
+            "border-radius: 6px;"
+            "padding: 10px;"
+            "color: #1d4ed8;"
+            "}"
+        )
+        layout.addWidget(self.runtime_notice)
+        self.info = QLabel("Apply the optimized timing values or copy the TOML snippet.")
+        self.info.setWordWrap(True)
+        layout.addWidget(self.info)
+        self.result = QTextEdit()
+        self.result.setReadOnly(False)
+        self.result.setAcceptRichText(False)
+        self.result.setPlaceholderText("Optimized TOML values will appear here.")
+        layout.addWidget(self.result)
+        buttons = QDialogButtonBox()
+        self.action_button = buttons.addButton(
+            "Abort",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.cancel_button = self.action_button
+        self.apply_button = buttons.addButton(
+            "Apply",
+            QDialogButtonBox.ButtonRole.ApplyRole,
+        )
+        self.apply_button.setEnabled(False)
+        self.action_button.clicked.connect(self._request_action)
+        self.apply_button.clicked.connect(self._apply_result)
+        layout.addWidget(buttons)
+
+    def set_play_recorded_output(self, checked: bool) -> None:
+        self.play_recorded_output_button.setChecked(checked)
+
+    def update_progress(self, event: OptimizationProgress) -> None:
+        self.set_status(event.message)
+        for result in event.results:
+            self._set_result_row(
+                result.parameter.label,
+                f"{result.value:.6g}",
+                "Stable" if result.stable else "Unstable at optimization start",
+                _statistics_text(result.statistics),
+            )
+        if event.parameter is not None:
+            status = "Scanning"
+            if event.stable is not None:
+                status = "Stable" if event.stable else "Unstable"
+            value = "" if event.candidate is None else f"{event.candidate:.6g}"
+            self._set_result_row(
+                _parameter_label(event.parameter),
+                value,
+                status,
+                _statistics_text(event.statistics),
+            )
+        if event.result_toml is not None:
+            self.set_result(event.result_toml)
+
+    def set_result(self, toml_text: str) -> None:
+        self.result.setPlainText(toml_text)
+        self.apply_button.setEnabled(bool(toml_text.strip()))
+        self.set_status("Parameter study completed.")
+        self.set_finished()
+
+    def set_status(self, text: str) -> None:
+        self.status.setText(text)
+
+    def set_finished(self) -> None:
+        self._finished = True
+        self.action_button.setText("Close")
+        self.action_button.setEnabled(True)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._finished:
+            if self._confirm_close():
+                super().closeEvent(event)
+                return
+        elif self._confirm_abort():
+            self._abort()
+            event.accept()
+            return
+        event.ignore()
+
+    def _request_action(self) -> None:
+        if self._finished:
+            self.close()
+        elif self._confirm_abort():
+            self._abort()
+
+    def _apply_result(self) -> None:
+        self.applied.emit(self.result.toPlainText())
+
+    def _abort(self) -> None:
+        self.action_button.setEnabled(False)
+        self.set_status("Cancelling parameter study...")
+        self.cancelled.emit()
+        self.accept()
+
+    def _confirm_abort(self) -> bool:
+        answer = QMessageBox.question(
+            self,
+            "Abort parameter study",
+            "A parameter optimization is currently running. Do you want to abort it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _confirm_close(self) -> bool:
+        answer = QMessageBox.question(
+            self,
+            "Close parameter study",
+            "Do you really want to close the parameter optimization window?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _set_result_row(self, parameter: str, value: str, status: str, statistics: str) -> None:
+        row = self._row_for_parameter(parameter)
+        for column, text in enumerate((parameter, value, status, statistics)):
+            item = self.table.item(row, column)
+            if item is None:
+                item = QTableWidgetItem()
+                self.table.setItem(row, column, item)
+            item.setText(text)
+
+    def _row_for_parameter(self, parameter: str) -> int:
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is not None and item.text() == parameter:
+                return row
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        return row
+
+
+def _parameter_label(name: str) -> str:
+    labels = {
+        "analysis_window": "Analysis window",
+        "analysis_interval": "Analysis interval",
+        "pre_roll": "Pre-roll",
+        "post_roll": "Post-roll",
+        "round_trip_latency": "Round-trip latency",
+        "preset_wait": "Preset wait",
+        "snapshot_wait": "Snapshot wait",
+        "measurement_wait": "Measurement wait",
+    }
+    return labels.get(name, name)
+
+
+def _statistics_text(statistics: StabilityStatistics | None) -> str:
+    if statistics is None:
+        return ""
+    return (
+        f"tol {statistics.tolerance_percent:.3g}%; "
+        f"S1 LUFS mean {statistics.snapshot1_lufs_mean:.3f}, "
+        f"std {statistics.snapshot1_lufs_std:.4f}, "
+        f"maxdev {statistics.snapshot1_lufs_max_deviation:.4f} <= "
+        f"{statistics.snapshot1_lufs_tolerance:.4f}; "
+        f"S1 crest mean {statistics.snapshot1_crest_mean:.3f}, "
+        f"std {statistics.snapshot1_crest_std:.4f}, "
+        f"maxdev {statistics.snapshot1_crest_max_deviation:.4f} <= "
+        f"{statistics.snapshot1_crest_tolerance:.4f}; "
+        f"S2 LUFS mean {statistics.snapshot2_lufs_mean:.3f}, "
+        f"std {statistics.snapshot2_lufs_std:.4f}, "
+        f"maxdev {statistics.snapshot2_lufs_max_deviation:.4f} <= "
+        f"{statistics.snapshot2_lufs_tolerance:.4f}; "
+        f"S2 crest mean {statistics.snapshot2_crest_mean:.3f}, "
+        f"std {statistics.snapshot2_crest_std:.4f}, "
+        f"maxdev {statistics.snapshot2_crest_max_deviation:.4f} <= "
+        f"{statistics.snapshot2_crest_tolerance:.4f}"
+    )
 
 
 class LoudnessBar(QProgressBar):
@@ -3140,6 +4851,16 @@ def _format_adjustment(value: float) -> str:
     return "0" if value == 0 else f"{value:+g}"
 
 
+def _custom_adjustment_label_text(text: str) -> str:
+    match = re.fullmatch(r"(?P<display>.*) (?P<custom>\([^)]+\))", text)
+    if match is None:
+        return escape(text)
+    return (
+        f"{escape(match['display'])} "
+        f"<span style='color: {CUSTOM_ADJUSTMENT_COLOR};'>{escape(match['custom'])}</span>"
+    )
+
+
 def _parse_adjustment_display_text(text: str) -> float:
     parts = text.strip().split(" ", 1)
     value = float(parts[0])
@@ -3168,6 +4889,33 @@ def _path_row(field: QLineEdit, *buttons: QPushButton) -> QWidget:
     for button in buttons:
         layout.addWidget(button)
     return widget
+
+
+def _append_optional_argument(argv: list[str], name: str, value: object) -> None:
+    text = "" if value is None else str(value).strip()
+    if text and text != "None":
+        argv.extend([name, text])
+
+
+def _nested_config_value(config: dict[str, Any], path: tuple[str, ...]) -> object | None:
+    value: object = config
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def _parse_config_channel_mapping(value: object) -> tuple[int, int]:
+    if isinstance(value, str):
+        parsed = [int(item.strip()) for item in value.split(",") if item.strip()]
+    elif isinstance(value, (list, tuple)):
+        parsed = [item for item in value if isinstance(item, int)]
+    else:
+        raise ValueError("Channel mapping must contain two positive IDs")
+    if len(parsed) != 2:
+        raise ValueError("Channel mapping must contain two positive IDs")
+    return parsed[0], parsed[1]
 
 
 def _label(text: str, tooltip: str) -> QLabel:

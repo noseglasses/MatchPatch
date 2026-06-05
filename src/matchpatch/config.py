@@ -85,6 +85,11 @@ def default_config() -> Config:
             "post_roll_seconds": 0.1,
             "round_trip_latency_seconds": 0.02,
         },
+        "measurement": {
+            "stability_runs": 3,
+            "termination_tolerance_percent": 10.0,
+            "stability_tolerance_percent": 2.0,
+        },
         "policy": {
             "measured_snapshots": policy.snapshot_count,
             "solo_regex": policy.solo_regex,
@@ -123,9 +128,13 @@ def default_config() -> Config:
 
 
 def export_default_config(path: str | Path) -> Path:
+    return export_config(path, default_config())
+
+
+def export_config(path: str | Path, config: Config) -> Path:
     config_path = Path(path).expanduser()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(_toml_document(default_config()), encoding="utf-8")
+    config_path.write_text(_toml_document(config), encoding="utf-8")
     return config_path
 
 

@@ -7,6 +7,7 @@ import shutil
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 
 from matchpatch.analysis import AnalysisOptions
@@ -69,6 +70,10 @@ class NormalizationRequest:
     post_roll: float | None = None
     round_trip_latency: float | None = None
     simulate_fail_presets: str | None = None
+    play_recorded_output: bool = False
+    record_device_output: bool = False
+    playback_toggle_path: Path | None = None
+    recorded_output_dir: Path | None = None
     policy: NormalizationPolicy = NormalizationPolicy()
     analysis_options: AnalysisOptions = AnalysisOptions()
 
@@ -164,6 +169,11 @@ def normalize_presets(
 
     try:
         csv_path = temp_dir / "lufs_analysis.csv"
+        analysis_request = (
+            request
+            if not request.record_device_output or request.recorded_output_dir is not None
+            else dataclass_replace(request, recorded_output_dir=temp_dir / "recordings")
+        )
         _emit(
             on_progress,
             ProgressEvent(
@@ -174,7 +184,7 @@ def normalize_presets(
                 snapshot_total=request.policy.snapshot_count,
             ),
         )
-        run_analysis(request, preset_ids, csv_path, on_progress)
+        run_analysis(analysis_request, preset_ids, csv_path, on_progress)
 
         measured_rows = _count_csv_rows(csv_path)
 

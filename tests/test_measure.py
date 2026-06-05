@@ -30,12 +30,14 @@ from matchpatch.measure import (
     main,
     measure,
     measure_presets,
+    optimize_measurement_timing,
     parse_args,
     parse_channel_mapping,
     parse_int_list,
     resolve_audio_config,
     resolve_steering_options,
 )
+from matchpatch.measurement_optimizer import TIMING_PARAMETERS, ParameterOptimizationResult
 
 
 def test_loopback_backend_writes_compatible_csv(tmp_path) -> None:
@@ -95,6 +97,39 @@ def test_measure_presets_emits_structured_progress(tmp_path) -> None:
     assert events[4].snapshot == 1
     assert events[4].reference_lufs == events[1].reference_lufs
     assert events[4].lufs is not None
+
+
+def test_measure_presets_can_save_and_play_recorded_snapshots(monkeypatch, tmp_path) -> None:
+    sample_rate = 48000
+    reference = np.ones((sample_rate * 4, 2), dtype=np.float32) * 0.1
+    played = []
+    events = []
+
+    monkeypatch.setattr("matchpatch.measure._play_audio", lambda audio, rate: played.append((audio, rate)))
+
+    measure_presets(
+        get_device_profile("helix"),
+        [1],
+        tmp_path / "recorded.csv",
+        reference,
+        sample_rate,
+        LoopbackBackend(),
+        snapshot_count=1,
+        on_progress=events.append,
+        log_output=False,
+        play_recorded_output=True,
+        recorded_output_dir=tmp_path / "recordings",
+    )
+
+    recorded_path = tmp_path / "recordings" / "01A_snapshot_1.wav"
+    assert recorded_path.is_file()
+    assert [event.kind for event in events if event.kind == "snapshot_recorded"] == [
+        "snapshot_recorded"
+    ]
+    assert events[4].path == str(recorded_path)
+    assert len(played) == 1
+    assert played[0][0] == pytest.approx(reference)
+    assert played[0][1] == sample_rate
 
 
 class FakePatchFileHandler(PatchFileHandler):
@@ -501,10 +536,9 @@ def test_check_hardware_validates_audio_and_midi_presence(monkeypatch) -> None:
         "matchpatch.audio",
         SimpleNamespace(
             AudioConfig=lambda **kwargs: SimpleNamespace(**kwargs),
-            validate_audio_device_available=lambda config: calls.append(
-                ("validated", config.device)
-            )
-            or config,
+            validate_audio_device_available=lambda config: (
+                calls.append(("validated", config.device)) or config
+            ),
         ),
     )
     monkeypatch.setitem(
@@ -532,6 +566,55 @@ def fake_sounddevice():
         query_hostapis=lambda index=None: apis if index is None else apis[index],
         query_devices=lambda: devices,
     )
+
+
+def test_optimize_measurement_timing_pins_parameters(monkeypatch, capsys) -> None:
+    calls = []
+    monkeypatch.setattr("matchpatch.measure.load_reference_audio", lambda path, rate: "reference")
+
+    def fake_optimize(*args, **kwargs):
+        calls.append(kwargs["parameters"])
+        parameter = next(item for item in TIMING_PARAMETERS if item.name == "measurement_wait")
+        return (ParameterOptimizationResult(parameter, 0.08, True, 2),)
+
+    monkeypatch.setattr("matchpatch.measure.optimize_timing_parameters", fake_optimize)
+
+    optimize_measurement_timing(
+        SimpleNamespace(
+            device="helix",
+            backend="loopback",
+            preset_id=1,
+            alternate_preset_id=None,
+            reference_di="reference.wav",
+            sample_rate=None,
+            input_mapping=None,
+            output_mapping=None,
+            simulate_fail_presets=[],
+            stability_runs=3,
+            termination_tolerance=10.0,
+            stability_tolerance=2.0,
+            pinned_parameter=["pre_roll", "preset_wait"],
+            pre_roll=0.3,
+            post_roll=0.1,
+            round_trip_latency=0.02,
+            preset_wait=0.6,
+            snapshot_wait=0.2,
+            measurement_wait=0.1,
+            analysis_options=SimpleNamespace(
+                window_seconds=3.0,
+                interval_seconds=0.1,
+                minimum_valid_lufs=-100.0,
+            ),
+        )
+    )
+
+    output = capsys.readouterr().out
+    optimized_names = {parameter.name for parameter in calls[0]}
+    assert "pre_roll" not in optimized_names
+    assert "preset_wait" not in optimized_names
+    assert "pre_roll_seconds = 0.3" in output
+    assert "preset_wait_seconds = 0.6" in output
+    assert "measurement_wait_seconds = 0.08" in output
 
 
 def test_list_devices_prints_audio_and_midi(monkeypatch, capsys) -> None:
@@ -616,6 +699,9 @@ window_seconds = 1.5
 pre_roll_seconds = 1.5
 post_roll_seconds = 2.0
 round_trip_latency_seconds = 0.03
+
+[measurement]
+stability_tolerance_percent = 0.25
 """,
         encoding="utf-8",
     )
@@ -641,13 +727,22 @@ round_trip_latency_seconds = 0.03
     args = parse_args()
 
     assert args.backend == "loopback"
+    assert args.audio_device == "Helix"
+    assert args.sample_rate == 48000
     assert args.input_mapping == (3, 4)
+    assert args.output_mapping == (3, 4)
     assert args.blocksize == 64
+    assert args.steering_output == "Helix"
+    assert args.steering_channel == 0
+    assert args.preset_wait == 0.5
+    assert args.snapshot_wait == 0.2
+    assert args.measurement_wait == 0.1
     assert args.snapshot_count == 2
     assert args.analysis_options.window_seconds == 1.5
     assert args.pre_roll == 1.5
     assert args.post_roll == 2.0
     assert args.round_trip_latency == 0.03
+    assert args.stability_tolerance == 0.25
 
 
 def test_worker_parse_args_rejects_invalid_snapshot_count(monkeypatch) -> None:

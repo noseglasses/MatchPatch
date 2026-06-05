@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 import soundfile as sf
@@ -29,6 +31,14 @@ from matchpatch.devices.base import (
     SteeringOptions,
     validate_snapshot_count,
 )
+from matchpatch.measurement_optimizer import (
+    TIMING_PARAMETERS,
+    OptimizationProgress,
+    ParameterOptimizationResult,
+    alternate_preset_id,
+    optimization_results_toml,
+    optimize_timing_parameters,
+)
 from matchpatch.progress import ProgressEvent
 
 if TYPE_CHECKING:
@@ -41,6 +51,9 @@ class MeasurementBackend(Protocol):
     def reapply_snapshot(self, snapshot: int) -> None: ...
 
     def record(self, reference_audio: np.ndarray) -> np.ndarray: ...
+
+
+PlaybackEnabled = Callable[[], bool]
 
 
 class HardwareBackend:
@@ -224,6 +237,8 @@ def measure_presets(
     analysis_options: AnalysisOptions = AnalysisOptions(),
     on_progress: Callable[[ProgressEvent], None] | None = None,
     log_output: bool = True,
+    play_recorded_output: bool | PlaybackEnabled = False,
+    recorded_output_dir: Path | None = None,
 ) -> None:
     measured_snapshots = (
         snapshot_count if snapshot_count is not None else getattr(profile, "snapshot_count", 4)
@@ -280,7 +295,31 @@ def measure_presets(
                         ),
                     )
                     backend.reapply_snapshot(snapshot)
-                    values = analyze_audio(backend.record(reference), sample_rate, analysis_options)
+                    recorded = backend.record(reference)
+                    recorded_path = _recorded_output_path(
+                        recorded_output_dir,
+                        device_patch,
+                        snapshot,
+                    )
+                    if recorded_path is not None:
+                        recorded_path.parent.mkdir(parents=True, exist_ok=True)
+                        sf.write(recorded_path, recorded, sample_rate)
+                        _emit_progress(
+                            on_progress,
+                            ProgressEvent(
+                                "snapshot_recorded",
+                                preset_id=preset_id,
+                                device_patch=device_patch,
+                                preset_index=preset_index,
+                                preset_total=len(preset_ids),
+                                snapshot=snapshot,
+                                snapshot_total=measured_snapshots,
+                                path=str(recorded_path),
+                            ),
+                        )
+                    if _playback_enabled(play_recorded_output):
+                        _play_audio(recorded, sample_rate)
+                    values = analyze_audio(recorded, sample_rate, analysis_options)
                     results.append(
                         (
                             values.short_term_lufs,
@@ -350,6 +389,66 @@ def measure_presets(
             csv_file.flush()
 
     _emit_progress(on_progress, ProgressEvent("measurement_completed"))
+
+
+def _recorded_output_path(
+    recorded_output_dir: Path | None,
+    device_patch: str,
+    snapshot: int,
+) -> Path | None:
+    if recorded_output_dir is None:
+        return None
+    safe_patch = re.sub(r"[^A-Za-z0-9_-]+", "_", device_patch).strip("_") or "preset"
+    return recorded_output_dir / f"{safe_patch}_snapshot_{snapshot}.wav"
+
+
+def _playback_enabled(value: bool | PlaybackEnabled) -> bool:
+    return value() if callable(value) else bool(value)
+
+
+def _play_audio(audio: np.ndarray, sample_rate: int) -> None:
+    from matchpatch.audio import play_audio
+
+    play_audio(audio, sample_rate)
+
+
+def _playback_toggle(path: str | None, fallback: bool = False) -> PlaybackEnabled:
+    if not path:
+        return lambda: fallback
+
+    toggle_path = Path(path)
+
+    def enabled() -> bool:
+        try:
+            return toggle_path.read_text(encoding="utf-8").strip() in {"1", "true", "yes", "on"}
+        except OSError:
+            return fallback
+
+    return enabled
+
+
+class PlaybackBackend:
+    def __init__(
+        self,
+        backend: MeasurementBackend,
+        sample_rate: int,
+        play_recorded_output: bool | PlaybackEnabled,
+    ) -> None:
+        self.backend = backend
+        self.sample_rate = sample_rate
+        self.play_recorded_output = play_recorded_output
+
+    def activate_preset(self, preset_id: int) -> None:
+        self.backend.activate_preset(preset_id)
+
+    def reapply_snapshot(self, snapshot: int) -> None:
+        self.backend.reapply_snapshot(snapshot)
+
+    def record(self, reference_audio: np.ndarray) -> np.ndarray:
+        recorded = self.backend.record(reference_audio)
+        if _playback_enabled(self.play_recorded_output):
+            _play_audio(recorded, self.sample_rate)
+        return recorded
 
 
 def _emit_progress(
@@ -435,6 +534,13 @@ def measure(args: argparse.Namespace) -> None:
     )
     analysis_options = getattr(args, "analysis_options", AnalysisOptions())
     log_output = not getattr(args, "progress_jsonl", False)
+    play_recorded_output = _playback_toggle(
+        getattr(args, "playback_toggle_file", None),
+        getattr(args, "play_recorded_output", False),
+    )
+    recorded_output_dir = (
+        Path(args.recordings_dir) if getattr(args, "recordings_dir", None) else None
+    )
 
     if args.backend == "loopback":
         measure_presets(
@@ -448,6 +554,8 @@ def measure(args: argparse.Namespace) -> None:
             analysis_options=analysis_options,
             on_progress=on_progress,
             log_output=log_output,
+            play_recorded_output=play_recorded_output,
+            recorded_output_dir=recorded_output_dir,
         )
         return
 
@@ -469,6 +577,8 @@ def measure(args: argparse.Namespace) -> None:
             analysis_options=analysis_options,
             on_progress=on_progress,
             log_output=log_output,
+            play_recorded_output=play_recorded_output,
+            recorded_output_dir=recorded_output_dir,
         )
         return
 
@@ -503,7 +613,165 @@ def measure(args: argparse.Namespace) -> None:
             analysis_options=analysis_options,
             on_progress=on_progress,
             log_output=log_output,
+            play_recorded_output=play_recorded_output,
+            recorded_output_dir=recorded_output_dir,
         )
+
+
+def optimize_measurement_timing(args: argparse.Namespace) -> None:
+    profile = get_device_profile(args.device)
+    defaults = profile.default_audio_routing()
+    sample_rate = args.sample_rate if args.sample_rate is not None else defaults.sample_rate
+    reference = load_reference_audio(Path(args.reference_di), sample_rate)
+    initial_values = _timing_values(args)
+    valid_parameter_names = {parameter.name for parameter in TIMING_PARAMETERS}
+    pinned_names = tuple(dict.fromkeys(getattr(args, "pinned_parameter", ())))
+    invalid_pins = sorted(set(pinned_names) - valid_parameter_names)
+    if invalid_pins:
+        raise ValueError(f"Unknown pinned timing parameter: {', '.join(invalid_pins)}")
+    pinned_parameters = tuple(
+        parameter for parameter in TIMING_PARAMETERS if parameter.name in pinned_names
+    )
+    optimization_parameters = tuple(
+        parameter for parameter in TIMING_PARAMETERS if parameter.name not in pinned_names
+    )
+    pinned_results = tuple(
+        ParameterOptimizationResult(parameter, initial_values[parameter.name], True, 0)
+        for parameter in pinned_parameters
+    )
+    alternate_id = (
+        args.alternate_preset_id
+        if args.alternate_preset_id is not None
+        else alternate_preset_id(args.preset_id)
+    )
+
+    on_progress = getattr(args, "on_optimization_progress", None)
+    analysis_options = getattr(args, "analysis_options", AnalysisOptions())
+    play_recorded_output = _playback_toggle(
+        getattr(args, "playback_toggle_file", None),
+        getattr(args, "play_recorded_output", False),
+    )
+
+    if args.backend == "loopback":
+        results = optimize_timing_parameters(
+            profile,
+            args.preset_id,
+            alternate_id,
+            reference,
+            sample_rate,
+            lambda values: PlaybackBackend(LoopbackBackend(), sample_rate, play_recorded_output),
+            initial_values,
+            analysis_options,
+            stability_runs=args.stability_runs,
+            termination_tolerance_percent=args.termination_tolerance,
+            stability_tolerance_percent=args.stability_tolerance,
+            on_progress=on_progress,
+            parameters=optimization_parameters,
+        )
+    elif args.backend == "simulated":
+        results = optimize_timing_parameters(
+            profile,
+            args.preset_id,
+            alternate_id,
+            reference,
+            sample_rate,
+            lambda values: PlaybackBackend(
+                SimulatedHardwareBackend(
+                    defaults,
+                    max(2, getattr(profile, "snapshot_count", 4)),
+                    args.input_mapping,
+                    args.output_mapping,
+                    frozenset(args.simulate_fail_presets),
+                ),
+                sample_rate,
+                play_recorded_output,
+            ),
+            initial_values,
+            analysis_options,
+            stability_runs=args.stability_runs,
+            termination_tolerance_percent=args.termination_tolerance,
+            stability_tolerance_percent=args.stability_tolerance,
+            on_progress=on_progress,
+            parameters=optimization_parameters,
+        )
+    else:
+        from matchpatch.audio import prepare_audio_config
+
+        audio_config = prepare_audio_config(resolve_audio_config(args, profile))
+        steering_options = resolve_steering_options(args, profile)
+
+        with profile.create_controller(steering_options) as controller:
+
+            def hardware_backend(values: dict[str, float]) -> PlaybackBackend:
+                if hasattr(controller, "options"):
+                    controller_any: Any = controller
+                    controller_any.options = replace(
+                        steering_options,
+                        preset_wait_seconds=values["preset_wait"],
+                        snapshot_wait_seconds=values["snapshot_wait"],
+                    )
+                return PlaybackBackend(
+                    HardwareBackend(
+                        replace(
+                            audio_config,
+                            pre_roll_seconds=values["pre_roll"],
+                            post_roll_seconds=values["post_roll"],
+                            round_trip_latency_seconds=values["round_trip_latency"],
+                        ),
+                        controller,
+                        values["measurement_wait"],
+                    ),
+                    sample_rate,
+                    play_recorded_output,
+                )
+
+            results = optimize_timing_parameters(
+                profile,
+                args.preset_id,
+                alternate_id,
+                reference,
+                sample_rate,
+                hardware_backend,
+                initial_values,
+                analysis_options,
+                stability_runs=args.stability_runs,
+                termination_tolerance_percent=args.termination_tolerance,
+                stability_tolerance_percent=args.stability_tolerance,
+                on_progress=on_progress,
+                parameters=optimization_parameters,
+            )
+
+    result_by_name = {result.parameter.name: result for result in (*pinned_results, *results)}
+    results = tuple(
+        result_by_name[parameter.name]
+        for parameter in TIMING_PARAMETERS
+        if parameter.name in result_by_name
+    )
+    toml_text = optimization_results_toml(args.device, results)
+    if on_progress is not None:
+        on_progress(
+            OptimizationProgress(
+                "completed",
+                "Timing optimization completed",
+                result_toml=toml_text,
+                results=results,
+            )
+        )
+    else:
+        print(toml_text, flush=True)
+
+
+def _timing_values(args: argparse.Namespace) -> dict[str, float]:
+    return {
+        "analysis_window": args.analysis_options.window_seconds,
+        "analysis_interval": args.analysis_options.interval_seconds,
+        "pre_roll": args.pre_roll,
+        "post_roll": args.post_roll,
+        "round_trip_latency": args.round_trip_latency,
+        "preset_wait": args.preset_wait,
+        "snapshot_wait": args.snapshot_wait,
+        "measurement_wait": args.measurement_wait,
+    }
 
 
 def check_hardware(args: argparse.Namespace) -> None:
@@ -583,28 +851,29 @@ def add_hardware_arguments(parser: argparse.ArgumentParser) -> None:
 def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     config = load_config(args.config)
     profile = get_device_profile(args.device)
+    default_audio = profile.default_audio_routing()
+    default_steering = profile.default_steering_options()
     device_audio = ("devices", args.device, "audio")
     device_steering = ("devices", args.device, "steering")
-    args.backend = (
-        getattr(args, "backend", None)
-        or config_value(config, "normalize", "backend", default="hardware")
+    args.backend = getattr(args, "backend", None) or config_value(
+        config, "normalize", "backend", default="hardware"
     )
     args.audio_device = (
         args.audio_device
         if args.audio_device is not None
-        else config_value(config, *device_audio, "device")
+        else config_value(config, *device_audio, "device", default=default_audio.device)
     )
     args.sample_rate = (
         args.sample_rate
         if args.sample_rate is not None
-        else config_value(config, *device_audio, "sample_rate")
+        else config_value(config, *device_audio, "sample_rate", default=default_audio.sample_rate)
     )
 
     for name in ("input_mapping", "output_mapping"):
         value = getattr(args, name)
 
         if value is None:
-            value = config_value(config, *device_audio, name)
+            value = config_value(config, *device_audio, name, default=getattr(default_audio, name))
 
         if value is not None:
             setattr(args, name, parse_config_mapping(value))
@@ -617,27 +886,42 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     args.steering_output = (
         args.steering_output
         if args.steering_output is not None
-        else config_value(config, *device_steering, "output")
+        else config_value(config, *device_steering, "output", default=default_steering.output)
     )
     args.steering_channel = (
         args.steering_channel
         if args.steering_channel is not None
-        else config_value(config, *device_steering, "channel")
+        else config_value(config, *device_steering, "channel", default=default_steering.channel)
     )
     args.preset_wait = (
         args.preset_wait
         if args.preset_wait is not None
-        else config_value(config, *device_steering, "preset_wait_seconds")
+        else config_value(
+            config,
+            *device_steering,
+            "preset_wait_seconds",
+            default=default_steering.preset_wait_seconds,
+        )
     )
     args.snapshot_wait = (
         args.snapshot_wait
         if args.snapshot_wait is not None
-        else config_value(config, *device_steering, "snapshot_wait_seconds")
+        else config_value(
+            config,
+            *device_steering,
+            "snapshot_wait_seconds",
+            default=default_steering.snapshot_wait_seconds,
+        )
     )
     args.measurement_wait = (
         args.measurement_wait
         if args.measurement_wait is not None
-        else config_value(config, *device_steering, "measurement_wait_seconds")
+        else config_value(
+            config,
+            *device_steering,
+            "measurement_wait_seconds",
+            default=default_steering.measurement_wait_seconds,
+        )
     )
     args.pre_roll = (
         getattr(args, "pre_roll", None)
@@ -658,6 +942,11 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
         getattr(args, "snapshot_count", None)
         if getattr(args, "snapshot_count", None) is not None
         else config_value(config, "policy", "measured_snapshots")
+    )
+    args.stability_tolerance = (
+        getattr(args, "stability_tolerance", None)
+        if getattr(args, "stability_tolerance", None) is not None
+        else config_value(config, "measurement", "stability_tolerance_percent", default=2.0)
     )
 
     if args.snapshot_count is not None:
@@ -723,11 +1012,53 @@ def parse_args() -> argparse.Namespace:
     measure_parser.add_argument("--pre-roll", type=float)
     measure_parser.add_argument("--post-roll", type=float)
     measure_parser.add_argument("--round-trip-latency", type=float)
+    measure_parser.add_argument("--play-recorded-output", action="store_true")
+    measure_parser.add_argument("--playback-toggle-file")
+    measure_parser.add_argument("--recordings-dir")
     measure_parser.add_argument("--progress-jsonl", action="store_true")
     add_hardware_arguments(measure_parser)
 
+    optimize_parser = subparsers.add_parser(
+        "optimize",
+        help="Determine stable lower bounds for measurement timing parameters",
+    )
+    optimize_parser.add_argument("--device", required=True)
+    optimize_parser.add_argument("--config", help="TOML configuration file")
+    optimize_parser.add_argument("--preset-id", type=int, required=True)
+    optimize_parser.add_argument("--alternate-preset-id", type=int)
+    optimize_parser.add_argument("--reference-di", required=True)
+    optimize_parser.add_argument(
+        "--backend",
+        choices=["hardware", "loopback", "simulated", "helix"],
+    )
+    optimize_parser.add_argument("--stability-runs", type=int, default=3)
+    optimize_parser.add_argument("--termination-tolerance", type=float, default=10.0)
+    optimize_parser.add_argument("--stability-tolerance", type=float)
+    optimize_parser.add_argument(
+        "--pinned-parameter",
+        action="append",
+        default=[],
+        help="Timing parameter to keep fixed at its configured value during optimization",
+    )
+    optimize_parser.add_argument(
+        "--simulate-fail-presets",
+        type=parse_int_list,
+        default=[],
+        help="Comma-separated numeric preset IDs that fail in simulated mode",
+    )
+    optimize_parser.add_argument("--analysis-window", type=float)
+    optimize_parser.add_argument("--analysis-interval", type=float)
+    optimize_parser.add_argument("--minimum-valid-lufs", type=float)
+    optimize_parser.add_argument("--pre-roll", type=float)
+    optimize_parser.add_argument("--post-roll", type=float)
+    optimize_parser.add_argument("--round-trip-latency", type=float)
+    optimize_parser.add_argument("--play-recorded-output", action="store_true")
+    optimize_parser.add_argument("--playback-toggle-file")
+    optimize_parser.add_argument("--progress-jsonl", action="store_true")
+    add_hardware_arguments(optimize_parser)
+
     args = parser.parse_args()
-    return apply_config(args) if args.command in {"check-hardware", "measure"} else args
+    return apply_config(args) if args.command in {"check-hardware", "measure", "optimize"} else args
 
 
 def main() -> None:
@@ -743,12 +1074,18 @@ def main() -> None:
             raise SystemExit(1) from None
         else:
             print("Hardware available")
-    else:
+    elif args.command == "measure":
         if args.backend == "helix":
             args.backend = "hardware"
         if getattr(args, "progress_jsonl", False):
             args.on_progress = lambda event: print(event.to_json(), flush=True)
         measure(args)
+    else:
+        if args.backend == "helix":
+            args.backend = "hardware"
+        if getattr(args, "progress_jsonl", False):
+            args.on_optimization_progress = lambda event: print(event.to_json(), flush=True)
+        optimize_measurement_timing(args)
 
 
 if __name__ == "__main__":  # pragma: no cover - module entry point

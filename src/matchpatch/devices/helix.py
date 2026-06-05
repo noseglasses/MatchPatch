@@ -370,6 +370,10 @@ class HelixDeviceProfile(DeviceProfile):
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
         return HelixPatchFileHandler(project_dir)
 
+    def format_patch_id(self, preset_id: int) -> str:
+        zero_based = preset_id - 1
+        return f"{zero_based // 4 + 1:02d}{'ABCD'[zero_based % 4]}"
+
     def default_audio_routing(self) -> AudioRouting:
         return AudioRouting(
             device="Helix",

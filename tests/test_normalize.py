@@ -260,6 +260,18 @@ def test_apply_config_cli_snapshot_count_overrides_toml(tmp_path) -> None:
     assert args.policy.snapshot_count == 6
 
 
+def test_apply_config_uses_device_timing_defaults_when_config_is_silent() -> None:
+    args = normalize.apply_config(normalize.parse_args(["--device", "helix", "-i", "input.hls"]))
+
+    assert args.audio_device == "Helix"
+    assert args.sample_rate == 48000
+    assert args.input_mapping == "1,2"
+    assert args.output_mapping == "3,4"
+    assert args.preset_wait == 0.5
+    assert args.snapshot_wait == 0.2
+    assert args.measurement_wait == 0.1
+
+
 def test_apply_config_rejects_snapshot_count_above_device_limit() -> None:
     with pytest.raises(ValueError, match="must not exceed 8"):
         normalize.apply_config(
@@ -332,6 +344,73 @@ def test_run_windows_analysis_builds_worker_command(tmp_path, monkeypatch) -> No
     assert timeout == 12.0
 
 
+def test_run_windows_optimization_builds_pinned_parameter_command(tmp_path, monkeypatch) -> None:
+    windows_python = tmp_path / "python.exe"
+    windows_python.touch()
+    reference = tmp_path / "reference.wav"
+    args = argparse.Namespace(
+        windows_python=str(windows_python),
+        device="helix",
+        backend="loopback",
+        reference_di=str(reference),
+        audio_device=None,
+        steering_output=None,
+        steering_channel=None,
+        sample_rate=None,
+        input_mapping=None,
+        output_mapping=None,
+        simulate_fail_presets=None,
+        blocksize=None,
+        preset_wait=0.5,
+        snapshot_wait=0.2,
+        measurement_wait=0.1,
+        pre_roll=0.2,
+        post_roll=0.1,
+        round_trip_latency=0.02,
+        analysis_options=normalize.AnalysisOptions(),
+        timeout=12.0,
+    )
+    calls = []
+
+    class Completed:
+        stdout = "done\n"
+
+    monkeypatch.setattr(normalize, "wsl_path_to_windows", lambda path: f"WIN:{path.name}")
+    monkeypatch.setattr(
+        normalize.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs)) or Completed(),
+    )
+
+    result = normalize.run_windows_optimization(
+        args,
+        7,
+        stability_runs=4,
+        termination_tolerance=12.5,
+        stability_tolerance=0.25,
+        pinned_parameters=("pre_roll", "measurement_wait"),
+    )
+
+    command, kwargs = calls[0]
+    assert result == "done"
+    assert command[:5] == [
+        str(windows_python.resolve()),
+        "-m",
+        "matchpatch.measure",
+        "optimize",
+        "--device",
+    ]
+    assert command[command.index("--preset-id") : command.index("--preset-id") + 2] == [
+        "--preset-id",
+        "7",
+    ]
+    assert command.count("--pinned-parameter") == 2
+    assert command[
+        command.index("--pinned-parameter") : command.index("--pinned-parameter") + 4
+    ] == ["--pinned-parameter", "pre_roll", "--pinned-parameter", "measurement_wait"]
+    assert kwargs["timeout"] == 12.0
+
+
 def test_run_windows_analysis_reports_missing_environment(tmp_path) -> None:
     args = argparse.Namespace(windows_python=str(tmp_path / "missing.exe"))
 
@@ -361,8 +440,10 @@ def test_check_windows_hardware_builds_worker_command(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(
         normalize.subprocess,
         "run",
-        lambda command, **kwargs: calls.append((command, kwargs))
-        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
     )
 
     normalize.check_windows_hardware(args)
@@ -458,6 +539,23 @@ def test_progress_command_forwards_stderr_as_log_event(monkeypatch) -> None:
     normalize._run_progress_command(["worker"], None, events.append)
 
     assert events == [normalize.ProgressEvent("error_log", message="worker detail")]
+
+
+def test_optimization_progress_command_reports_native_stderr(monkeypatch) -> None:
+    class FakeProcess:
+        stdout = []
+        stderr = ["Traceback detail\n", "TypeError: bad timing\n"]
+
+        def poll(self):
+            return 0
+
+        def wait(self):
+            return 1
+
+    monkeypatch.setattr(normalize.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+
+    with pytest.raises(RuntimeError, match="TypeError: bad timing"):
+        normalize._run_optimization_progress_command(["worker"], None, lambda event: None)
 
 
 def test_progress_command_does_not_hang_when_cancelled_process_cannot_be_reaped(
