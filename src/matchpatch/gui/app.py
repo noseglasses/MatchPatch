@@ -97,7 +97,7 @@ def main() -> None:
     icon = ASSETS_DIR / "matchmatch-icon.png"
     app.setWindowIcon(QIcon(str(icon)))
     window = MainWindow()
-    window.show()
+    window.showMaximized()
     _interrupt_timer = install_terminal_interrupt_handler(app, window)
     raise SystemExit(app.exec())
 

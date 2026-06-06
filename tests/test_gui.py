@@ -191,6 +191,35 @@ def test_save_measurement_icon_draws_disk_and_chart_overlay(app) -> None:
     assert {"#38bdf8", "#22c55e", "#f59e0b"}.issubset(sampled_colors)
 
 
+def test_record_and_play_toggle_icons_show_distinct_off_and_on_states(app) -> None:
+    record_off_colors = {
+        main_window._record_icon(recording=False).pixmap(56, 56).toImage().pixelColor(x, y).name()
+        for x in range(56)
+        for y in range(56)
+    }
+    record_on_colors = {
+        main_window._record_icon(recording=True).pixmap(56, 56).toImage().pixelColor(x, y).name()
+        for x in range(56)
+        for y in range(56)
+    }
+    speaker_off_colors = {
+        main_window._speaker_icon(enabled=False).pixmap(56, 56).toImage().pixelColor(x, y).name()
+        for x in range(56)
+        for y in range(56)
+    }
+    speaker_on_colors = {
+        main_window._speaker_icon(enabled=True).pixmap(56, 56).toImage().pixelColor(x, y).name()
+        for x in range(56)
+        for y in range(56)
+    }
+
+    assert "#9ca3af" in record_off_colors
+    assert "#dc2626" in record_on_colors
+    assert "#9ca3af" in speaker_off_colors
+    assert "#6b7280" in speaker_off_colors
+    assert "#2563eb" in speaker_on_colors
+
+
 def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     window = MainWindow()
 
@@ -198,8 +227,8 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.backend.currentText() == "hardware"
     assert isinstance(window.advanced, QWidget)
     assert not isinstance(window.advanced, QGroupBox)
-    assert window.advanced.isHidden()
-    assert not window.advanced_button.isChecked()
+    assert not window.advanced.isHidden()
+    assert window.advanced_button.isChecked()
     assert [window.advanced_tabs.tabText(index) for index in range(7)] == [
         "Device",
         "Files",
@@ -259,6 +288,8 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     )
     assert window.presets.layout().contentsMargins().isNull()
     assert window.scroll_area.frameShape() == main_window.QFrame.Shape.NoFrame
+    assert window.measurement_panel_separator.frameShape() == main_window.QFrame.Shape.HLine
+    assert window.measurement_panel_separator.frameShadow() == main_window.QFrame.Shadow.Sunken
     assert not window.presets.isHidden()
     assert not window.preset_empty_state.isHidden()
     assert "border: none" in window.preset_empty_state.styleSheet()
@@ -397,8 +428,9 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.statusBar().isSizeGripEnabled()
     assert window.phase.parent() is window.statusBar()
     assert window.processing_dot.parent() is window.statusBar()
-    assert window.progress_group.layout().itemAt(0).widget() is window.current
-    assert window.progress_group.layout().itemAt(2).widget() is window.preset_progress
+    assert window.progress_group.layout().itemAt(0).widget() is window.measurement_panel_separator
+    assert window.progress_group.layout().itemAt(1).widget() is window.current
+    assert window.progress_group.layout().itemAt(3).widget() is window.preset_progress
     assert window.progress_group.isHidden()
     assert not window.processing_dot.isHidden()
     assert not window._processing_dot_green
@@ -504,8 +536,6 @@ def test_window_shrinks_when_advanced_side_pane_is_hidden(app) -> None:
     window.show()
     app.processEvents()
 
-    window.advanced_button.setChecked(True)
-    app.processEvents()
     expanded_height = window.height()
     window.advanced_button.setChecked(False)
     app.processEvents()
@@ -525,11 +555,11 @@ def test_maximized_window_does_not_resize_when_advanced_side_pane_toggles(monkey
 
     monkeypatch.setattr(window, "isMaximized", lambda: True)
 
-    window.advanced_button.setChecked(True)
+    window.advanced_button.setChecked(False)
     app.processEvents()
 
     assert window.size() == initial_size
-    assert not window.advanced.isHidden()
+    assert window.advanced.isHidden()
 
     window.close()
 
@@ -1335,8 +1365,8 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(monkeypa
     assert not window.manual_adjustments.isChecked()
     assert window.manual_adjustments.text() == "Edit manually"
     assert window.preset_table.editTriggers() == window.preset_table.EditTrigger.NoEditTriggers
-    assert window.presets.layout().indexOf(window.preset_measurement_time_estimate) == 3
-    preset_table_note_row = window.presets.layout().itemAt(4).layout()
+    assert window.presets.layout().indexOf(window.preset_measurement_time_estimate) == 4
+    preset_table_note_row = window.presets.layout().itemAt(3).layout()
     assert preset_table_note_row is not None
     assert preset_table_note_row.indexOf(window.manual_adjustments) < preset_table_note_row.indexOf(
         window.preset_csv_controls
@@ -1431,6 +1461,46 @@ def test_manual_name_edits_highlight_changed_cells_until_csv_save(
     window.close()
 
 
+def test_recorded_snapshot_playback_uses_completed_request_windows_python(monkeypatch, app) -> None:
+    captured = {}
+
+    class SignalStub:
+        def connect(self, callback):
+            captured.setdefault("connections", []).append(callback)
+
+    class WorkerStub:
+        failed = SignalStub()
+        finished = SignalStub()
+
+        def __init__(self, path, parent=None, *, windows_python=None):
+            captured["path"] = path
+            captured["parent"] = parent
+            captured["windows_python"] = windows_python
+
+        def isRunning(self):
+            return False
+
+        def deleteLater(self):
+            captured["delete_later"] = True
+
+        def start(self):
+            captured["started"] = True
+
+    monkeypatch.setattr(main_window, "AudioPlaybackWorker", WorkerStub)
+    window = MainWindow()
+    window.completed_request = _request(windows_python="C:/MatchPatch/python.exe")
+    path = Path("/tmp/recorded.wav")
+
+    window._play_recording(path)
+
+    assert captured["path"] == path
+    assert captured["parent"] is window
+    assert captured["windows_python"] == "C:/MatchPatch/python.exe"
+    assert captured["started"]
+
+    window.close()
+
+
 def test_custom_adjustment_is_shown_but_numeric_delta_is_exported(app) -> None:
     window = MainWindow()
     window.snapshot_count_input.setValue(2)
@@ -1452,6 +1522,7 @@ def test_custom_adjustment_is_shown_but_numeric_delta_is_exported(app) -> None:
     assert adjustment_item.toolTip() == "Custom loudness adjustment: +2"
     custom_label = window.preset_table.cellWidget(0, 4)
     assert isinstance(custom_label, QLabel)
+    assert custom_label.autoFillBackground()
     assert "color: #2563eb" in custom_label.text()
     assert "(+2)" in custom_label.text()
     assert window._table_adjustments().gain_deltas["02B"][0] == 3.5
@@ -1800,6 +1871,101 @@ def test_selected_preset_adjustments_are_pending_until_measured(monkeypatch, app
     window.close()
 
 
+def test_snapshot_completed_updates_adjustment_cells_immediately(monkeypatch, app) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    window.target_lufs.setText("-16.0")
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Clean", "Solo"))
+    window._custom_adjustments = {"02B": {0: 1.0}}
+    window._mark_selected_preset_adjustments_pending(0)
+
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="02B",
+            snapshot=1,
+            lufs=-18.0,
+            crest_factor_db=12.0,
+        )
+    )
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="02B",
+            snapshot=2,
+            lufs=-17.0,
+            crest_factor_db=12.0,
+        )
+    )
+
+    assert window.preset_table.item(0, 4).text() == "+2 (+1)"
+    assert window.preset_table.item(0, 4).data(main_window.ADJUSTMENT_VALUE_ROLE) == 3.0
+    assert window.preset_table.item(0, 4).foreground().color().name() == "#15803d"
+    assert window.preset_table.item(0, 6).text() == "+4"
+    assert window.preset_table.item(0, 6).foreground().color().name() == "#15803d"
+    assert not window.preset_table.item(0, 4).font().bold()
+    assert not window.preset_table.item(0, 6).font().bold()
+
+    window.close()
+
+
+def test_recorded_pending_adjustment_widget_updates_with_gain_value(tmp_path, monkeypatch, app):
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._mark_selected_preset_adjustments_pending(0)
+
+    recording = tmp_path / "recorded.wav"
+    recording.touch()
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_recorded",
+            device_patch="02B",
+            snapshot=1,
+            path=str(recording),
+        )
+    )
+
+    assert window.preset_table.item(0, 4).text() == "?"
+    pending_widget = window.preset_table.cellWidget(0, 4)
+    assert pending_widget.findChild(QLabel).text() == "?"
+
+    window.target_lufs.setText("-16.0")
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="02B",
+            snapshot=1,
+            lufs=-17.5,
+            crest_factor_db=12.0,
+        )
+    )
+
+    item = window.preset_table.item(0, 4)
+    cell_widget = window.preset_table.cellWidget(0, 4)
+    label = cell_widget.findChild(QLabel)
+    assert item.text() == "+1.5"
+    assert cell_widget.autoFillBackground()
+    assert label.text() == "+1.5"
+    assert not label.font().bold()
+    assert label.styleSheet() == "color: #15803d;"
+
+    window.close()
+
+
 def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="New")
@@ -1919,7 +2085,8 @@ def test_snapshot_names_are_preloaded_and_bad_lufs_is_marked(monkeypatch, app) -
 
     assert window.preset_table.item(0, 3).text() == "Clean"
     assert window.preset_table.item(0, 4).text() == "⚠️"
-    assert window.preset_table.item(0, 4).font().pointSize() > app.font().pointSize()
+    assert not window.preset_table.item(0, 4).font().bold()
+    assert window.preset_table.item(0, 4).font().pointSize() == max(app.font().pointSize(), 9)
     assert "unusable LUFS" in window.preset_table.item(0, 4).toolTip()
     assert window.preset_table.item(0, 5).text() == "Solo"
     assert (

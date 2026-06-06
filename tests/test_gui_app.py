@@ -78,3 +78,61 @@ def test_terminal_interrupt_queues_normal_window_close(monkeypatch) -> None:
     assert timer.parent is app
     assert timer.interval == 100
     assert scheduled == [(0, window.close)]
+
+
+def test_main_shows_window_maximized(monkeypatch) -> None:
+    calls = []
+
+    class FakeApplication:
+        def __init__(self, argv) -> None:
+            self.argv = argv
+
+        def setApplicationName(self, name: str) -> None:
+            calls.append(("application_name", name))
+
+        def setApplicationDisplayName(self, name: str) -> None:
+            calls.append(("display_name", name))
+
+        def setDesktopFileName(self, name: str) -> None:
+            calls.append(("desktop_file", name))
+
+        def setWindowIcon(self, icon) -> None:
+            calls.append(("window_icon", icon))
+
+        def exec(self) -> int:
+            calls.append(("exec",))
+            return 0
+
+    class FakeWindow:
+        def showMaximized(self) -> None:
+            calls.append(("show_maximized",))
+
+        def showFullScreen(self) -> None:
+            calls.append(("show_fullscreen",))
+
+        def show(self) -> None:
+            calls.append(("show",))
+
+    monkeypatch.setattr(gui_app, "configure_wslg_runtime", lambda: calls.append(("wslg",)))
+    monkeypatch.setattr(gui_app, "register_desktop_entry", lambda: calls.append(("desktop",)))
+    monkeypatch.setattr(
+        gui_app, "qInstallMessageHandler", lambda handler: calls.append(("qt", handler))
+    )
+    monkeypatch.setattr(gui_app, "QApplication", FakeApplication)
+    monkeypatch.setattr(gui_app, "QIcon", lambda path: path)
+    monkeypatch.setattr(gui_app, "MainWindow", FakeWindow)
+    monkeypatch.setattr(
+        gui_app,
+        "install_terminal_interrupt_handler",
+        lambda app, window: calls.append(("interrupt", app, window)),
+    )
+
+    try:
+        gui_app.main()
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    assert ("show_maximized",) in calls
+    assert ("show_fullscreen",) not in calls
+    assert ("show",) not in calls
+    assert calls.index(("show_maximized",)) < calls.index(("exec",))

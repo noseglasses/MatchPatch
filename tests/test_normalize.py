@@ -722,6 +722,43 @@ def test_gui_style_workflow_defers_adjusted_file_export(tmp_path) -> None:
     assert result.retained_csv_path == work_dir / "lufs_analysis.csv"
 
 
+def test_keep_temp_records_snapshots_in_retained_temp_directory(tmp_path) -> None:
+    handler = FakeHandler()
+    input_path = tmp_path / "input.hls"
+    reference = tmp_path / "reference.wav"
+    work_dir = tmp_path / "work"
+    input_path.touch()
+    reference.touch()
+    work_dir.mkdir()
+
+    def fake_analysis(request, preset_ids, csv_path, callback):
+        assert request.record_device_output
+        assert request.recorded_output_dir == work_dir / "recordings"
+        request.recorded_output_dir.mkdir(parents=True)
+        (request.recorded_output_dir / "patch-1_snapshot_1.wav").touch()
+        write_analysis_csv(request, preset_ids, csv_path)
+
+    result = normalize_presets(
+        NormalizationRequest(
+            device="fake",
+            input_path=input_path,
+            backend="loopback",
+            windows_python="python.exe",
+            reference_di=reference,
+            defer_export=True,
+            keep_temp=True,
+            record_device_output=True,
+        ),
+        run_analysis=fake_analysis,
+        get_profile=lambda device: FakeProfile(handler),
+        make_temp_dir=lambda: work_dir,
+    )
+
+    assert result.temp_dir == work_dir
+    assert result.retained_csv_path == work_dir / "lufs_analysis.csv"
+    assert (work_dir / "recordings" / "patch-1_snapshot_1.wav").is_file()
+
+
 def test_export_adjusted_file_applies_retained_csv(tmp_path) -> None:
     handler = FakeHandler()
     input_path = tmp_path / "input.hls"

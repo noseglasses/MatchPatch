@@ -8,6 +8,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import tomllib
 from contextlib import contextmanager
@@ -92,7 +93,7 @@ from PySide6.QtWidgets import (
 from matchpatch.config import Config, config_value, default_config, export_config, load_config
 from matchpatch.custom_adjustments import CustomAdjustments, load_custom_adjustments_file
 from matchpatch.devices import get_device_profile, list_device_profiles
-from matchpatch.devices.base import PatchFileAdjustments
+from matchpatch.devices.base import NormalizationPolicy, PatchFileAdjustments
 from matchpatch.gui.device_panels import HelixSettingsPanel
 from matchpatch.gui.dialogs import ASSETS_DIR, AboutDialog, HelpDialog
 from matchpatch.gui.snapshot_header import SnapshotHeader
@@ -110,6 +111,7 @@ from matchpatch.normalize import (
     apply_config,
     parse_args,
     request_from_args,
+    wsl_path_to_windows,
 )
 from matchpatch.progress import ProgressEvent
 from matchpatch.workflow import (
@@ -397,20 +399,61 @@ class AttentionFrameDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+WINDOWS_PLAYBACK_CODE = (
+    "from pathlib import Path\n"
+    "import sys\n"
+    "import soundfile as sf\n"
+    "from matchpatch.audio import play_audio\n"
+    "audio, sample_rate = sf.read(Path(sys.argv[1]), dtype='float32', always_2d=True)\n"
+    "play_audio(audio, sample_rate)\n"
+)
+
+
+def _windows_playback_path(path: Path) -> str:
+    text = str(path)
+    if re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith("\\\\") or os.name == "nt":
+        return text
+    return wsl_path_to_windows(path)
+
+
 class AudioPlaybackWorker(QThread):
     failed = Signal(str)
 
-    def __init__(self, path: Path, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        parent: QObject | None = None,
+        *,
+        windows_python: str | None = None,
+    ) -> None:
         super().__init__(parent)
         self.path = path
+        self.windows_python = windows_python
 
     def run(self) -> None:
         try:
-            import sounddevice as sd
+            if self.windows_python:
+                windows_path = _windows_playback_path(self.path)
+                completed = subprocess.run(
+                    [self.windows_python, "-c", WINDOWS_PLAYBACK_CODE, windows_path],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                if completed.stderr.strip():
+                    self.failed.emit(completed.stderr.strip())
+                return
+
             import soundfile as sf
 
+            from matchpatch.audio import play_audio
+
             audio, sample_rate = sf.read(self.path, dtype="float32", always_2d=True)
-            sd.play(audio, samplerate=sample_rate, blocking=True)
+            play_audio(audio, sample_rate)
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            self.failed.emit(detail or str(exc))
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
 
@@ -458,14 +501,15 @@ def _advanced_icon() -> QIcon:
     return QIcon(pixmap)
 
 
-def _speaker_icon() -> QIcon:
+def _speaker_icon(*, enabled: bool = True) -> QIcon:
     pixmap = QPixmap(56, 56)
     pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor("#475569"))
+    speaker_color = QColor("#475569" if enabled else "#9ca3af")
+    painter.setBrush(speaker_color)
     body = QPainterPath()
     body.moveTo(11, 24)
     body.lineTo(21, 24)
@@ -475,21 +519,25 @@ def _speaker_icon() -> QIcon:
     body.lineTo(11, 32)
     body.closeSubpath()
     painter.drawPath(body)
-    painter.setPen(QPen(QColor("#2563eb"), 4))
-    painter.drawArc(35, 19, 10, 18, -45 * 16, 90 * 16)
-    painter.drawArc(38, 13, 16, 30, -45 * 16, 90 * 16)
+    if enabled:
+        painter.setPen(QPen(QColor("#2563eb"), 4))
+        painter.drawArc(35, 19, 10, 18, -45 * 16, 90 * 16)
+        painter.drawArc(38, 13, 16, 30, -45 * 16, 90 * 16)
+    else:
+        painter.setPen(QPen(QColor("#6b7280"), 5))
+        painter.drawLine(13, 44, 48, 12)
     painter.end()
     return QIcon(pixmap)
 
 
-def _record_icon() -> QIcon:
+def _record_icon(*, recording: bool = True) -> QIcon:
     pixmap = QPixmap(56, 56)
     pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(QPen(QColor("#991b1b"), 2))
-    painter.setBrush(QColor("#dc2626"))
+    painter.setPen(QPen(QColor("#991b1b" if recording else "#6b7280"), 2))
+    painter.setBrush(QColor("#dc2626" if recording else "#9ca3af"))
     painter.drawEllipse(14, 14, 28, 28)
     painter.end()
     return QIcon(pixmap)
@@ -605,8 +653,10 @@ class MainWindow(QMainWindow):
         self._recording_paths: dict[tuple[str, int], Path] = {}
         self._save_as_icon = _save_as_icon()
         self._save_measurement_icon = _save_measurement_icon()
-        self._speaker_icon = _speaker_icon()
-        self._record_icon = _record_icon()
+        self._speaker_icon = _speaker_icon(enabled=True)
+        self._speaker_off_icon = _speaker_icon(enabled=False)
+        self._record_icon = _record_icon(recording=True)
+        self._record_off_icon = _record_icon(recording=False)
 
         self.input_path = QLineEdit()
         self.output_path = QLineEdit()
@@ -758,16 +808,17 @@ class MainWindow(QMainWindow):
         self.device_action = toolbar.addWidget(self.device)
 
         self.record_output_button = QToolButton(self)
-        self.record_output_button.setIcon(self._record_icon)
+        self.record_output_button.setIcon(self._record_off_icon)
         self.record_output_button.setCheckable(True)
         self.record_output_button.setToolTip(
             "Record measured processor output for each snapshot during normalization."
         )
         self.record_output_button.setAccessibleName("Record measured output")
+        self.record_output_button.toggled.connect(self._record_output_toggle_changed)
         self.record_output_action = toolbar.addWidget(self.record_output_button)
 
         self.play_recorded_output_button = QToolButton(self)
-        self.play_recorded_output_button.setIcon(self._speaker_icon)
+        self.play_recorded_output_button.setIcon(self._speaker_off_icon)
         self.play_recorded_output_button.setCheckable(True)
         self.play_recorded_output_button.setToolTip(
             "Play measured processor output through the computer speakers after each recording."
@@ -779,6 +830,7 @@ class MainWindow(QMainWindow):
         self.advanced_button = QToolButton(self)
         self.advanced_button.setIcon(_advanced_icon())
         self.advanced_button.setCheckable(True)
+        self.advanced_button.setChecked(True)
         self.advanced_button.setToolTip(
             "Show less frequently changed settings and diagnostic details."
         )
@@ -945,13 +997,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.preset_header)
         layout.addWidget(self.preset_empty_state)
         layout.addWidget(self.preset_table)
-        layout.addWidget(self.preset_measurement_time_estimate)
         preset_table_note_row = QHBoxLayout()
         preset_table_note_row.addWidget(self.preset_table_note)
         preset_table_note_row.addStretch()
         preset_table_note_row.addWidget(self.manual_adjustments)
         preset_table_note_row.addWidget(self.preset_csv_controls)
         layout.addLayout(preset_table_note_row)
+        layout.addWidget(self.preset_measurement_time_estimate)
         layout.addWidget(self.single_slot)
         self.presets = content
         self._sync_preset_empty_state_height()
@@ -1063,6 +1115,10 @@ class MainWindow(QMainWindow):
         pane.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(pane)
         layout.setContentsMargins(0, 0, 0, 0)
+        self.measurement_panel_separator = QFrame()
+        self.measurement_panel_separator.setFrameShape(QFrame.Shape.HLine)
+        self.measurement_panel_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(self.measurement_panel_separator)
         self.current = QLabel("")
         self.preset_progress = QProgressBar()
         self.preset_progress.setRange(0, 1)
@@ -2401,7 +2457,13 @@ class MainWindow(QMainWindow):
         return self._playback_toggle_path
 
     def _playback_toggle_changed(self, checked: bool) -> None:
+        self.play_recorded_output_button.setIcon(
+            self._speaker_icon if checked else self._speaker_off_icon
+        )
         self._write_playback_toggle(checked)
+
+    def _record_output_toggle_changed(self, checked: bool) -> None:
+        self.record_output_button.setIcon(self._record_icon if checked else self._record_off_icon)
 
     def _write_playback_toggle(self, checked: bool | None = None) -> None:
         if self._playback_toggle_path is None:
@@ -2841,6 +2903,8 @@ class MainWindow(QMainWindow):
         message = event.message or event.kind.replace("_", " ")
         if event.kind == "log":
             self._apply_gain_correction(message)
+        elif event.kind == "snapshot_completed":
+            self._apply_snapshot_measurement(event)
         if event.lufs is not None and event.crest_factor_db is not None:
             message += f": {event.lufs:.3f} LUFS, {event.crest_factor_db:.3f} dB crest"
         if event.kind == "temp_retained" and event.path:
@@ -2880,6 +2944,8 @@ class MainWindow(QMainWindow):
         if not recorded_path:
             if has_custom_adjustment:
                 label = QLabel(_custom_adjustment_label_text(item.text()))
+                self._style_adjustment_cell_widget(label, item)
+                self._style_adjustment_label(label, item)
                 label.setContentsMargins(3, 0, 0, 0)
                 label.setToolTip(item.toolTip())
                 label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -2887,12 +2953,14 @@ class MainWindow(QMainWindow):
             return
 
         content = QWidget(table)
+        self._style_adjustment_cell_widget(content, item)
         layout = QHBoxLayout(content)
         layout.setContentsMargins(2, 0, 2, 0)
         layout.setSpacing(2)
         label = QLabel(
             _custom_adjustment_label_text(item.text()) if has_custom_adjustment else item.text()
         )
+        self._style_adjustment_label(label, item)
         label.setToolTip(item.toolTip())
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(label, 1)
@@ -2909,10 +2977,38 @@ class MainWindow(QMainWindow):
             layout.addWidget(button)
         table.setCellWidget(item.row(), item.column(), content)
 
+    @staticmethod
+    def _style_adjustment_cell_widget(widget: QWidget, item: QTableWidgetItem) -> None:
+        table = item.tableWidget()
+        palette = widget.palette()
+        background = item.background()
+        if background.style() != Qt.BrushStyle.NoBrush:
+            color = background.color()
+        elif table is not None:
+            color = table.palette().color(QPalette.ColorRole.Base)
+        else:
+            color = QApplication.palette().color(QPalette.ColorRole.Base)
+        palette.setColor(QPalette.ColorRole.Window, color)
+        palette.setColor(QPalette.ColorRole.Base, color)
+        widget.setPalette(palette)
+        widget.setAutoFillBackground(True)
+
+    @staticmethod
+    def _style_adjustment_label(label: QLabel, item: QTableWidgetItem) -> None:
+        font = item.font()
+        font.setBold(False)
+        label.setFont(font)
+        color = item.foreground().color()
+        if color.isValid():
+            label.setStyleSheet(f"color: {color.name()};")
+        else:
+            label.setStyleSheet("")
+
     def _play_recording(self, path: Path) -> None:
         if self.playback_worker is not None and self.playback_worker.isRunning():
             return
-        self.playback_worker = AudioPlaybackWorker(path, self)
+        windows_python = self.completed_request.windows_python if self.completed_request else None
+        self.playback_worker = AudioPlaybackWorker(path, self, windows_python=windows_python)
         self.playback_worker.failed.connect(self.show_error)
         self.playback_worker.finished.connect(self._playback_finished)
         self.playback_worker.finished.connect(self.playback_worker.deleteLater)
@@ -3723,8 +3819,8 @@ class MainWindow(QMainWindow):
             adjustment_item.setToolTip("This snapshot produced an unusable LUFS measurement.")
             adjustment_item.setForeground(QBrush(QColor("#b45309")))
             font = adjustment_item.font()
-            font.setBold(True)
-            font.setPointSize(max(font.pointSize(), QApplication.font().pointSize(), 9) + 5)
+            font.setBold(False)
+            font.setPointSize(max(QApplication.font().pointSize(), 9))
             adjustment_item.setFont(font)
             self._refresh_adjustment_cell_widget(adjustment_item)
             self._set_bad_lufs_highlight(row)
@@ -3754,6 +3850,73 @@ class MainWindow(QMainWindow):
         self._refresh_adjustment_cell_widget(adjustment_item)
         self._adjusted_presets.add(match["patch"])
         self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
+
+    def _apply_snapshot_measurement(self, event: ProgressEvent) -> None:
+        if event.device_patch is None or event.snapshot is None or event.lufs is None:
+            return
+
+        row = self._preset_row(event.device_patch)
+        if row is None:
+            return
+
+        selected = self.preset_table.item(row, 0)
+        if selected is None or selected.checkState() != Qt.CheckState.Checked:
+            return
+
+        snapshot_index = event.snapshot - 1
+        if snapshot_index < 0 or snapshot_index >= self.snapshot_count:
+            return
+
+        adjustment_column = 4 + snapshot_index * 2
+        adjustment_item = self.preset_table.item(row, adjustment_column)
+        if adjustment_item is None:
+            return
+
+        policy = self._normalization_policy()
+        gain_delta = self._measurement_gain_delta(event, policy)
+
+        name_item = self.preset_table.item(row, 3 + snapshot_index * 2)
+        is_solo = name_item is not None and self._is_solo_snapshot_name(name_item.text())
+        if is_solo:
+            gain_delta += policy.solo_gain_bump_db
+
+        custom_adjustment = self._custom_adjustment_for_snapshot(event.device_patch, snapshot_index)
+        if custom_adjustment is not None:
+            gain_delta += custom_adjustment
+        display_adjustment = (
+            gain_delta - custom_adjustment if custom_adjustment is not None else gain_delta
+        )
+        self._set_adjustment_value(
+            adjustment_item,
+            _format_adjustment(display_adjustment),
+            gain_delta,
+            custom_adjustment,
+            display_adjustment if custom_adjustment is not None else None,
+        )
+        self._refresh_adjustment_cell_widget(adjustment_item)
+        self._adjusted_presets.add(event.device_patch)
+
+    def _normalization_policy(self) -> NormalizationPolicy:
+        if self.completed_request is not None:
+            return self.completed_request.policy
+        return NormalizationPolicy(snapshot_count=self.snapshot_count)
+
+    def _measurement_gain_delta(
+        self,
+        event: ProgressEvent,
+        policy: NormalizationPolicy,
+    ) -> float:
+        crest_factor_correction = 0.0
+        if event.crest_factor_db is not None:
+            crest_factor_correction = min(
+                max(
+                    (policy.crest_factor_reference_db - event.crest_factor_db)
+                    * policy.crest_factor_correction_ratio,
+                    0.0,
+                ),
+                policy.max_crest_factor_correction_db,
+            )
+        return round(self._target_lufs() - event.lufs - crest_factor_correction, 1)
 
     def _custom_adjustment_for_snapshot(
         self,
@@ -4162,6 +4325,8 @@ class MainWindow(QMainWindow):
                         f"({escape(_format_adjustment(custom_adjustment))})"
                         f"</span>"
                     )
+                    MainWindow._style_adjustment_cell_widget(label, item)
+                    MainWindow._style_adjustment_label(label, item)
                     label.setContentsMargins(3, 0, 0, 0)
                     label.setToolTip(item.toolTip())
                     label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -4511,8 +4676,10 @@ class MeasurementOptimizationDialog(QDialog):
         toolbar = QToolBar("Measurement", self)
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(18, 18))
+        self._speaker_icon = _speaker_icon(enabled=True)
+        self._speaker_off_icon = _speaker_icon(enabled=False)
         self.play_recorded_output_button = QToolButton(self)
-        self.play_recorded_output_button.setIcon(_speaker_icon())
+        self.play_recorded_output_button.setIcon(self._speaker_off_icon)
         self.play_recorded_output_button.setCheckable(True)
         self.play_recorded_output_button.setAutoRaise(True)
         self.play_recorded_output_button.setIconSize(toolbar.iconSize())
@@ -4521,6 +4688,7 @@ class MeasurementOptimizationDialog(QDialog):
         self.play_recorded_output_button.setToolTip(
             "Play measured processor output through the computer speakers after each recording."
         )
+        self.play_recorded_output_button.toggled.connect(self._playback_toggle_changed)
         self.play_recorded_output_button.toggled.connect(self.play_recorded_output_changed)
         toolbar.addWidget(self.play_recorded_output_button)
         layout.addWidget(toolbar)
@@ -4598,6 +4766,11 @@ class MeasurementOptimizationDialog(QDialog):
 
     def set_play_recorded_output(self, checked: bool) -> None:
         self.play_recorded_output_button.setChecked(checked)
+
+    def _playback_toggle_changed(self, checked: bool) -> None:
+        self.play_recorded_output_button.setIcon(
+            self._speaker_icon if checked else self._speaker_off_icon
+        )
 
     def update_progress(self, event: OptimizationProgress) -> None:
         self.set_status(event.message)
