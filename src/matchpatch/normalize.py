@@ -1,4 +1,4 @@
-"""Generic MatchPatch gain-normalization orchestration for WSL."""
+"""Generic MatchPatch gain-normalization orchestration."""
 
 from __future__ import annotations
 
@@ -260,7 +260,15 @@ def run_command(args: list[object], timeout: float | None = None) -> None:
     )
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 def wsl_path_to_windows(path: Path) -> str:
+    text = str(path)
+    if _is_windows() or re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith("\\\\"):
+        return text
+
     completed = subprocess.run(
         ["wslpath", "-w", str(path.resolve())],
         check=True,
@@ -268,6 +276,18 @@ def wsl_path_to_windows(path: Path) -> str:
         stdout=subprocess.PIPE,
     )
     return completed.stdout.strip()
+
+
+def _missing_windows_environment_message() -> str:
+    if _is_windows():
+        return (
+            "Native Windows MatchPatch environment is missing. "
+            "Run scripts\\sync-windows.cmd first."
+        )
+    return (
+        "Native Windows MatchPatch environment is missing. "
+        "Run scripts/sync-windows-from-wsl.sh first."
+    )
 
 
 def count_csv_rows(csv_path: Path) -> int:
@@ -291,10 +311,7 @@ def run_windows_analysis(
     windows_python = Path(args.windows_python).resolve()
 
     if not windows_python.exists():
-        raise RuntimeError(
-            "Native Windows MatchPatch environment is missing. "
-            "Run scripts/sync-windows-from-wsl.sh first."
-        )
+        raise RuntimeError(_missing_windows_environment_message())
 
     command: list[object] = [
         windows_python,
@@ -376,10 +393,7 @@ def run_windows_optimization(
     windows_python = Path(args.windows_python).resolve()
 
     if not windows_python.exists():
-        raise RuntimeError(
-            "Native Windows MatchPatch environment is missing. "
-            "Run scripts/sync-windows-from-wsl.sh first."
-        )
+        raise RuntimeError(_missing_windows_environment_message())
 
     command: list[object] = [
         windows_python,
@@ -460,10 +474,7 @@ def check_windows_hardware(args: argparse.Namespace | NormalizationRequest) -> N
     windows_python = Path(args.windows_python).resolve()
 
     if not windows_python.exists():
-        raise RuntimeError(
-            "Native Windows MatchPatch environment is missing. "
-            "Run scripts/sync-windows-from-wsl.sh first."
-        )
+        raise RuntimeError(_missing_windows_environment_message())
 
     command: list[object] = [
         windows_python,

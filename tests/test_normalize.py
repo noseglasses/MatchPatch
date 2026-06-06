@@ -291,6 +291,34 @@ def test_apply_config_rejects_invalid_solo_regex(tmp_path) -> None:
         )
 
 
+def test_wsl_path_to_windows_returns_native_windows_path(monkeypatch) -> None:
+    monkeypatch.setattr(normalize, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        normalize.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("native Windows should not call wslpath"),
+    )
+
+    assert (
+        normalize.wsl_path_to_windows(Path("C:/MatchPatch/results.csv"))
+        == "C:/MatchPatch/results.csv"
+    )
+
+
+def test_wsl_path_to_windows_keeps_drive_path_on_wsl(monkeypatch) -> None:
+    monkeypatch.setattr(normalize, "_is_windows", lambda: False)
+    monkeypatch.setattr(
+        normalize.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("Windows-style paths should not call wslpath"),
+    )
+
+    assert (
+        normalize.wsl_path_to_windows(Path("C:/MatchPatch/results.csv"))
+        == "C:/MatchPatch/results.csv"
+    )
+
+
 def test_run_windows_analysis_builds_worker_command(tmp_path, monkeypatch) -> None:
     windows_python = tmp_path / "python.exe"
     windows_python.touch()
@@ -415,6 +443,14 @@ def test_run_windows_analysis_reports_missing_environment(tmp_path) -> None:
     args = argparse.Namespace(windows_python=str(tmp_path / "missing.exe"))
 
     with pytest.raises(RuntimeError, match="sync-windows"):
+        normalize.run_windows_analysis(args, [1], tmp_path / "results.csv")
+
+
+def test_run_windows_analysis_reports_native_windows_sync_command(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(normalize, "_is_windows", lambda: True)
+    args = argparse.Namespace(windows_python=str(tmp_path / "missing.exe"))
+
+    with pytest.raises(RuntimeError, match=r"scripts\\sync-windows\.cmd"):
         normalize.run_windows_analysis(args, [1], tmp_path / "results.csv")
 
 

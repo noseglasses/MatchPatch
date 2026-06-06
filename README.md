@@ -65,11 +65,33 @@ scripts/sync-wsl.sh
 source "$HOME/.local/share/matchpatch/.venv-wsl/bin/activate"
 ```
 
-When running the current Helix hardware workflow from WSL, also install uv on
-Windows and synchronize its audio environment:
+```powershell
+# Windows PowerShell
+cd C:\src\MatchPatch-windows
+.\scripts\sync-windows.cmd
+.\.venv-windows\Scripts\Activate.ps1
+```
+
+Run the native Windows environment from a directory on a Windows drive, such as
+`C:\src\MatchPatch-windows`. Do not run `.\scripts\sync-windows.cmd` or
+`.\.venv-windows\Scripts\matchpatch-gui.exe` from a WSL UNC path such as
+`\\wsl.localhost\Ubuntu-24.04\home\...\MatchPatch`; `cmd.exe` and the uv
+console-script launchers cannot reliably canonicalize those paths.
+
+If PowerShell blocks activation scripts on your machine, either run commands
+through `.\.venv-windows\Scripts\python.exe -m ...` or allow local scripts for
+the current user:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+When running the Helix hardware workflow from WSL, also install uv on Windows
+and synchronize a Windows runtime mirror:
 
 ```bash
-scripts/sync-windows-from-wsl.sh
+scripts/sync-windows-from-wsl.sh --extra gui
+export MATCHPATCH_WINDOWS_PYTHON=/mnt/c/src/MatchPatch-windows/.venv-windows/Scripts/python.exe
 ```
 
 ## Graphical Quick Start
@@ -77,8 +99,16 @@ scripts/sync-windows-from-wsl.sh
 Install the optional PySide6 interface and launch it:
 
 ```bash
+# Linux or WSL
 uv sync --locked --no-default-groups --group wsl --extra gui
 matchpatch-gui
+```
+
+```powershell
+# Windows PowerShell
+cd C:\src\MatchPatch-windows
+.\scripts\sync-windows.cmd --extra gui
+.\.venv-windows\Scripts\matchpatch-gui.exe
 ```
 
 The GUI starts in `loopback` mode so the guided workflow can be exercised
@@ -214,13 +244,23 @@ normalization workflow for scripting, testing, and advanced setups.
 List available audio devices and MIDI outputs:
 
 ```bash
+# From WSL, query the native Windows worker
 scripts/measure-windows-from-wsl.sh devices
+```
+
+```powershell
+# Native Windows
+.\.venv-windows\Scripts\python.exe -m matchpatch.measure devices
 ```
 
 Run the guided hardware workflow:
 
 ```bash
 matchpatch normalize --device helix -a -i setlist_original.hls
+```
+
+```powershell
+.\.venv-windows\Scripts\matchpatch.exe normalize --device helix -a -i setlist_original.hls
 ```
 
 MatchPatch creates a measurement file, pauses while you import it into the Helix,
@@ -334,6 +374,39 @@ ruff format --check .
 ty check
 pytest
 ```
+
+For native Windows development while keeping Git in WSL, treat the WSL checkout
+as the only real repository and synchronize a disposable Windows runtime mirror.
+The default mirror is `/mnt/c/src/MatchPatch-windows`, which appears in Windows
+as `C:\src\MatchPatch-windows`:
+
+```bash
+# From the WSL repository
+scripts/sync-windows-from-wsl.sh --extra gui
+export MATCHPATCH_WINDOWS_PYTHON=/mnt/c/src/MatchPatch-windows/.venv-windows/Scripts/python.exe
+```
+
+```powershell
+# From Windows PowerShell
+cd C:\src\MatchPatch-windows
+.\.venv-windows\Scripts\ruff.exe check .
+.\.venv-windows\Scripts\ruff.exe format --check .
+.\.venv-windows\Scripts\ty.exe check
+.\.venv-windows\Scripts\pytest.exe
+```
+
+The recommended two-environment workflow is:
+
+1. Keep the authoritative Git worktree in WSL, for example
+   `/home/flo/MatchPatch`, and run Git operations there.
+2. Use `scripts/sync-wsl.sh` for WSL tests and Linux/WSLg GUI checks.
+3. Use `scripts/sync-windows-from-wsl.sh --extra gui` to copy the current WSL
+   files to `/mnt/c/src/MatchPatch-windows` and update the native Windows venv.
+4. Run native Windows GUI, audio, MIDI, and hardware checks from
+   `C:\src\MatchPatch-windows`.
+5. Do not commit, rebase, or edit long-lived work in the Windows mirror. Delete
+   and recreate it freely; share source changes through the WSL worktree and
+   `uv.lock`.
 
 The pytest suite includes Hypothesis property tests and reports branch-aware
 coverage in the terminal and under `htmlcov/`.
