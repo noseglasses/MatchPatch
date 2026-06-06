@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import os
-import shutil
 import signal
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QMessageLogContext, QTimer, QtMsgType, qInstallMessageHandler
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QMessageLogContext, Qt, QTimer, QtMsgType, qInstallMessageHandler
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
 from matchpatch.gui.main_window import MainWindow
 
 IGNORED_QT_MESSAGES = {"This plugin supports grabbing the mouse only for popup windows"}
 ASSETS_DIR = Path(__file__).resolve().parents[3] / "doc" / "assets"
+DESKTOP_FILE_ID = "matchpatch-gui"
+DESKTOP_ICON_SIZE = 512
+DEFAULT_XDG_DATA_DIRS = "/usr/local/share:/usr/share"
 
 
 def qt_message_handler(
@@ -45,32 +47,67 @@ def configure_wslg_runtime() -> None:
         os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
 
 
-def register_desktop_entry() -> None:
-    """Give Wayland/WSLg an application ID with a project icon."""
+def _write_square_desktop_icon(source: Path, target: Path) -> None:
+    image = QImage(str(source))
+    if image.isNull():
+        return
+
+    icon = QImage(DESKTOP_ICON_SIZE, DESKTOP_ICON_SIZE, QImage.Format.Format_ARGB32)
+    icon.fill(QColor(0, 0, 0, 0))
+    scaled = image.scaled(
+        DESKTOP_ICON_SIZE,
+        DESKTOP_ICON_SIZE,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    x = (DESKTOP_ICON_SIZE - scaled.width()) // 2
+    y = (DESKTOP_ICON_SIZE - scaled.height()) // 2
+    painter = QPainter(icon)
+    painter.drawImage(x, y, scaled)
+    painter.end()
+    icon.save(str(target), "PNG")
+
+
+def _desktop_entry_data_dirs() -> list[Path]:
     data_home = Path(os.getenv("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
-    applications = data_home / "applications"
-    icons = data_home / "icons" / "hicolor" / "512x512" / "apps"
-    desktop_file = applications / "matchpatch.desktop"
-    installed_icon = icons / "matchpatch.png"
-    entry = (
+    data_dirs = [
+        Path(path)
+        for path in os.getenv("XDG_DATA_DIRS", DEFAULT_XDG_DATA_DIRS).split(os.pathsep)
+        if path
+    ]
+    return [*data_dirs, data_home]
+
+
+def _desktop_entry(icon: Path) -> str:
+    return (
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=MatchPatch\n"
         "Comment=Normalize audio processor presets\n"
         "Exec=matchpatch-gui\n"
-        "Icon=matchpatch\n"
+        f"Icon={icon}\n"
         "Terminal=false\n"
         "Categories=AudioVideo;Audio;\n"
-        "StartupWMClass=matchpatch\n"
+        f"StartupWMClass={DESKTOP_FILE_ID}\n"
     )
-    try:
-        applications.mkdir(parents=True, exist_ok=True)
-        icons.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ASSETS_DIR / "matchmatch-icon-512.png", installed_icon)
-        if not desktop_file.exists() or desktop_file.read_text(encoding="utf-8") != entry:
-            desktop_file.write_text(entry, encoding="utf-8")
-    except OSError:
-        return
+
+
+def register_desktop_entry() -> None:
+    """Give Wayland/WSLg an application ID with a project icon."""
+    for data_dir in _desktop_entry_data_dirs():
+        applications = data_dir / "applications"
+        icons = data_dir / "icons" / "hicolor" / "512x512" / "apps"
+        desktop_file = applications / f"{DESKTOP_FILE_ID}.desktop"
+        installed_icon = icons / f"{DESKTOP_FILE_ID}.png"
+        entry = _desktop_entry(installed_icon)
+        try:
+            applications.mkdir(parents=True, exist_ok=True)
+            icons.mkdir(parents=True, exist_ok=True)
+            _write_square_desktop_icon(ASSETS_DIR / "matchmatch-icon-512.png", installed_icon)
+            if not desktop_file.exists() or desktop_file.read_text(encoding="utf-8") != entry:
+                desktop_file.write_text(entry, encoding="utf-8")
+        except OSError:
+            continue
 
 
 def install_terminal_interrupt_handler(app: QApplication, window: MainWindow) -> QTimer:
@@ -91,9 +128,9 @@ def main() -> None:
     register_desktop_entry()
     qInstallMessageHandler(qt_message_handler)
     app = QApplication(sys.argv)
-    app.setApplicationName("matchpatch")
+    app.setApplicationName(DESKTOP_FILE_ID)
     app.setApplicationDisplayName("MatchPatch")
-    app.setDesktopFileName("matchpatch")
+    app.setDesktopFileName(DESKTOP_FILE_ID)
     icon = ASSETS_DIR / "matchmatch-icon.png"
     app.setWindowIcon(QIcon(str(icon)))
     window = MainWindow()

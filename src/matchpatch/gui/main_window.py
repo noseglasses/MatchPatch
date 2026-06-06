@@ -1038,16 +1038,28 @@ class MainWindow(QMainWindow):
         self.preset_empty_logo = logo
         layout.addWidget(logo)
 
-        open_button = QToolButton()
-        open_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
-        open_button.setIconSize(QSize(72, 72))
-        open_button.setText("Open setlist/preset file")
-        open_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        open_button.setAutoRaise(True)
-        open_button.setToolTip("Open a Helix setlist or preset file.")
-        open_button.clicked.connect(self.browse_input)
-        self.preset_empty_open_button = open_button
-        layout.addWidget(open_button, alignment=Qt.AlignmentFlag.AlignCenter)
+        file_dialog_title = QLabel("Open setlist/preset file")
+        file_dialog_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        file_dialog_title.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        title_font = file_dialog_title.font()
+        title_font.setPointSize(
+            max(title_font.pointSize() + 2, QApplication.font().pointSize() + 2)
+        )
+        file_dialog_title.setFont(title_font)
+        self.preset_empty_file_dialog_title = file_dialog_title
+        layout.addWidget(file_dialog_title)
+
+        file_dialog = QFileDialog(pane, "Choose patch file")
+        file_dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
+        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        file_dialog.setNameFilter("Patches (*.hls *.hlx)")
+        file_dialog.setToolTip("Open a Helix setlist or preset file.")
+        file_dialog.setWindowFlags(Qt.WindowType.Widget)
+        file_dialog.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        file_dialog.fileSelected.connect(self._open_input_path)
+        self.preset_empty_file_dialog = file_dialog
+        layout.addWidget(file_dialog, 3)
         layout.addStretch(1)
         return pane
 
@@ -1587,6 +1599,9 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(
             self, "Choose patch file", filter="Patches (*.hls *.hlx)"
         )
+        self._open_input_path(path)
+
+    def _open_input_path(self, path: str) -> None:
         if not path or path == self.input_path.text():
             return
         if (

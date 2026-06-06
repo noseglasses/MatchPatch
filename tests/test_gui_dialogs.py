@@ -8,6 +8,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QLabel
 
 from matchpatch import __version__
@@ -62,7 +63,32 @@ def test_desktop_entry_registers_matchpatch_icon(tmp_path, monkeypatch) -> None:
 
     register_desktop_entry()
 
-    entry = (tmp_path / "applications" / "matchpatch.desktop").read_text(encoding="utf-8")
+    entry = (tmp_path / "applications" / "matchpatch-gui.desktop").read_text(
+        encoding="utf-8"
+    )
+    installed_icon = tmp_path / "icons" / "hicolor" / "512x512" / "apps" / "matchpatch-gui.png"
+    icon = QImage(str(installed_icon))
+
     assert "Name=MatchPatch" in entry
-    assert "Icon=matchpatch" in entry
-    assert (tmp_path / "icons" / "hicolor" / "512x512" / "apps" / "matchpatch.png").is_file()
+    assert installed_icon.is_file()
+    assert f"Icon={installed_icon}" in entry
+    assert "StartupWMClass=matchpatch-gui" in entry
+    assert icon.width() == 512
+    assert icon.height() == 512
+
+
+def test_desktop_entry_registers_wslg_visible_data_dir(tmp_path, monkeypatch) -> None:
+    data_dir = tmp_path / "usr" / "local" / "share"
+    user_data = tmp_path / "home" / ".local" / "share"
+    monkeypatch.setenv("XDG_DATA_DIRS", str(data_dir))
+    monkeypatch.setenv("XDG_DATA_HOME", str(user_data))
+
+    register_desktop_entry()
+
+    desktop_file = data_dir / "applications" / "matchpatch-gui.desktop"
+    installed_icon = data_dir / "icons" / "hicolor" / "512x512" / "apps" / "matchpatch-gui.png"
+    icon = QImage(str(installed_icon))
+
+    assert f"Icon={installed_icon}" in desktop_file.read_text(encoding="utf-8")
+    assert icon.width() == 512
+    assert icon.height() == 512

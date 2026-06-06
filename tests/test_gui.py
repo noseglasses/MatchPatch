@@ -297,10 +297,15 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.preset_table.isHidden()
     assert not window.preset_empty_logo.pixmap().isNull()
     assert window.preset_empty_logo.pixmap().size() == main_window.QSize(360, 360)
-    assert isinstance(window.preset_empty_open_button, main_window.QToolButton)
-    assert window.preset_empty_open_button.text() == "Open setlist/preset file"
-    assert not window.preset_empty_open_button.icon().isNull()
-    assert window.preset_empty_open_button.iconSize() == main_window.QSize(72, 72)
+    assert window.preset_empty_file_dialog_title.text() == "Open setlist/preset file"
+    assert window.preset_empty_file_dialog_title.alignment() == Qt.AlignmentFlag.AlignCenter
+    assert window.preset_empty_file_dialog_title.font().pointSize() >= app.font().pointSize() + 2
+    assert isinstance(window.preset_empty_file_dialog, QFileDialog)
+    assert window.preset_empty_file_dialog.acceptMode() == QFileDialog.AcceptMode.AcceptOpen
+    assert window.preset_empty_file_dialog.fileMode() == QFileDialog.FileMode.ExistingFile
+    assert window.preset_empty_file_dialog.nameFilters() == ["Patches (*.hls *.hlx)"]
+    assert window.preset_empty_file_dialog.testOption(QFileDialog.Option.DontUseNativeDialog)
+    assert window.preset_empty_file_dialog.parent() is window.preset_empty_state
     assert isinstance(window.preset_advanced_splitter, QSplitter)
     assert window.preset_advanced_splitter.orientation() == Qt.Orientation.Horizontal
     assert not window.preset_advanced_splitter.isHidden()
@@ -2035,6 +2040,21 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
     window.browse_input()
 
     assert window.input_path.text() == "/tmp/new.hlx"
+
+    window.close()
+
+
+def test_embedded_startup_file_selection_loads_like_open_button(monkeypatch, app) -> None:
+    window = MainWindow()
+    _mock_single_hlx_handler(monkeypatch, name="Embedded")
+
+    window.preset_empty_file_dialog.fileSelected.emit("/tmp/embedded.hlx")
+
+    assert window.input_path.text() == "/tmp/embedded.hlx"
+    assert window.preset_table.rowCount() == 1
+    assert window.preset_table.item(0, 1).text() == ""
+    assert window.preset_table.item(0, 2).text() == "Embedded"
+    assert window.preset_empty_state.isHidden()
 
     window.close()
 

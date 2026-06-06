@@ -135,4 +135,7 @@ def test_main_shows_window_maximized(monkeypatch) -> None:
     assert ("show_maximized",) in calls
     assert ("show_fullscreen",) not in calls
     assert ("show",) not in calls
+    assert ("application_name", "matchpatch-gui") in calls
+    assert ("display_name", "MatchPatch") in calls
+    assert ("desktop_file", "matchpatch-gui") in calls
     assert calls.index(("show_maximized",)) < calls.index(("exec",))
