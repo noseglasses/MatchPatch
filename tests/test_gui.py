@@ -273,6 +273,15 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.advanced_tabs.widget(3).isAncestorOf(window.target_lufs)
     assert window.advanced_tabs.widget(3).isAncestorOf(window.solo_gain_bump_db)
     assert window.advanced_tabs.widget(3).isAncestorOf(window.solo_regex)
+    assert window.advanced_tabs.widget(3).isAncestorOf(window.ignore_snapshot_regex)
+    lufs_group_titles = {
+        group.title() for group in window.advanced_tabs.widget(3).findChildren(QGroupBox)
+    }
+    assert "Snapshot name regex" in lufs_group_titles
+    lufs_labels = {label.text() for label in window.advanced_tabs.widget(3).findChildren(QLabel)}
+    assert "Solo" in lufs_labels
+    assert "Ignored" in lufs_labels
+    assert "Ignore snapshot" not in lufs_labels
     assert window.advanced_tabs.widget(4).isAncestorOf(window.snapshot_count_input)
     assert not isinstance(window.presets, QGroupBox)
     assert window.measurement_parameter_preset.currentText() == "Default"
@@ -300,10 +309,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.preset_empty_logo.pixmap().isNull()
     assert window.preset_empty_logo.pixmap().size() == main_window.QSize(360, 360)
     assert window.preset_empty_logo.size() == main_window.QSize(360, 360)
-    assert (
-        window.preset_empty_state.layout().itemAt(1).alignment()
-        & Qt.AlignmentFlag.AlignHCenter
-    )
+    assert window.preset_empty_state.layout().itemAt(1).alignment() & Qt.AlignmentFlag.AlignHCenter
     assert window.preset_empty_file_dialog_title.text() == "Open setlist/preset file"
     assert window.preset_empty_file_dialog_title.alignment() == Qt.AlignmentFlag.AlignCenter
     assert window.preset_empty_file_dialog_title.font().pointSize() >= app.font().pointSize() + 2

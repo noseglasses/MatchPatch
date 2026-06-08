@@ -66,6 +66,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -1766,21 +1767,16 @@ class MainWindow(QMainWindow):
         )
         self.ignore_snapshot_regex.textChanged.connect(self._refresh_all_snapshot_names)
         self.ignore_snapshot_regex.textChanged.connect(self._refresh_measurement_time_estimate)
-        snapshot_regexes = QWidget()
-        snapshot_regex_layout = QHBoxLayout(snapshot_regexes)
-        snapshot_regex_layout.setContentsMargins(0, 0, 0, 0)
+        snapshot_regexes = QGroupBox("Snapshot name regex")
+        snapshot_regex_layout = QFormLayout(snapshot_regexes)
+        snapshot_regex_layout.setContentsMargins(8, 8, 8, 8)
         snapshot_regex_layout.setSpacing(6)
-        snapshot_regex_layout.addWidget(_label("Solo", self.solo_regex.toolTip()))
-        snapshot_regex_layout.addWidget(self.solo_regex, 1)
-        snapshot_regex_layout.addWidget(
-            _label("Ignore snapshot", self.ignore_snapshot_regex.toolTip())
+        snapshot_regex_layout.addRow(_label("Solo", self.solo_regex.toolTip()), self.solo_regex)
+        snapshot_regex_layout.addRow(
+            _label("Ignored", self.ignore_snapshot_regex.toolTip()),
+            self.ignore_snapshot_regex,
         )
-        snapshot_regex_layout.addWidget(self.ignore_snapshot_regex, 1)
-        snapshot_regexes.setFixedHeight(self.solo_regex.sizeHint().height())
-        form.addRow(
-            _label("Snapshot regexes", "Regexes used to identify solo and ignored snapshots."),
-            snapshot_regexes,
-        )
+        form.addRow(snapshot_regexes)
         return content
 
     def _populate_devices(self) -> None:
