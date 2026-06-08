@@ -15,6 +15,14 @@ exclude_patterns = [
 
 html_theme = "furo"
 html_title = "MatchPatch Documentation"
+html_logo = "assets/matchmatch-logo.png"
+html_favicon = "assets/matchmatch-icon-512.png"
+html_static_path = [
+    "_static",
+]
+html_css_files = [
+    "matchpatch-docs.css",
+]
 html_extra_path = [
     "assets",
 ]

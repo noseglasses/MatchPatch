@@ -1,5 +1,11 @@
 # MatchPatch Docs
 
+```{image} assets/matchmatch-logo.png
+:alt: MatchPatch logo
+:class: matchpatch-index-logo
+:width: 220px
+```
+
 Start here if you want to balance Helix preset and snapshot loudness with
 MatchPatch.
 
