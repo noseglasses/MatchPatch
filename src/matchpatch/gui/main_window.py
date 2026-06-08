@@ -142,6 +142,8 @@ BAD_LUFS_FOREGROUND = QColor("#b91c1c")
 NORMALIZATION_FOCUS_BLUE = QColor("#2563eb")
 NORMALIZATION_FOCUS_BACKGROUND = QColor("#dbeafe")
 MANUAL_NAME_MODIFIED_BACKGROUND = QColor("#fef3c7")
+IGNORED_SNAPSHOT_BACKGROUND = QColor("#e5e7eb")
+IGNORED_SNAPSHOT_FOREGROUND = QColor("#4b5563")
 HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
 HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
 MEASUREMENT_TIMING_PRESETS: dict[str, dict[str, float]] = {
@@ -362,6 +364,7 @@ BAD_LUFS_HIGHLIGHT_ROLE = Qt.ItemDataRole.UserRole + 4
 RECORDED_OUTPUT_PATH_ROLE = Qt.ItemDataRole.UserRole + 5
 SNAPSHOT_OUTPUT_LEVELS_ROLE = Qt.ItemDataRole.UserRole + 6
 NORMALIZATION_FOCUS_ROLE = Qt.ItemDataRole.UserRole + 7
+IGNORED_SNAPSHOT_ROLE = Qt.ItemDataRole.UserRole + 8
 CUSTOM_ADJUSTMENT_COLOR = "#2563eb"
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
@@ -1285,7 +1288,7 @@ class MainWindow(QMainWindow):
         )
         self.config_export_button.clicked.connect(self.export_config)
         form.addRow(
-            _label("Config file", "Optional TOML file providing saved MatchPatch defaults."),
+            _label("Config", "Optional TOML file providing saved MatchPatch defaults."),
             _path_row(self.config_path, config_browse, self.config_export_button),
         )
         self.custom_adjustments_path = QLineEdit()
@@ -1596,14 +1599,30 @@ class MainWindow(QMainWindow):
             self.solo_gain_bump_db,
         )
         self.solo_regex = QLineEdit(r"(?i)\bsolo\b")
+        self.solo_regex.setMaximumWidth(220)
         self.solo_regex.setToolTip(
             "Case-insensitive regular expression used to identify solo snapshots."
         )
+        self.ignore_snapshot_regex = QLineEdit(NormalizationPolicy().ignore_snapshot_regex)
+        self.ignore_snapshot_regex.setMaximumWidth(260)
+        self.ignore_snapshot_regex.setToolTip(
+            "Regular expression used to identify snapshots skipped during normalization."
+        )
+        self.ignore_snapshot_regex.textChanged.connect(self._refresh_all_snapshot_names)
+        snapshot_regexes = QWidget()
+        snapshot_regex_layout = QHBoxLayout(snapshot_regexes)
+        snapshot_regex_layout.setContentsMargins(0, 0, 0, 0)
+        snapshot_regex_layout.setSpacing(6)
+        snapshot_regex_layout.addWidget(_label("Solo", self.solo_regex.toolTip()))
+        snapshot_regex_layout.addWidget(self.solo_regex, 1)
+        snapshot_regex_layout.addWidget(
+            _label("Ignore snapshot", self.ignore_snapshot_regex.toolTip())
+        )
+        snapshot_regex_layout.addWidget(self.ignore_snapshot_regex, 1)
+        snapshot_regexes.setFixedHeight(self.solo_regex.sizeHint().height())
         form.addRow(
-            _label(
-                "Solo snapshot regex", "Regular expression used to identify solo snapshot names."
-            ),
-            self.solo_regex,
+            _label("Snapshot regexes", "Regexes used to identify solo and ignored snapshots."),
+            snapshot_regexes,
         )
         return content
 
@@ -1871,7 +1890,11 @@ class MainWindow(QMainWindow):
                 )
                 return None
             try:
-                adjustment = float(adjustment_text.split(" ", 1)[0])
+                adjustment = (
+                    0.0
+                    if adjustment_text in {"-", "Ignore"}
+                    else float(adjustment_text.split(" ", 1)[0])
+                )
             except ValueError:
                 errors.append(
                     f"Line {line_number}: snapshot {snapshot_index + 1} adjustment "
@@ -1917,7 +1940,11 @@ class MainWindow(QMainWindow):
                 name_item,
                 snapshot_names[snapshot_index],
                 self._is_solo_snapshot_name(snapshot_names[snapshot_index]),
+                self._is_ignored_snapshot_name(snapshot_names[snapshot_index]),
             )
+            if self._is_ignored_snapshot_name(snapshot_names[snapshot_index]):
+                self._set_ignored_snapshot_highlight(row, snapshot_index, True)
+                continue
             self._set_adjustment_value(adjustment_item, adjustment_text, adjustment)
 
         patch_item = self.preset_table.item(row, 1)
@@ -1943,7 +1970,9 @@ class MainWindow(QMainWindow):
             )
             adjustment_value = ""
             if adjustment is not None:
-                if adjustment.data(BAD_LUFS_HIGHLIGHT_ROLE):
+                if adjustment.data(IGNORED_SNAPSHOT_ROLE):
+                    adjustment_value = adjustment.text()
+                elif adjustment.data(BAD_LUFS_HIGHLIGHT_ROLE):
                     adjustment_value = adjustment.text()
                 else:
                     stored_value = adjustment.data(ADJUSTMENT_VALUE_ROLE)
@@ -1976,6 +2005,13 @@ class MainWindow(QMainWindow):
         except re.error:
             return False
         return solo_pattern.search(name) is not None
+
+    def _is_ignored_snapshot_name(self, name: str) -> bool:
+        try:
+            ignore_pattern = re.compile(self.ignore_snapshot_regex.text())
+        except re.error:
+            return False
+        return ignore_pattern.search(name) is not None
 
     def show_help(self) -> None:
         HelpDialog(self).exec()
@@ -2061,6 +2097,7 @@ class MainWindow(QMainWindow):
         config["policy"] = {
             "measured_snapshots": args.policy.snapshot_count,
             "solo_regex": args.policy.solo_regex,
+            "ignore_snapshot_regex": args.policy.ignore_snapshot_regex,
             "solo_gain_bump_db": args.policy.solo_gain_bump_db,
             "crest_factor_reference_db": args.policy.crest_factor_reference_db,
             "crest_factor_correction_ratio": args.policy.crest_factor_correction_ratio,
@@ -2152,6 +2189,7 @@ class MainWindow(QMainWindow):
         self.target_lufs.setText(str(args.target_lufs))
         self.solo_gain_bump_db.setText(str(args.policy.solo_gain_bump_db))
         self.solo_regex.setText(args.policy.solo_regex)
+        self.ignore_snapshot_regex.setText(args.policy.ignore_snapshot_regex)
         self.analysis_window.setText(str(args.analysis_options.window_seconds))
         self.analysis_interval.setText(str(args.analysis_options.interval_seconds))
         self._optimization_stability_runs = int(
@@ -3016,6 +3054,10 @@ class MainWindow(QMainWindow):
         snapshot_index = None if snapshot is None else snapshot - 1
         if snapshot_index is not None and not 0 <= snapshot_index < self.snapshot_count:
             snapshot_index = None
+        if snapshot_index is not None:
+            item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
+            if item is not None and item.data(IGNORED_SNAPSHOT_ROLE):
+                snapshot_index = None
         self.preset_table.set_normalization_focus(row, snapshot_index)
 
     def _clear_normalization_focus(self) -> None:
@@ -3031,6 +3073,9 @@ class MainWindow(QMainWindow):
         column = self._snapshot_adjustment_column(event.snapshot - 1)
         item = self.preset_table.item(row, column)
         if item is None:
+            return
+        if item.data(IGNORED_SNAPSHOT_ROLE):
+            self._set_adjustment_ignored(item)
             return
         path = Path(event.path)
         item.setData(RECORDED_OUTPUT_PATH_ROLE, str(path))
@@ -3100,12 +3145,17 @@ class MainWindow(QMainWindow):
         palette.setColor(QPalette.ColorRole.Base, color)
         widget.setPalette(palette)
         widget.setAutoFillBackground(True)
+        widget.setProperty("normalizationFocus", bool(item.data(NORMALIZATION_FOCUS_ROLE)))
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+        widget.update()
 
     @staticmethod
     def _style_adjustment_label(label: QLabel, item: QTableWidgetItem) -> None:
         label.setFont(item.font())
-        color = item.foreground().color()
-        if color.isValid():
+        foreground = item.foreground()
+        color = foreground.color()
+        if foreground.style() != Qt.BrushStyle.NoBrush and color.isValid():
             label.setStyleSheet(f"color: {color.name()};")
         else:
             label.setStyleSheet("")
@@ -3559,6 +3609,7 @@ class MainWindow(QMainWindow):
         argv.extend(["--target-lufs", self.target_lufs.text()])
         argv.extend(["--solo-gain-bump-db", self.solo_gain_bump_db.text()])
         argv.extend(["--solo-regex", self.solo_regex.text()])
+        argv.extend(["--ignore-snapshot-regex", self.ignore_snapshot_regex.text()])
         argv.extend(["--snapshot-count", str(self.snapshot_count_input.value())])
         if self.keep_temp.isChecked():
             argv.append("--keep-temp")
@@ -3944,6 +3995,8 @@ class MainWindow(QMainWindow):
                         self._snapshot_name_max_length(),
                     )
                 if adjustment_item is not None:
+                    if adjustment_item.data(IGNORED_SNAPSHOT_ROLE):
+                        continue
                     if adjustment_item.data(BAD_LUFS_HIGHLIGHT_ROLE):
                         continue
                     stored_value = adjustment_item.data(ADJUSTMENT_VALUE_ROLE)
@@ -4044,14 +4097,13 @@ class MainWindow(QMainWindow):
             self._clear_preset_adjustments(row)
             return
 
-        snapshot_position = self.preset_snapshot_positions.get(match["patch"], 0)
-        if snapshot_position >= self.snapshot_count:
-            return
-
         label = match["label"]
         is_solo = label.endswith(" (S)")
         if is_solo:
             label = label[:-4]
+        snapshot_position = self._snapshot_position_for_gain_log(row, match["patch"], label)
+        if snapshot_position >= self.snapshot_count:
+            return
         name_column = self._snapshot_name_column(snapshot_position)
         output_column = self._snapshot_output_column(snapshot_position)
         adjustment_column = self._snapshot_adjustment_column(snapshot_position)
@@ -4061,12 +4113,32 @@ class MainWindow(QMainWindow):
         if name_item is None or output_item is None or adjustment_item is None:
             return
         if not name_item.text():
-            self._set_snapshot_name(name_item, label, is_solo)
+            self._set_snapshot_name(
+                name_item,
+                label,
+                is_solo,
+                self._is_ignored_snapshot_name(label),
+            )
+        if name_item.data(IGNORED_SNAPSHOT_ROLE) or self._is_ignored_snapshot_name(
+            name_item.text() or label
+        ):
+            self._set_ignored_snapshot_highlight(row, snapshot_position, True)
+            self.preset_snapshot_positions[match["patch"]] = max(
+                self.preset_snapshot_positions.get(match["patch"], 0),
+                snapshot_position + 1,
+            )
+            return
         if match.re is GAIN_BAD_LUFS_PATTERN:
             detail = match.groupdict().get("detail")
+            adjustment = _bad_lufs_adjustment(detail, output_item.text())
+            if adjustment is None and adjustment_item.data(BAD_LUFS_HIGHLIGHT_ROLE):
+                try:
+                    adjustment = _parse_adjustment_display_text(adjustment_item.text())
+                except ValueError:
+                    adjustment = None
             display_text, tooltip = _bad_lufs_adjustment_display(
                 detail,
-                adjustment=_bad_lufs_adjustment(detail, output_item.text()),
+                adjustment=adjustment,
             )
             adjustment_item.setText(display_text)
             adjustment_item.setData(ADJUSTMENT_VALUE_ROLE, None)
@@ -4079,7 +4151,10 @@ class MainWindow(QMainWindow):
             self._refresh_adjustment_cell_widget(adjustment_item)
             self._set_bad_lufs_highlight(row, snapshot_position)
             self._adjusted_presets.add(match["patch"])
-            self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
+            self.preset_snapshot_positions[match["patch"]] = max(
+                self.preset_snapshot_positions.get(match["patch"], 0),
+                snapshot_position + 1,
+            )
             return
 
         output_level = match.groupdict().get("before") or match.groupdict().get("after")
@@ -4107,7 +4182,27 @@ class MainWindow(QMainWindow):
         )
         self._refresh_adjustment_cell_widget(adjustment_item)
         self._adjusted_presets.add(match["patch"])
-        self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
+        self.preset_snapshot_positions[match["patch"]] = max(
+            self.preset_snapshot_positions.get(match["patch"], 0),
+            snapshot_position + 1,
+        )
+
+    def _snapshot_position_for_gain_log(self, row: int, patch: str, label: str) -> int:
+        cursor = self.preset_snapshot_positions.get(patch, 0)
+        candidates = []
+        for snapshot_index in range(self.snapshot_count):
+            item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
+            if item is not None and item.text() == label:
+                candidates.append(snapshot_index)
+
+        if len(candidates) == 1:
+            return candidates[0]
+
+        remaining_candidates = [candidate for candidate in candidates if candidate >= cursor]
+        if len(remaining_candidates) == 1:
+            return remaining_candidates[0]
+
+        return cursor
 
     def _apply_snapshot_measurement(self, event: ProgressEvent) -> None:
         if event.device_patch is None or event.snapshot is None or event.lufs is None:
@@ -4129,12 +4224,20 @@ class MainWindow(QMainWindow):
         adjustment_item = self.preset_table.item(row, adjustment_column)
         if adjustment_item is None:
             return
+        if adjustment_item.data(IGNORED_SNAPSHOT_ROLE):
+            self._set_adjustment_ignored(adjustment_item)
+            return
 
         policy = self._normalization_policy()
         gain_delta = self._measurement_gain_delta(event, policy)
 
         name_item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
         is_solo = name_item is not None and self._is_solo_snapshot_name(name_item.text())
+        is_ignored = name_item is not None and self._is_ignored_snapshot_name(name_item.text())
+        if is_ignored:
+            self._set_ignored_snapshot_highlight(row, snapshot_index, True)
+            self._set_adjustment_ignored(adjustment_item)
+            return
         if is_solo:
             gain_delta += policy.solo_gain_bump_db
 
@@ -4185,6 +4288,13 @@ class MainWindow(QMainWindow):
         if snapshot_index < 0 or snapshot_index >= self.snapshot_count:
             return
 
+        adjustment_item = self.preset_table.item(
+            row,
+            self._snapshot_adjustment_column(snapshot_index),
+        )
+        if adjustment_item is not None and adjustment_item.data(IGNORED_SNAPSHOT_ROLE):
+            self._set_adjustment_ignored(adjustment_item)
+            return
         self._set_bad_snapshot_measurement(row, snapshot_index, event.message)
         self._adjusted_presets.add(event.device_patch)
 
@@ -4424,6 +4534,9 @@ class MainWindow(QMainWindow):
         for snapshot_index in range(self.snapshot_count):
             item = self.preset_table.item(row, self._snapshot_adjustment_column(snapshot_index))
             if item is not None:
+                if item.data(IGNORED_SNAPSHOT_ROLE):
+                    self._set_adjustment_ignored(item)
+                    continue
                 self._set_adjustment_pending(item)
 
     @staticmethod
@@ -4481,6 +4594,58 @@ class MainWindow(QMainWindow):
         for row in range(self.preset_table.rowCount()):
             self._clear_bad_lufs_highlight(row)
 
+    def _set_ignored_snapshot_highlight(
+        self,
+        row: int,
+        snapshot_index: int,
+        ignored: bool,
+    ) -> None:
+        signals_blocked = self.preset_table.blockSignals(True)
+        try:
+            for column in (
+                self._snapshot_name_column(snapshot_index),
+                self._snapshot_output_column(snapshot_index),
+                self._snapshot_adjustment_column(snapshot_index),
+            ):
+                item = self.preset_table.item(row, column)
+                if item is None:
+                    continue
+                item.setData(IGNORED_SNAPSHOT_ROLE, True if ignored else None)
+                item.setForeground(QBrush(IGNORED_SNAPSHOT_FOREGROUND) if ignored else QBrush())
+                self._refresh_preset_item_background(item)
+                self._refresh_preset_cell_widget_background(item)
+            adjustment = self.preset_table.item(
+                row,
+                self._snapshot_adjustment_column(snapshot_index),
+            )
+            if adjustment is not None:
+                if ignored:
+                    self._set_adjustment_ignored(adjustment)
+                elif adjustment.text() in {"-", "Ignore"} and adjustment.data(ADJUSTMENT_VALUE_ROLE) is None:
+                    self._set_adjustment_value(adjustment, "+0", 0)
+        finally:
+            self.preset_table.blockSignals(signals_blocked)
+
+    @staticmethod
+    def _set_adjustment_ignored(item: QTableWidgetItem) -> None:
+        table = item.tableWidget()
+        signals_blocked = table.blockSignals(True) if table is not None else False
+        try:
+            item.setText("-")
+            item.setData(ADJUSTMENT_VALUE_ROLE, None)
+            item.setData(RECORDED_OUTPUT_PATH_ROLE, None)
+            item.setToolTip("This snapshot is skipped during normalization.")
+            font = item.font()
+            font.setBold(False)
+            font.setPointSize(max(QApplication.font().pointSize(), 9))
+            item.setFont(font)
+            item.setForeground(QBrush(IGNORED_SNAPSHOT_FOREGROUND))
+            if table is not None:
+                table.removeCellWidget(item.row(), item.column())
+        finally:
+            if table is not None:
+                table.blockSignals(signals_blocked)
+
     def _set_manual_name_modified(self, item: QTableWidgetItem, modified: bool) -> None:
         signals_blocked = self.preset_table.blockSignals(True)
         try:
@@ -4504,6 +4669,8 @@ class MainWindow(QMainWindow):
             item.setBackground(NORMALIZATION_FOCUS_BACKGROUND)
         elif item.data(MANUAL_NAME_MODIFIED_ROLE):
             item.setBackground(MANUAL_NAME_MODIFIED_BACKGROUND)
+        elif item.data(IGNORED_SNAPSHOT_ROLE):
+            item.setBackground(IGNORED_SNAPSHOT_BACKGROUND)
         else:
             item.setBackground(QBrush())
 
@@ -4547,27 +4714,46 @@ class MainWindow(QMainWindow):
             solo_pattern = re.compile(self.solo_regex.text())
         except re.error:
             solo_pattern = None
+        try:
+            ignore_pattern = re.compile(self.ignore_snapshot_regex.text())
+        except re.error:
+            ignore_pattern = None
         for snapshot_index in range(self.snapshot_count):
             item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
             if item is not None:
-                self._set_snapshot_name(item, "", False)
+                self._set_snapshot_name(item, "", False, False)
+                self._set_ignored_snapshot_highlight(row, snapshot_index, False)
         for snapshot, name in enumerate(snapshot_names[: self.snapshot_count]):
             item = self.preset_table.item(row, self._snapshot_name_column(snapshot))
             if item is not None:
+                is_ignored = ignore_pattern is not None and ignore_pattern.search(name) is not None
                 self._set_snapshot_name(
                     item,
                     name,
                     solo_pattern is not None and solo_pattern.search(name) is not None,
+                    is_ignored,
                 )
+                self._set_ignored_snapshot_highlight(row, snapshot, is_ignored)
+
+    def _refresh_all_snapshot_names(self) -> None:
+        if not hasattr(self, "preset_table"):
+            return
+        for row in range(self.preset_table.rowCount()):
+            self._refresh_snapshot_names(row)
 
     @staticmethod
-    def _set_snapshot_name(item: QTableWidgetItem, name: str, is_solo: bool) -> None:
+    def _set_snapshot_name(
+        item: QTableWidgetItem,
+        name: str,
+        is_solo: bool,
+        is_ignored: bool = False,
+    ) -> None:
         table = item.tableWidget()
         signals_blocked = table.blockSignals(True) if table is not None else False
         try:
             item.setText(name)
             item.setIcon(QIcon())
-            item.setToolTip("Solo snapshot" if is_solo else "")
+            item.setToolTip(_snapshot_tooltip(is_solo, is_ignored))
         finally:
             if table is not None:
                 table.blockSignals(signals_blocked)
@@ -4578,7 +4764,7 @@ class MainWindow(QMainWindow):
             return
         label = SnapshotNameCellWidget(f"{escape(name)} <span style='color: #f59e0b;'>★</span>")
         label.setContentsMargins(3, 0, 0, 0)
-        label.setToolTip("Solo snapshot")
+        label.setToolTip(item.toolTip())
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         MainWindow._style_table_cell_widget(label, item)
         table.setCellWidget(item.row(), item.column(), label)
@@ -4641,11 +4827,23 @@ class MainWindow(QMainWindow):
                     solo_pattern = re.compile(self.solo_regex.text())
                 except re.error:
                     solo_pattern = None
+                try:
+                    ignore_pattern = re.compile(self.ignore_snapshot_regex.text())
+                except re.error:
+                    ignore_pattern = None
+                is_ignored = (
+                    ignore_pattern is not None and ignore_pattern.search(item.text()) is not None
+                )
                 self._set_snapshot_name(
                     item,
                     item.text(),
                     solo_pattern is not None and solo_pattern.search(item.text()) is not None,
+                    is_ignored,
                 )
+                snapshot_index = (
+                    item.column() - SNAPSHOT_TABLE_START_COLUMN
+                ) // SNAPSHOT_TABLE_COLUMN_STRIDE
+                self._set_ignored_snapshot_highlight(item.row(), snapshot_index, is_ignored)
             elif self._is_snapshot_adjustment_column(item.column()):
                 try:
                     value = float(item.text())
@@ -4731,6 +4929,9 @@ class MainWindow(QMainWindow):
         custom_adjustment: float | None = None,
         display_value: float | None = None,
     ) -> None:
+        if item.data(IGNORED_SNAPSHOT_ROLE):
+            MainWindow._set_adjustment_ignored(item)
+            return
         table = item.tableWidget()
         signals_blocked = table.blockSignals(True) if table is not None else False
         try:
@@ -4753,8 +4954,11 @@ class MainWindow(QMainWindow):
             font.setBold(False)
             font.setPointSize(max(QApplication.font().pointSize(), 9))
             item.setFont(font)
-            color = "#15803d" if value > 0 else "#b91c1c" if value < 0 else None
-            item.setForeground(QBrush(QColor(color)) if color is not None else QBrush())
+            item.setForeground(
+                QBrush(IGNORED_SNAPSHOT_FOREGROUND)
+                if item.data(IGNORED_SNAPSHOT_ROLE)
+                else QBrush()
+            )
             if table is not None:
                 table.removeCellWidget(item.row(), item.column())
                 if custom_adjustment is not None:
@@ -4789,7 +4993,11 @@ class MainWindow(QMainWindow):
             font.setBold(False)
             font.setPointSize(max(QApplication.font().pointSize(), 9))
             item.setFont(font)
-            item.setForeground(QBrush())
+            item.setForeground(
+                QBrush(IGNORED_SNAPSHOT_FOREGROUND)
+                if item.data(IGNORED_SNAPSHOT_ROLE)
+                else QBrush()
+            )
             if table is not None:
                 table.removeCellWidget(item.row(), item.column())
         finally:
@@ -4974,6 +5182,19 @@ class SnapshotNameCellWidget(QLabel):
         pen.setWidth(2)
         painter.setPen(pen)
         painter.drawLine(0, 0, 0, self.height())
+        if self.property("normalizationFocus"):
+            focus_pen = QPen(NORMALIZATION_FOCUS_BLUE)
+            focus_pen.setWidth(3)
+            painter.setPen(focus_pen)
+            offset = focus_pen.width() // 2
+            painter.drawLine(offset, 0, offset, self.height())
+            painter.drawLine(0, offset, self.width(), offset)
+            painter.drawLine(
+                0,
+                self.height() - offset - 1,
+                self.width(),
+                self.height() - offset - 1,
+            )
 
 
 class ContentHeightTableWidget(QTableWidget):
@@ -5011,21 +5232,17 @@ class ContentHeightTableWidget(QTableWidget):
             return
         focused = row == self._normalizing_row
         focus_columns = {1, 2}
-        if focused and self._normalizing_snapshot is not None:
-            focus_columns.update(
-                (
-                    MainWindow._snapshot_name_column(self._normalizing_snapshot),
-                    MainWindow._snapshot_output_column(self._normalizing_snapshot),
-                    MainWindow._snapshot_adjustment_column(self._normalizing_snapshot),
-                )
-            )
+        if focused:
+            focus_columns.update(range(SNAPSHOT_TABLE_START_COLUMN, self.columnCount()))
         for column in range(self.columnCount()):
             item = self.item(row, column)
             if item is None:
                 continue
             item.setData(
                 NORMALIZATION_FOCUS_ROLE,
-                True if focused and column in focus_columns else None,
+                True
+                if focused and column in focus_columns and not item.data(IGNORED_SNAPSHOT_ROLE)
+                else None,
             )
             MainWindow._refresh_preset_item_background(item)
             MainWindow._refresh_preset_cell_widget_background(item)
@@ -5622,6 +5839,16 @@ def _format_snapshot_output_levels(
     if snapshot_index >= len(levels):
         return ""
     return ", ".join(f"{level:.1f}" for level in levels[snapshot_index])
+
+
+def _snapshot_tooltip(is_solo: bool, is_ignored: bool) -> str:
+    if is_solo and is_ignored:
+        return "Solo snapshot; skipped during normalization"
+    if is_solo:
+        return "Solo snapshot"
+    if is_ignored:
+        return "Skipped during normalization"
+    return ""
 
 
 def _bad_lufs_adjustment_display(

@@ -237,6 +237,31 @@ def test_adjust_snapshot_gains_applies_delta_to_parallel_outputs() -> None:
     assert snapshot["controllers"]["dsp0"]["outputB"]["gain"]["@value"] == -1.0
 
 
+def test_adjust_snapshot_gains_ignores_default_snapshot_names() -> None:
+    module = _load_legacy_module()
+    data = {
+        "presets": [
+            {
+                "meta": {"name": "Song"},
+                "tone": {
+                    "dsp0": {"outputA": {"@output": 10, "gain": -1.0}},
+                    "snapshot0": {
+                        "@name": "SNAPSHOT 1",
+                        "controllers": {"dsp0": {"outputA": {"gain": {"@value": -1.0}}}},
+                    },
+                },
+            }
+        ]
+    }
+
+    changes = module.adjust_snapshot_gains(data, {"01A": {0: 2.0}}, snapshot_count=1)
+
+    assert changes == 0
+    assert data["presets"][0]["tone"]["snapshot0"]["controllers"]["dsp0"]["outputA"][
+        "gain"
+    ]["@value"] == -1.0
+
+
 def test_manual_adjustments_reject_invalid_helix_name() -> None:
     module = _load_legacy_module()
 

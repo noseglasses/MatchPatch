@@ -52,7 +52,7 @@ class AboutDialog(QDialog):
             "<p>Copyright © 2026 MatchPatch contributors.</p>"
             "<p>Open source software released under the MIT License.</p>"
             "<p>Keep backups of original processor files. Generated measurement files are "
-            "intended for measurement workflows.</p>"
+            "intended for measurement workflows only.</p>"
         )
         details.setOpenExternalLinks(True)
         details.setWordWrap(True)

@@ -982,6 +982,7 @@ def adjust_snapshot_gains(
     ignore_bad_lufs=False,
     snapshot_count=4,
     solo_regex=r"(?i)\bsolo\b",
+    ignore_snapshot_regex=r"(?i)^SNAPSHOT [1-9]\d*$",
     solo_gain_bump_db=SOLO_GAIN_BUMP,
     gain_deadband_db=GAIN_ADJUSTMENT_DEADBAND_DB,
     manual_gain_deltas=None,
@@ -989,6 +990,7 @@ def adjust_snapshot_gains(
 
     changes = 0
     solo_pattern = re.compile(solo_regex)
+    ignore_snapshot_pattern = re.compile(ignore_snapshot_regex)
 
     presets = data.get("presets", [])
 
@@ -1061,10 +1063,15 @@ def adjust_snapshot_gains(
             snapshot_name = snapshot.get("@name", f"Snapshot {snapshot_index + 1}")
 
             is_solo = solo_pattern.search(snapshot_name) is not None
+            is_ignored = ignore_snapshot_pattern.search(snapshot_name) is not None
 
             manual_delta = (manual_gain_deltas or {}).get(helix_preset, {}).get(str(snapshot_index))
             gain_delta = snapshot_gain_deltas[snapshot_index]
             marker = " (S)" if is_solo else ""
+
+            if is_ignored:
+                print(f"[GAIN] {helix_preset} {snapshot_name}{marker} | ignored by snapshot regex")
+                continue
 
             if manual_delta is not None:
                 gain_delta = float(manual_delta)
@@ -1273,6 +1280,7 @@ def process_json_structure(
     ignore_bad_lufs=False,
     snapshot_count=4,
     solo_regex=r"(?i)\bsolo\b",
+    ignore_snapshot_regex=r"(?i)^SNAPSHOT [1-9]\d*$",
     solo_gain_bump_db=SOLO_GAIN_BUMP,
     gain_deadband_db=GAIN_ADJUSTMENT_DEADBAND_DB,
     manual_gain_deltas=None,
@@ -1299,6 +1307,7 @@ def process_json_structure(
             ignore_bad_lufs,
             snapshot_count,
             solo_regex,
+            ignore_snapshot_regex,
             solo_gain_bump_db,
             gain_deadband_db,
             manual_gain_deltas,
@@ -1457,6 +1466,11 @@ def main():
 
     parser.add_argument("--solo-regex", "--solo-marker", dest="solo_regex", default=r"(?i)\bsolo\b")
 
+    parser.add_argument(
+        "--ignore-snapshot-regex",
+        default=r"(?i)^SNAPSHOT [1-9]\d*$",
+    )
+
     parser.add_argument("--solo-gain-bump-db", type=float, default=SOLO_GAIN_BUMP)
 
     parser.add_argument(
@@ -1609,6 +1623,7 @@ def main():
             args.ignore_bad_lufs,
             args.snapshot_count,
             args.solo_regex,
+            args.ignore_snapshot_regex,
             args.solo_gain_bump_db,
             args.gain_deadband_db,
             manual_adjustments.get("gain_deltas"),

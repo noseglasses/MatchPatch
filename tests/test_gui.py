@@ -687,6 +687,49 @@ def test_single_preset_uses_table_preset_id_for_normalization(monkeypatch, app) 
     window.close()
 
 
+def test_ignore_snapshot_regex_marks_and_skips_default_snapshots(monkeypatch, app) -> None:
+    window = MainWindow()
+    _mock_single_hlx_handler(
+        monkeypatch,
+        snapshot_names=("SNAPSHOT 1", "Verse"),
+        snapshot_output_levels=((0.0,), (0.0,)),
+    )
+    window.input_path.setText("/tmp/example.hlx")
+    window.load_assignments()
+    window.preset_table.item(0, 1).setText("01A")
+    selected = window.preset_table.item(0, 0)
+    assert selected is not None
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.target_lufs.setText("-16")
+
+    name = window.preset_table.item(0, 3)
+    output = window.preset_table.item(0, 4)
+    adjustment = window.preset_table.item(0, 5)
+    assert name.background().color().name() == "#e5e7eb"
+    assert output.background().color().name() == "#e5e7eb"
+    assert adjustment.background().color().name() == "#e5e7eb"
+    assert name.foreground().color().name() == "#4b5563"
+    assert output.foreground().color().name() == "#4b5563"
+    assert adjustment.foreground().color().name() == "#4b5563"
+    assert adjustment.text() == "-"
+
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="01A",
+            snapshot=1,
+            lufs=-20.0,
+            crest_factor_db=12.0,
+        )
+    )
+
+    assert adjustment.text() == "-"
+    assert adjustment.data(main_window.ADJUSTMENT_VALUE_ROLE) is None
+    assert 0 not in window._table_adjustments().gain_deltas["01A"]
+
+    window.close()
+
+
 def test_single_preset_run_warns_when_preset_id_is_missing(monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch)
@@ -996,6 +1039,7 @@ def test_preset_table_highlights_current_normalization_focus(app) -> None:
         window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
         window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
         window._clear_preset_adjustments(row)
+    window._set_ignored_snapshot_highlight(0, 2, True)
 
     window.update_progress(ProgressEvent("preset_started", device_patch="02B"))
 
@@ -1004,12 +1048,47 @@ def test_preset_table_highlights_current_normalization_focus(app) -> None:
     assert window.preset_table.item(0, 1).background().color() == (
         main_window.NORMALIZATION_FOCUS_BACKGROUND
     )
+    assert window.preset_table.item(0, 3).background().color() == (
+        main_window.NORMALIZATION_FOCUS_BACKGROUND
+    )
+    assert window.preset_table.item(0, 4).background().color() == (
+        main_window.NORMALIZATION_FOCUS_BACKGROUND
+    )
+    assert window.preset_table.item(0, 5).background().color() == (
+        main_window.NORMALIZATION_FOCUS_BACKGROUND
+    )
+    assert window.preset_table.item(0, 9).background().color() == (
+        main_window.IGNORED_SNAPSHOT_BACKGROUND
+    )
+    assert window.preset_table.item(0, 10).background().color() == (
+        main_window.IGNORED_SNAPSHOT_BACKGROUND
+    )
+    assert window.preset_table.item(0, 11).background().color() == (
+        main_window.IGNORED_SNAPSHOT_BACKGROUND
+    )
     assert window.preset_table.item(1, 1).background().style() == Qt.BrushStyle.NoBrush
 
     window.update_progress(ProgressEvent("snapshot_started", device_patch="02B", snapshot=2))
 
     assert window.preset_table._normalizing_row == 0
     assert window.preset_table._normalizing_snapshot == 1
+    assert window.preset_table.item(0, 3).background().color() == (
+        main_window.NORMALIZATION_FOCUS_BACKGROUND
+    )
+    assert window.preset_table.item(0, 6).background().color() == (
+        main_window.NORMALIZATION_FOCUS_BACKGROUND
+    )
+    assert window.preset_table.item(0, 9).background().color() == (
+        main_window.IGNORED_SNAPSHOT_BACKGROUND
+    )
+
+    window.update_progress(ProgressEvent("snapshot_started", device_patch="02B", snapshot=3))
+
+    assert window.preset_table._normalizing_row == 0
+    assert window.preset_table._normalizing_snapshot is None
+    assert window.preset_table.item(0, 9).background().color() == (
+        main_window.IGNORED_SNAPSHOT_BACKGROUND
+    )
 
     window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
 
@@ -1840,8 +1919,8 @@ def test_gain_log_updates_preset_correction_columns(monkeypatch, app) -> None:
     assert window.preset_table.item(0, 9).text() == "Rhythm"
     assert window.preset_table.item(0, 10).text() == "0.0"
     assert window.preset_table.item(0, 11).text() == "-2.0"
-    assert window.preset_table.item(0, 5).foreground().color().name() == "#15803d"
-    assert window.preset_table.item(0, 11).foreground().color().name() == "#b91c1c"
+    assert window.preset_table.item(0, 5).foreground().style() == Qt.BrushStyle.NoBrush
+    assert window.preset_table.item(0, 11).foreground().style() == Qt.BrushStyle.NoBrush
     assert window.preset_table.columnWidth(0) == window.style().pixelMetric(
         QStyle.PixelMetric.PM_IndicatorWidth
     ) + 2 * window.style().pixelMetric(QStyle.PixelMetric.PM_CheckBoxLabelSpacing)
@@ -2010,9 +2089,9 @@ def test_snapshot_completed_updates_adjustment_cells_immediately(monkeypatch, ap
 
     assert window.preset_table.item(0, 5).text() == "+2 (+1)"
     assert window.preset_table.item(0, 5).data(main_window.ADJUSTMENT_VALUE_ROLE) == 3.0
-    assert window.preset_table.item(0, 5).foreground().color().name() == "#15803d"
+    assert window.preset_table.item(0, 5).foreground().style() == Qt.BrushStyle.NoBrush
     assert window.preset_table.item(0, 8).text() == "+4"
-    assert window.preset_table.item(0, 8).foreground().color().name() == "#15803d"
+    assert window.preset_table.item(0, 8).foreground().style() == Qt.BrushStyle.NoBrush
     assert not window.preset_table.item(0, 5).font().bold()
     assert not window.preset_table.item(0, 8).font().bold()
 
@@ -2064,7 +2143,7 @@ def test_recorded_pending_adjustment_widget_updates_with_gain_value(tmp_path, mo
     assert cell_widget.autoFillBackground()
     assert label.text() == "+1.5"
     assert not label.font().bold()
-    assert label.styleSheet() == "color: #15803d;"
+    assert label.styleSheet() == ""
 
     window.close()
 
@@ -2275,13 +2354,10 @@ def test_snapshot_names_are_preloaded_and_bad_lufs_is_marked(monkeypatch, app) -
         for column in (1, 2, 3, 4, 5)
     )
     assert all(
-        window.preset_table.item(0, column).background().style() == Qt.BrushStyle.NoBrush
+        not window.preset_table.item(0, column).data(main_window.BAD_LUFS_HIGHLIGHT_ROLE)
         for column in (0, 6, 7, 8, 9, 10, 11, 12, 13, 14)
     )
-    assert (
-        window.preset_table.cellWidget(0, 6).palette().color(QPalette.ColorRole.Window).name()
-        == "#ffffff"
-    )
+    assert not window.preset_table.item(0, 6).data(main_window.BAD_LUFS_HIGHLIGHT_ROLE)
 
     window.close()
 
@@ -2479,6 +2555,81 @@ def test_implausible_gain_warning_is_marked_as_bad_lufs(monkeypatch, app) -> Non
     assert adjustment.foreground().color().name() == "#b91c1c"
     assert "Resulting output block level would be 21.9 dB" in adjustment.toolTip()
     assert "Line 6 Helix supported range of -120.0 to +20.0 dB" in adjustment.toolTip()
+
+    window.close()
+
+
+def test_bad_gain_log_uses_snapshot_label_after_unparsed_gain_line(monkeypatch, app) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    window.target_lufs.setText("-16.0")
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("06A"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Snap One", "Snap Two"))
+    window._set_output_level(window.preset_table.item(0, 4), "14.0, 14.0")
+    window._set_output_level(window.preset_table.item(0, 7), "14.0, 14.0")
+
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="06A",
+            snapshot=1,
+            lufs=-14.1865,
+            crest_factor_db=17.1954,
+        )
+    )
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="06A",
+            snapshot=2,
+            lufs=-23.4837,
+            crest_factor_db=11.4141,
+        )
+    )
+
+    assert window.preset_table.item(0, 5).text() == "-1.8"
+    assert window.preset_table.item(0, 8).text() == "+7.2 ⚠️"
+
+    window.update_progress(
+        ProgressEvent(
+            "log",
+            message=(
+                "[GAIN] 06A Snap One | "
+                "dsp1.outputA 14.0 dB -> 12.2 dB, "
+                "dsp2.outputB 14.0 dB -> 12.2 dB "
+                "(Delta: -1.8 dB)"
+            ),
+        )
+    )
+    window.update_progress(
+        ProgressEvent(
+            "log",
+            message=(
+                "[GAIN] 06A Snap Two | measurement unavailable "
+                "(Implausible output gain 21.2 dB for 06A Snap Two dsp1.outputA. "
+                "This usually means the measurement recorded silence.)"
+            ),
+        )
+    )
+    window.update_progress(ProgressEvent("preset_completed", device_patch="06A"))
+
+    assert window.preset_table.item(0, 5).text() == "-1.8"
+    assert window.preset_table.item(0, 8).text() == "+7.2 ⚠️"
+    assert window.preset_table.item(0, 8).foreground().color().name() == "#b91c1c"
+    assert all(
+        not window.preset_table.item(0, column).data(main_window.BAD_LUFS_HIGHLIGHT_ROLE)
+        for column in (3, 4, 5)
+    )
+    assert all(
+        window.preset_table.item(0, column).data(main_window.BAD_LUFS_HIGHLIGHT_ROLE)
+        for column in (6, 7, 8)
+    )
 
     window.close()
 

@@ -250,6 +250,10 @@ def test_apply_analysis_csv_translates_generic_patch_column(tmp_path, monkeypatc
     assert seen["rows"] == [{"Preset": "1", "HelixPreset": "01A", "LUFS1": "-15.5"}]
     assert "--ignore-bad-lufs" in seen["args"]
     assert seen["args"][seen["args"].index("--solo-regex") + 1] == r"(?i)\bsolo\b"
+    assert (
+        seen["args"][seen["args"].index("--ignore-snapshot-regex") + 1]
+        == r"(?i)^SNAPSHOT [1-9]\d*$"
+    )
     assert not seen["legacy"].exists()
 
 

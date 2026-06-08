@@ -47,6 +47,7 @@ class SteeringOptions:
 class NormalizationPolicy:
     snapshot_count: int = 4
     solo_regex: str = r"(?i)\bsolo\b"
+    ignore_snapshot_regex: str = r"(?i)^SNAPSHOT [1-9]\d*$"
     solo_gain_bump_db: float = 3.0
     crest_factor_reference_db: float = 12.0
     crest_factor_correction_ratio: float = 0.4

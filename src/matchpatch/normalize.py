@@ -62,6 +62,16 @@ def _normalization_policy(config: Config, args: argparse.Namespace) -> Normaliza
                 default=config_value(config, "policy", "solo_marker", default=r"(?i)\bsolo\b"),
             ),
         ),
+        ignore_snapshot_regex=cast(
+            str,
+            prefer(
+                args.ignore_snapshot_regex,
+                config,
+                "policy",
+                "ignore_snapshot_regex",
+                default=NormalizationPolicy().ignore_snapshot_regex,
+            ),
+        ),
         solo_gain_bump_db=cast(
             float,
             prefer(args.solo_gain_bump_db, config, "policy", "solo_gain_bump_db", default=3.0),
@@ -83,6 +93,10 @@ def _normalization_policy(config: Config, args: argparse.Namespace) -> Normaliza
         re.compile(policy.solo_regex)
     except re.error as exc:
         raise ValueError(f"Invalid solo snapshot regex: {exc}") from exc
+    try:
+        re.compile(policy.ignore_snapshot_regex)
+    except re.error as exc:
+        raise ValueError(f"Invalid ignore snapshot regex: {exc}") from exc
 
     return policy
 
@@ -695,6 +709,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-temp", action="store_true")
     parser.add_argument("--target-lufs", type=float)
     parser.add_argument("--solo-regex")
+    parser.add_argument("--ignore-snapshot-regex")
     parser.add_argument("--solo-gain-bump-db", type=float)
     parser.add_argument("--snapshot-count", type=int)
     parser.add_argument(

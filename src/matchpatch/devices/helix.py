@@ -207,6 +207,8 @@ class HelixPatchFileHandler(PatchFileHandler):
                 policy.snapshot_count,
                 "--solo-regex",
                 policy.solo_regex,
+                "--ignore-snapshot-regex",
+                policy.ignore_snapshot_regex,
                 "--solo-gain-bump-db",
                 policy.solo_gain_bump_db,
                 "--crest-factor-reference-db",

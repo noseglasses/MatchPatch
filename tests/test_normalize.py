@@ -174,6 +174,7 @@ measurement_wait_seconds = 0.7
 [policy]
 measured_snapshots = 3
 solo_marker = "lead"
+ignore_snapshot_regex = "^Init$"
 solo_gain_bump_db = 4.0
 crest_factor_reference_db = 11.0
 crest_factor_correction_ratio = 0.5
@@ -220,6 +221,7 @@ round_trip_latency_seconds = 0.03
     assert args.steering_output == "Configured MIDI"
     assert args.policy.snapshot_count == 3
     assert args.policy.solo_regex == "lead"
+    assert args.policy.ignore_snapshot_regex == "^Init$"
     assert args.analysis_options.window_seconds == 2.0
     assert args.pre_roll == 1.5
     assert args.post_roll == 2.0
@@ -284,6 +286,18 @@ def test_apply_config_rejects_invalid_solo_regex(tmp_path) -> None:
     config_path.write_text("[policy]\nsolo_regex = '('\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Invalid solo snapshot regex"):
+        normalize.apply_config(
+            normalize.parse_args(
+                ["--config", str(config_path), "--device", "helix", "-i", "input.hls"]
+            )
+        )
+
+
+def test_apply_config_rejects_invalid_ignore_snapshot_regex(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[policy]\nignore_snapshot_regex = '('\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid ignore snapshot regex"):
         normalize.apply_config(
             normalize.parse_args(
                 ["--config", str(config_path), "--device", "helix", "-i", "input.hls"]

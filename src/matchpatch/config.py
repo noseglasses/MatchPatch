@@ -93,6 +93,7 @@ def default_config() -> Config:
         "policy": {
             "measured_snapshots": policy.snapshot_count,
             "solo_regex": policy.solo_regex,
+            "ignore_snapshot_regex": policy.ignore_snapshot_regex,
             "solo_gain_bump_db": policy.solo_gain_bump_db,
             "crest_factor_reference_db": policy.crest_factor_reference_db,
             "crest_factor_correction_ratio": policy.crest_factor_correction_ratio,
