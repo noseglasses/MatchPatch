@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from matchpatch import normalize
+from matchpatch import normalize, workflow
 from matchpatch.devices.base import PatchAssignment
 from matchpatch.workflow import NormalizationRequest, export_adjusted_file, normalize_presets
 
@@ -101,6 +101,45 @@ def test_normalize_presets_filters_to_diff_input(tmp_path) -> None:
     )
 
     assert measured == [[2]]
+
+
+def test_normalize_presets_default_temp_dir_uses_normalization_prefix(
+    tmp_path, monkeypatch
+) -> None:
+    handler = FakeHandler()
+    input_path = tmp_path / "input.hls"
+    output_path = tmp_path / "output.hls"
+    reference = tmp_path / "reference.wav"
+    work_dir = tmp_path / "matchpatch_normalization_test"
+    input_path.touch()
+    reference.touch()
+    mkdtemp_kwargs = {}
+
+    def fake_mkdtemp(**kwargs):
+        mkdtemp_kwargs.update(kwargs)
+        work_dir.mkdir()
+        return str(work_dir)
+
+    def fake_analysis(request, preset_ids, csv_path, callback):
+        write_analysis_csv(request, preset_ids, csv_path)
+
+    monkeypatch.setattr(workflow.tempfile, "mkdtemp", fake_mkdtemp)
+
+    normalize_presets(
+        NormalizationRequest(
+            device="fake",
+            input_path=input_path,
+            output_path=output_path,
+            backend="loopback",
+            windows_python="python.exe",
+            reference_di=reference,
+            automation=False,
+        ),
+        run_analysis=fake_analysis,
+        get_profile=lambda device: FakeProfile(handler),
+    )
+
+    assert mkdtemp_kwargs["prefix"] == "matchpatch_normalization_"
 
 
 def test_request_from_args_includes_diff_input() -> None:

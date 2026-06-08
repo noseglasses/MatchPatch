@@ -295,8 +295,7 @@ def wsl_path_to_windows(path: Path) -> str:
 def _missing_windows_environment_message() -> str:
     if _is_windows():
         return (
-            "Native Windows MatchPatch environment is missing. "
-            "Run scripts\\sync-windows.cmd first."
+            "Native Windows MatchPatch environment is missing. Run scripts\\sync-windows.cmd first."
         )
     return (
         "Native Windows MatchPatch environment is missing. "
@@ -783,9 +782,7 @@ def request_from_args(args: argparse.Namespace) -> NormalizationRequest:
         play_recorded_output=getattr(args, "play_recorded_output", False),
         record_device_output=getattr(args, "record_device_output", False),
         playback_toggle_path=(
-            Path(args.playback_toggle_path)
-            if getattr(args, "playback_toggle_path", None)
-            else None
+            Path(args.playback_toggle_path) if getattr(args, "playback_toggle_path", None) else None
         ),
         recorded_output_dir=(
             Path(args.recorded_output_dir) if getattr(args, "recorded_output_dir", None) else None
@@ -841,7 +838,9 @@ def main(argv: list[str] | None = None) -> None:
         on_progress=_cli_progress,
         confirm_import=_cli_confirm_import if request.automation else None,
         get_profile=get_device_profile,
-        make_temp_dir=lambda: Path(tempfile.mkdtemp(prefix="matchpatch_gain_", dir=PROJECT_DIR)),
+        make_temp_dir=lambda: Path(
+            tempfile.mkdtemp(prefix="matchpatch_normalization_", dir=PROJECT_DIR)
+        ),
     )
     print()
     print("[OK] Gain-adjusted patch file written")
