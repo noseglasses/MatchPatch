@@ -71,7 +71,6 @@ Changing the reference DI can change the results.
 
 See [Reference DI](concepts/reference-di.md).
 
-[Screenshot placeholder: Full main window with Advanced visible]
 
 ## Choosing A Backend
 
@@ -85,6 +84,7 @@ Use hardware for final rehearsal or gig-ready results.
 
 See [Backends](concepts/backends.md).
 
+(help-opening-files)=
 ## Opening Files
 
 MatchPatch works with:
@@ -114,6 +114,7 @@ Use:
 
 See [Select Changed Presets](workflows/select-changed-presets.md).
 
+(help-advanced-settings)=
 ## Snapshots, Solos, And Ignored Snapshots
 
 MatchPatch measures snapshots inside each preset.
@@ -128,8 +129,6 @@ the table easier to understand.
 
 See [Snapshots, Solos, And Ignored Snapshots](concepts/snapshots-solos-and-ignored.md).
 
-[Screenshot placeholder: Solo snapshot star]
-[Screenshot placeholder: Ignored snapshot styling]
 
 ## Target LUFS And Loudness
 
@@ -193,8 +192,6 @@ gain change.
 
 See [Reading Results](concepts/reading-results.md).
 
-[Screenshot placeholder: Preset table column labels]
-[Screenshot placeholder: Failed measurement highlight]
 
 ## Manual Edits And CSV
 
@@ -235,7 +232,6 @@ Then import the adjusted file into the Helix and listen through the setlist.
 See [Save And Import Files](workflows/save-and-import.md) and
 [Measurement And Adjusted Files](concepts/measurement-and-adjusted-files.md).
 
-[Screenshot placeholder: Retained CSV field, if temporary files are kept]
 
 ## After Importing
 
@@ -265,6 +261,7 @@ Common fixes include:
 - rerun only affected presets;
 - manually edit a small gain exception.
 
+(help-metadata)=
 ## Next Steps
 
 - First run: [Quick Start](quick-start.md)

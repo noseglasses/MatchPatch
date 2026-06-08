@@ -1,3 +1,4 @@
+(help-optimize-timing)=
 # Optimize Timing
 
 Use this workflow when hardware measurements are unstable or when you want
@@ -44,10 +45,8 @@ Use Determine optimal parameters when:
 11. Confirm the Timing tab values have changed.
 12. Run normalization with the new timing.
 
-[Screenshot placeholder: Determine optimal parameters button]
-[Screenshot placeholder: Parameter study setup dialog]
-[Screenshot placeholder: Parameter study progress table]
-[Screenshot placeholder: TOML result and Apply button]
+[Screenshot placeholder: optimization-dialog.png - optimization setup and result dialog]
+
 
 ## What Pin Means
 
@@ -82,6 +81,7 @@ The optimization dialog shows an estimated worst-case runtime. The real time can
 be shorter, but use the estimate to decide whether this is a good moment to run
 the study.
 
+(help-apply-optimized-timing)=
 ## What Success Looks Like
 
 - The study finishes.

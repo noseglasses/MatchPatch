@@ -1,3 +1,4 @@
+(help-normalize-single-preset)=
 # Normalize A Single Preset
 
 Use this workflow when you have one Helix `.hlx` preset instead of a full
@@ -41,9 +42,6 @@ Valid Helix slot examples:
 14. Save or Save As.
 15. Import the saved adjusted preset back into the Helix.
 
-[Screenshot placeholder: Single preset table]
-[Screenshot placeholder: Temporary preset slot cell]
-[Screenshot placeholder: Missing slot warning]
 
 ## Temporary Slot Safety
 

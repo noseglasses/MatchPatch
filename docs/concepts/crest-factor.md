@@ -29,7 +29,6 @@ lower peaks but feel more present. Crest factor helps explain that difference.
 > Do not over-focus on crest-factor numbers. Use them to understand why sounds
 > behave differently, then listen in context.
 
-[Screenshot or diagram placeholder: spiky signal versus compressed signal]
 
 ## Next Step
 

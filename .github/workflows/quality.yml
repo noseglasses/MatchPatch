@@ -8,6 +8,26 @@ permissions:
   contents: read
 
 jobs:
+  docs:
+    name: Docs / Python 3.12
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Synchronize docs environment
+        run: uv sync --locked --no-default-groups --group docs
+
+      - name: Build docs
+        run: uv run --frozen --no-default-groups --group docs sphinx-build -W --keep-going -b html docs docs_html
+
   native:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}

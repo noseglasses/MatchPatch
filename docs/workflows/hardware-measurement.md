@@ -1,3 +1,4 @@
+(help-hardware-measurement)=
 # Hardware Measurement
 
 Use hardware mode when you want MatchPatch to measure your real Helix.
@@ -34,8 +35,10 @@ the output-level changes.
 2. Go to the Device tab.
 3. Set Backend to `hardware`.
 
-[Screenshot placeholder: Backend set to hardware]
+[Screenshot placeholder: backend-selector.png - backend selector in Advanced Device]
 
+
+(help-hardware-routing)=
 ## Check Audio Routing
 
 In the Helix device settings, check:
@@ -53,8 +56,10 @@ For many Helix setups:
 
 Your own system may differ.
 
-[Screenshot placeholder: Helix audio routing settings]
+[Screenshot placeholder: hardware-routing.png - hardware routing settings]
 
+
+(help-midi-steering)=
 ## Check MIDI Steering
 
 In the Helix device settings, check:
@@ -67,7 +72,6 @@ In the Helix device settings, check:
 
 MIDI steering is how MatchPatch changes presets and snapshots during the run.
 
-[Screenshot placeholder: Helix MIDI steering settings]
 
 ## Run The Hardware Check
 
@@ -79,8 +83,8 @@ If the check succeeds, measurement continues.
 If the check fails, MatchPatch shows an error. Check USB connection, audio
 device name, MIDI output name, and whether the Helix is powered on.
 
-[Screenshot placeholder: Hardware check overlay]
 
+(help-recorded-output-playback)=
 ## Use Recorded-Output Playback
 
 The toolbar can record measured output and play it back.

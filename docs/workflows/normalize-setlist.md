@@ -1,3 +1,4 @@
+(help-normalize-setlist)=
 # Normalize A Setlist
 
 Use this workflow to balance a Helix `.hls` setlist with many presets.
@@ -45,11 +46,10 @@ Useful background:
 17. Import the saved adjusted file into the Helix.
 18. Listen through the setlist in a real playing context.
 
-[Screenshot placeholder: Loaded .hls setlist]
-[Screenshot placeholder: Selected presets]
-[Screenshot placeholder: Running measurement progress]
-[Screenshot placeholder: Completed results table]
+[Screenshot placeholder: loaded-setlist.png - loaded setlist with selected presets]
 
+
+(help-select-presets)=
 ## Preset Selection Tips
 
 Use Select all when you want a complete setlist pass.
@@ -83,6 +83,8 @@ Before saving, check for:
 - snapshots that should not have been measured.
 
 If a row is red, read [Troubleshooting](../troubleshooting.md) before saving.
+
+[Screenshot placeholder: completed-results-table.png - completed result table]
 
 ## What Success Looks Like
 

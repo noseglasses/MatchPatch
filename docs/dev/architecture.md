@@ -245,5 +245,6 @@ format check, `ty check`, and pytest with coverage.
 
 The release workflow is tag-driven. A `v*` tag must match
 `project.version` in `pyproject.toml`; CI builds distributions with `uv build`,
-smoke-tests the wheel and source distribution, and publishes to PyPI using OIDC
-trusted publishing.
+smoke-tests the wheel and source distribution, uploads the generated
+`docs_html/` offline help bundle for installer packaging, and publishes to PyPI
+using OIDC trusted publishing.

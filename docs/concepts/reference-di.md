@@ -1,3 +1,4 @@
+(help-reference-di)=
 # Reference DI
 
 A reference DI is a clean guitar recording before amp, cab, and effects.
@@ -105,7 +106,6 @@ arpeggio if the lead snapshot is meant to cut through a band.
 > A reference DI that does not match your playing style can balance presets in a
 > way that looks correct but feels wrong.
 
-[Screenshot placeholder: Reference DI field]
 
 ## Next Step
 

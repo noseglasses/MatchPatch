@@ -1,3 +1,4 @@
+(help-save-import)=
 # Save And Import Files
 
 Use this workflow after measurement to write the adjusted Helix file and import
@@ -22,6 +23,7 @@ Save writes changes to the active Helix file.
 Use Save when you are comfortable replacing the active file and you already have
 a backup.
 
+(help-save-as)=
 ## Save As
 
 Save As writes a new Helix file.
@@ -36,8 +38,6 @@ Original: My Setlist.hls
 Adjusted: My Setlist Adjusted.hls
 ```
 
-[Screenshot placeholder: Save button enabled after results]
-[Screenshot placeholder: Save As dialog]
 
 ## Save Measurement File
 
@@ -49,7 +49,6 @@ parameter study requires a prepared measurement file on the Helix.
 > Warning:
 > Never use the measurement file as your final live file.
 
-[Screenshot placeholder: Save Measurement File dialog]
 
 ## File Extensions
 
@@ -60,13 +59,15 @@ Keep the same file type:
 
 MatchPatch warns you if the saved file extension does not match.
 
+(help-unsaved-changes)=
 ## Overwrite Prompts
 
 If the file already exists, MatchPatch asks before overwriting it.
 
 Read the path carefully before confirming.
 
-[Screenshot placeholder: Overwrite warning]
+[Screenshot placeholder: save-import-dialogs.png - save, save-as, and import dialogs]
+
 
 ## Import The Adjusted File
 

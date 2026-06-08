@@ -1,3 +1,4 @@
+(help-quick-start)=
 # Quick Start
 
 Use this guide for a first MatchPatch run in about 10 minutes.
@@ -37,9 +38,6 @@ but it lets you practice the full GUI flow.
 10. Watch the progress area and result table.
 11. Try Save As only if you intentionally want to test saving.
 
-[Screenshot placeholder: Open a setlist or preset]
-[Screenshot placeholder: Backend selector]
-[Screenshot placeholder: Start normalization button]
 
 > Warning:
 > Loopback mode does not measure your real Helix preset levels.
@@ -65,9 +63,6 @@ Use hardware mode when you are ready to measure the Helix.
 13. Import the adjusted file into the Helix.
 14. Listen through the presets and snapshots.
 
-[Screenshot placeholder: Preset table with selected presets]
-[Screenshot placeholder: Completion popup]
-[Screenshot placeholder: Save / Save As buttons]
 
 For more detail, see [Hardware Measurement](workflows/hardware-measurement.md)
 and [Normalize A Setlist](workflows/normalize-setlist.md).

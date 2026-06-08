@@ -42,7 +42,7 @@ considered non-empty if its `tone` contains at least one `block*` entry under
 
 Internally, the legacy utility wraps a single preset as:
 
-```json
+```text
 {"presets": [preset]}
 ```
 
@@ -108,7 +108,7 @@ Preset,DevicePatch,LUFS1..LUFSN,CrestFactor1..CrestFactorN
 
 Example for two snapshots:
 
-```csv
+```text
 Preset,DevicePatch,LUFS1,LUFS2,CrestFactor1,CrestFactor2
 1,01A,-16.2,-13.7,11.8,10.4
 6,02B,-18.0,-15.0,12.5,12.1
@@ -193,7 +193,7 @@ snapshot. Duplicate preset IDs are rejected.
 
 Example:
 
-```csv
+```text
 01A,0.0,1.5,,-2.0
 02B|0.5||||
 ```

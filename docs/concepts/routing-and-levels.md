@@ -1,3 +1,4 @@
+(help-routing-levels)=
 # Routing And Levels
 
 Routing is the path the sound takes while MatchPatch measures your presets.
@@ -10,6 +11,7 @@ In hardware mode, the signal path is:
 4. The processed sound returns to the computer.
 5. MatchPatch measures the recorded sound.
 
+(help-audio-routing)=
 ## Playback And Recording Channels
 
 Playback channels send the reference DI from the computer to the Helix.
@@ -50,8 +52,6 @@ that snapshot by `2.5 dB`.
 > Wrong routing is one of the most common causes of failed measurements and bad
 > LUFS warnings.
 
-[Screenshot placeholder: Audio routing settings]
-[Screenshot placeholder: Out dB and Delta dB cells]
 
 ## Next Step
 

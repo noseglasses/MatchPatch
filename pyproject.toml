@@ -21,6 +21,11 @@ matchpatch = "matchpatch.cli:main"
 matchpatch-gui = "matchpatch.gui.app:main"
 
 [dependency-groups]
+docs = [
+    "furo>=2024.8.6",
+    "myst-parser>=4",
+    "sphinx>=8",
+]
 wsl = [
     "hypothesis>=6.0",
     "numpy>=2.0",

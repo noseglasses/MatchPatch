@@ -73,7 +73,3 @@ For final gig or rehearsal levels, run [Hardware Measurement](hardware-measureme
 
 > Warning:
 > Do not judge your live Helix preset balance from loopback or simulated mode.
-
-[Screenshot placeholder: Backend set to loopback]
-[Screenshot placeholder: Backend set to simulated]
-[Screenshot placeholder: Completed loopback run]

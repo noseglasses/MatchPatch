@@ -1,3 +1,4 @@
+(help-lufs-loudness)=
 # LUFS And Loudness
 
 LUFS is a way to measure perceived loudness. It is more useful than only looking
@@ -46,8 +47,6 @@ numbers are close.
 > Warning:
 > Use LUFS to get close. Use your ears to make final musical decisions.
 
-[Screenshot placeholder: Loudness bar on target]
-[Screenshot placeholder: Loudness bar above target]
 
 ## Next Step
 

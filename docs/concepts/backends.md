@@ -1,3 +1,4 @@
+(help-backends)=
 # Backends
 
 A backend is how MatchPatch gets sound to measure.
@@ -65,7 +66,6 @@ interesting table results than loopback.
 If this is your first time, run loopback once so the app feels familiar. Then
 switch to hardware mode for the real setlist.
 
-[Screenshot placeholder: Backend selector]
 
 ## Next Step
 

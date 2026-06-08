@@ -1,3 +1,4 @@
+(help-snapshots-solos-ignored)=
 # Snapshots, Solos, And Ignored Snapshots
 
 MatchPatch measures snapshots inside each selected preset. You choose how many
@@ -12,6 +13,7 @@ GUI can use them to identify solos and snapshots that should be skipped.
 
 Clear snapshot names make the automatic behavior easier to understand.
 
+(help-snapshot-count)=
 ## Solo Snapshots
 
 Solo snapshots are detected by name. By default, a snapshot with `solo` in the
@@ -44,6 +46,7 @@ A snapshot might be ignored when:
 - it is a special effect that should not be normalized;
 - it still has a default name such as `SNAPSHOT 4`.
 
+(help-snapshot-regex)=
 ## Changing Detection
 
 The LUFS tab contains regex fields for Solo and Ignored snapshot names. In
@@ -59,9 +62,6 @@ If you change the ignored rule, the table updates right away.
 > Naming snapshots clearly, such as `Clean`, `Crunch`, `Lead`, and `Solo`, makes
 > MatchPatch easier to read.
 
-[Screenshot placeholder: Solo star in table]
-[Screenshot placeholder: Ignored snapshot in grey]
-[Screenshot placeholder: Solo and ignored regex fields]
 
 ## Next Step
 

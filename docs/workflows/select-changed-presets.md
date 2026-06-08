@@ -1,3 +1,4 @@
+(help-select-changed)=
 # Select Changed Presets
 
 Use this workflow when you have edited only part of a setlist and do not want to
@@ -26,9 +27,6 @@ whose sound content changed.
 6. Manually check or uncheck any presets if needed.
 7. Run normalization.
 
-[Screenshot placeholder: Select changed button]
-[Screenshot placeholder: Previous setlist file picker]
-[Screenshot placeholder: Changed presets selected]
 
 ## What Counts As Changed?
 

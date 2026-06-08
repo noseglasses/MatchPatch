@@ -61,5 +61,43 @@ Normal users should not need this section.
 - [Developer Notes](developer-notes.md)
 - [Existing technical docs](dev/architecture.md)
 
-[Screenshot placeholder: MatchPatch main window after launch]
-[Screenshot placeholder: Open-file screen with recent files]
+```{toctree}
+:hidden:
+:caption: User Docs
+:maxdepth: 2
+
+quick-start
+musician-guide
+workflows/test-without-hardware
+workflows/hardware-measurement
+workflows/normalize-setlist
+workflows/normalize-single-preset
+workflows/select-changed-presets
+workflows/manual-editing-and-csv
+workflows/custom-adjustments
+workflows/optimize-timing
+workflows/save-and-import
+concepts/backends
+concepts/reference-di
+concepts/lufs-and-loudness
+concepts/crest-factor
+concepts/measurement-and-adjusted-files
+concepts/routing-and-levels
+concepts/snapshots-solos-and-ignored
+concepts/timing
+concepts/reading-results
+troubleshooting
+faq
+glossary
+```
+
+```{toctree}
+:hidden:
+:caption: Maintainer Docs
+:maxdepth: 2
+
+developer-notes
+dev/architecture
+dev/commands
+dev/file-formats
+```

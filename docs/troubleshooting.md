@@ -1,3 +1,4 @@
+(help-troubleshooting)=
 # Troubleshooting
 
 Most MatchPatch problems come from one of four places:
@@ -45,13 +46,12 @@ the Helix range.
 
 See [Reading Results](concepts/reading-results.md).
 
-[Screenshot placeholder: Bad LUFS highlighted row]
-[Screenshot placeholder: Measurement failed adjustment cell]
 
 > Warning:
 > Do not keep raising output levels blindly after a failed measurement. First
 > find out why the measurement failed.
 
+(help-hardware-not-found)=
 ## No Suitable Device Connected
 
 ### What You See
@@ -73,7 +73,6 @@ setup.
    specific.
 6. If you only want to learn the app, switch Backend to `loopback`.
 
-[Screenshot placeholder: Hardware error popup]
 
 See [Hardware Measurement](workflows/hardware-measurement.md).
 
@@ -215,7 +214,6 @@ A single `.hlx` preset needs one temporary Helix slot for measurement.
 3. Use a slot from `01A` through `32D`.
 4. Start again.
 
-[Screenshot placeholder: Missing preset ID highlight for .hlx]
 
 See [Normalize A Single Preset](workflows/normalize-single-preset.md).
 
@@ -363,6 +361,7 @@ missing.
 2. If you only need hardware measurement, consider running MatchPatch from the
    prepared Windows environment.
 
+(help-csv-errors)=
 ## Preset Table CSV Import Errors
 
 ### What You See
@@ -381,7 +380,6 @@ The CSV does not match the current table.
 4. Check that gain values are numbers.
 5. Check that names are short and Helix-safe.
 
-[Screenshot placeholder: CSV error popup]
 
 See [Manual Editing And CSV](workflows/manual-editing-and-csv.md).
 
@@ -431,5 +429,3 @@ Rerun measurement when:
 - timing was too fast;
 - you changed the preset tone;
 - you changed the reference DI.
-
-[Screenshot placeholder: Log tab with warning filter]

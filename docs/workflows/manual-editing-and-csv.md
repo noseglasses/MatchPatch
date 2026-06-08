@@ -1,3 +1,4 @@
+(help-manual-editing-and-csv)=
 # Manual Editing And CSV
 
 Use this workflow when you want to adjust names or gain results by hand.
@@ -15,6 +16,7 @@ saving.
 > Warning:
 > Manual gain edits affect the file you save.
 
+(help-manual-editing)=
 ## Turn On Manual Editing
 
 For setlists:
@@ -26,8 +28,6 @@ For setlists:
 For a single `.hlx` preset, the temporary Preset slot can be edited without
 turning on Edit manually.
 
-[Screenshot placeholder: Edit manually checkbox]
-[Screenshot placeholder: Inline cell editor]
 
 ## Editing A Cell
 
@@ -64,6 +64,7 @@ After editing, click Save or Save As.
 If you try to open another file or start normalization with unsaved edits,
 MatchPatch asks whether you want to save, discard, or cancel.
 
+(help-csv)=
 ## Preset Table CSV
 
 The CSV buttons below the table let you save and load the preset table.
@@ -72,7 +73,6 @@ Use this when you want to review or edit table results outside MatchPatch.
 
 The table CSV uses `|` as a separator because Helix names can contain commas.
 
-[Screenshot placeholder: CSV open/save buttons]
 
 ## Loading A Table CSV
 
@@ -82,7 +82,6 @@ When loading a table CSV:
 - only presets already visible in the current table are changed;
 - invalid names or gain values are reported as errors.
 
-[Screenshot placeholder: CSV error popup]
 
 ## What Success Looks Like
 

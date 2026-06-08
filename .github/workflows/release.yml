@@ -45,5 +45,25 @@ jobs:
         shell: bash
         run: uv run --isolated --no-project --with dist/*.tar.gz python -c "import matchpatch"
 
+      - name: Synchronize docs environment
+        run: uv sync --locked --no-default-groups --group docs
+
+      - name: Build offline docs
+        run: uv run --frozen --no-default-groups --group docs sphinx-build -W --keep-going -b html docs docs_html
+
+      - name: Stage installer docs payload
+        shell: bash
+        run: |
+          mkdir -p installer-payload/docs_html
+          cp -a docs_html/. installer-payload/docs_html/
+          test -f installer-payload/docs_html/index.html
+
+      - name: Upload installer docs payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: matchpatch-docs-html-${{ github.ref_name }}
+          path: installer-payload/
+          if-no-files-found: error
+
       - name: Publish distributions
         run: uv publish

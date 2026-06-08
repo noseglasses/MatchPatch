@@ -1,3 +1,4 @@
+(help-custom-adjustments)=
 # Custom Adjustments
 
 Use custom adjustments when one preset snapshot needs an intentional musical
@@ -51,8 +52,6 @@ Empty cells mean no custom adjustment for that snapshot.
 7. Start normalization.
 8. Review the table.
 
-[Screenshot placeholder: Custom adjustments file picker]
-[Screenshot placeholder: Blue custom adjustment annotation in table]
 
 ## Reading The Table
 

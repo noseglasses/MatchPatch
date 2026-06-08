@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from matchpatch import __version__
+from matchpatch.gui.help import HelpId, resolve_help_url
 
 PROJECT_URL = "https://github.com/noseglasses/MatchPatch"
 ASSETS_DIR = Path(__file__).resolve().parents[3] / "docs" / "assets"
@@ -27,6 +28,7 @@ class AboutDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("About MatchPatch")
+        self.setProperty("help_id", HelpId.DOCS_INDEX)
         self.setWindowIcon(
             QApplication.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
         )
@@ -48,6 +50,8 @@ class AboutDialog(QDialog):
             "<h2>MatchPatch</h2>"
             f"<p>Version {__version__}</p>"
             "<p>Automatic loudness alignment for audio-processor presets and snapshots.</p>"
+            f'<p><a href="{resolve_help_url(HelpId.DOCS_INDEX).toString()}">'
+            "Documentation</a></p>"
             f'<p><a href="{PROJECT_URL}">{PROJECT_URL}</a></p>'
             "<p>Copyright © 2026 MatchPatch contributors.</p>"
             "<p>Open source software released under the MIT License.</p>"

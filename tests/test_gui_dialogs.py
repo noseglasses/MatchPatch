@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 from matchpatch import __version__
 from matchpatch.gui.app import qt_message_handler, register_desktop_entry
 from matchpatch.gui.dialogs import PROJECT_URL, AboutDialog, HelpDialog
+from matchpatch.gui.help import HelpId
 
 
 @pytest.fixture(scope="module")
@@ -31,7 +32,9 @@ def test_about_dialog_displays_project_metadata_and_logo(app) -> None:
     assert logo.height() == 320
     assert any("MatchPatch" in text for text in texts)
     assert any(__version__ in text for text in texts)
+    assert any("Documentation" in text for text in texts)
     assert any(PROJECT_URL in text for text in texts)
+    assert dialog.property("help_id") == HelpId.DOCS_INDEX
     assert any("MIT License" in text for text in texts)
     assert any("Copyright" in text for text in texts)
     assert not dialog.windowIcon().isNull()
@@ -63,9 +66,7 @@ def test_desktop_entry_registers_matchpatch_icon(tmp_path, monkeypatch) -> None:
 
     register_desktop_entry()
 
-    entry = (tmp_path / "applications" / "matchpatch-gui.desktop").read_text(
-        encoding="utf-8"
-    )
+    entry = (tmp_path / "applications" / "matchpatch-gui.desktop").read_text(encoding="utf-8")
     installed_icon = tmp_path / "icons" / "hicolor" / "512x512" / "apps" / "matchpatch-gui.png"
     icon = QImage(str(installed_icon))
 

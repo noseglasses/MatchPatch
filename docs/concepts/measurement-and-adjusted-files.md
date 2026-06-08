@@ -1,3 +1,4 @@
+(help-measurement-and-adjusted-files)=
 # Measurement And Adjusted Files
 
 MatchPatch works with three kinds of Helix files during a normal workflow:
@@ -14,6 +15,7 @@ This is the `.hls` setlist or `.hlx` preset you already have.
 
 Keep a backup of it before running MatchPatch.
 
+(help-measurement-file)=
 ## Measurement File
 
 A measurement file is a temporary Helix file made for measuring. MatchPatch
@@ -66,8 +68,6 @@ The output file should keep the same extension as the input:
 
 MatchPatch will warn you if the extension does not match.
 
-[Screenshot placeholder: Save Measurement File toolbar button]
-[Screenshot placeholder: Completion popup telling user to save]
 
 ## Next Step
 

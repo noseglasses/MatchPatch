@@ -1,3 +1,4 @@
+(help-reading-results)=
 # Reading Results
 
 After measurement, the preset table shows what MatchPatch found and what it
@@ -23,6 +24,7 @@ Delta dB: +2.5
 This means the snapshot currently sits at `-4.0 dB`, and MatchPatch wants to
 raise it by `2.5 dB`.
 
+(help-progress-and-cancel)=
 ## Pending Results
 
 During measurement, selected snapshots may show `?`.
@@ -54,6 +56,7 @@ Example:
 The first number is the normal visible adjustment. The value in parentheses is
 the custom bump.
 
+(help-red-warnings)=
 ## Red Cells
 
 Red highlighted cells mean MatchPatch could not safely calculate a normal
@@ -68,6 +71,8 @@ Common reasons include:
 
 > Warning:
 > Investigate red cells before saving or trusting the adjusted file.
+
+[Screenshot placeholder: failed-measurement-row.png - failed measurement row]
 
 ## Recorded-Output Playback Buttons
 
@@ -90,10 +95,6 @@ If something looks wrong, fix the cause and rerun the affected presets.
 After importing the adjusted file into Helix, listen through the setlist in a
 real playing context.
 
-[Screenshot placeholder: Successful result row]
-[Screenshot placeholder: Custom adjustment displayed in blue]
-[Screenshot placeholder: Failed measurement row]
-[Screenshot placeholder: Recorded-output playback button]
 
 ## Next Step
 

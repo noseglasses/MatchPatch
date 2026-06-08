@@ -1,3 +1,4 @@
+(help-timing)=
 # Measurement Timing
 
 Timing gives the Helix and the audio system time to settle before MatchPatch
@@ -43,6 +44,7 @@ How much audio MatchPatch uses for each loudness measurement.
 
 How often MatchPatch checks loudness inside the recorded audio.
 
+(help-fast-timing-warning)=
 ## Default And Fast Presets
 
 The Timing tab includes Default and Fast timing presets.
@@ -59,6 +61,8 @@ have delay, reverb, or other trails.
 MatchPatch shows an estimated time per snapshot and total time for selected
 presets. Ignored snapshots are skipped in the estimate.
 
+[Screenshot placeholder: timing-tab.png - Timing tab with measurement estimate]
+
 ## When To Optimize Timing
 
 Use Determine optimal parameters when:
@@ -70,8 +74,6 @@ Use Determine optimal parameters when:
 
 See also: [Optimize Timing](../workflows/optimize-timing.md).
 
-[Screenshot placeholder: Timing tab]
-[Screenshot placeholder: Measurement time estimate]
 
 ## Next Step
 

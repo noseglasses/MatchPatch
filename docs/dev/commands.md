@@ -211,14 +211,34 @@ with `uv build --no-sources`.
 
 Brand assets for future app packaging live in `docs/assets/`.
 
+Stage the offline documentation payload for a future installer with:
+
+```bash
+scripts/stage-installer-docs.sh <installer-payload-dir>
+```
+
+The script builds `docs_html/`, copies it to
+`<installer-payload-dir>/docs_html`, and verifies that the installer payload has
+the docs index, quick start, workflow pages, concept pages, and Sphinx static
+assets. Installers should place that `docs_html/` directory beside the GUI
+executable so `matchpatch.gui.help.local_docs_root()` can resolve local
+`file://` help URLs.
+
 ## Docs
 
-There is no separate docs build configured yet. Developer docs are plain
-Markdown under `docs/dev/`; project-facing documentation is in `README.md`.
+Build the local Sphinx HTML documentation with:
+
+```bash
+scripts/build-docs.sh
+```
+
+The wrapper cleans `docs_html/`, runs Sphinx in strict mode, and writes the
+generated offline help bundle back to `docs_html/`.
 
 Suggested checks for docs-only changes:
 
 ```bash
+scripts/build-docs.sh
 ruff format --check .
 git diff --check
 ```
@@ -238,5 +258,7 @@ git push origin v0.1.0
 ```
 
 The release workflow verifies the tag/version match, runs `uv build
---no-sources`, smoke-tests the wheel and source distribution, then publishes
-with PyPI trusted publishing. Additional release packaging is pending.
+--no-sources`, smoke-tests the wheel and source distribution, builds
+`docs_html/`, stages it under `installer-payload/docs_html/`, uploads that as a
+`matchpatch-docs-html-<tag>` artifact, then publishes with PyPI trusted
+publishing.
