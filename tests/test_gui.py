@@ -299,6 +299,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.preset_table.isHidden()
     assert not window.preset_empty_logo.pixmap().isNull()
     assert window.preset_empty_logo.pixmap().size() == main_window.QSize(360, 360)
+    assert window.preset_empty_logo.size() == main_window.QSize(360, 360)
     assert window.preset_empty_file_dialog_title.text() == "Open setlist/preset file"
     assert window.preset_empty_file_dialog_title.alignment() == Qt.AlignmentFlag.AlignCenter
     assert window.preset_empty_file_dialog_title.font().pointSize() >= app.font().pointSize() + 2
@@ -366,7 +367,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     )
     assert toolbar.widgetForAction(window.advanced_action) is window.advanced_button
     assert toolbar.widgetForAction(window.normalization_action) is window.start_cancel_stack
-    assert toolbar.iconSize() == main_window.QSize(18, 18)
+    assert toolbar.iconSize() == main_window.QSize(20, 20)
     assert toolbar.contentsMargins().isNull()
     assert window.start_cancel_stack.currentWidget() is window.start_button
     assert window.start_button.text() == ""
@@ -446,7 +447,12 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.preset_table.wordWrap()
     assert window.preset_table.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
     assert window.advanced_tabs.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
-    assert window.preset_table_note.text() == "Only non-empty presets are listed."
+    assert (
+        window.preset_table_note.text()
+        == "Only non-empty presets are listed. Solo snapshots are marked with a "
+        "<span style='color: #f59e0b;'>★</span>."
+    )
+    assert window.preset_table_note.textFormat() == Qt.TextFormat.RichText
     assert window.preset_csv_label.text() == "CSV: "
     assert window.preset_csv_controls.layout().indexOf(window.preset_csv_label) >= 0
     assert window.preset_csv_controls.layout().indexOf(window.load_csv_button) >= 0

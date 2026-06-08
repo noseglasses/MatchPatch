@@ -86,7 +86,7 @@ def test_configure_gui_appearance_uses_wsl_visual_baseline(monkeypatch) -> None:
 
     assert calls == [
         ("style", "Fusion"),
-        ("font", "Sans Serif", 9),
+        ("font", "DejaVu Sans", 10),
         ("standard_palette",),
         ("palette", palette),
     ]

@@ -466,6 +466,26 @@ PHASE_ICON = {
     "cancelling": QStyle.StandardPixmap.SP_MessageBoxWarning,
     "normalization_cancelled_by_user": QStyle.StandardPixmap.SP_MessageBoxWarning,
 }
+TOOLBAR_ICON_SIZE = 20
+PRESET_EMPTY_LOGO_SIZE = QSize(360, 360)
+
+
+def _fixed_size_pixmap(source: QPixmap, size: QSize) -> QPixmap:
+    screen = QApplication.primaryScreen()
+    ratio = screen.devicePixelRatio() if screen else 1.0
+    physical_size = QSize(
+        min(source.width(), max(1, round(size.width() * ratio))),
+        min(source.height(), max(1, round(size.height() * ratio))),
+    )
+    pixmap = source.scaled(
+        physical_size,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    pixmap.setDevicePixelRatio(ratio)
+    return pixmap
+
+
 IN_PROGRESS_PHASES = {
     "starting",
     "preparing_measurement",
@@ -839,7 +859,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("File", self)
         toolbar.setMovable(False)
         toolbar.setContentsMargins(0, 0, 0, 0)
-        toolbar.setIconSize(QSize(18, 18))
+        toolbar.setIconSize(QSize(TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE))
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
 
         self.open_action = QAction(
@@ -1027,7 +1047,11 @@ class MainWindow(QMainWindow):
         self.preset_table.model().rowsInserted.connect(self._refresh_measurement_time_estimate)
         self.preset_table.model().rowsRemoved.connect(self._refresh_measurement_time_estimate)
         self.preset_table.model().modelReset.connect(self._refresh_measurement_time_estimate)
-        self.preset_table_note = QLabel("Only non-empty presets are listed.")
+        self.preset_table_note = QLabel(
+            "Only non-empty presets are listed. Solo snapshots are marked with a "
+            "<span style='color: #f59e0b;'>★</span>."
+        )
+        self.preset_table_note.setTextFormat(Qt.TextFormat.RichText)
         self.preset_measurement_time_estimate = QLabel()
         self.preset_measurement_time_estimate.setWordWrap(True)
         self.preset_measurement_time_estimate.setToolTip(
@@ -1125,16 +1149,10 @@ class MainWindow(QMainWindow):
 
         logo = QLabel()
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo.setFixedSize(PRESET_EMPTY_LOGO_SIZE)
         logo_pixmap = QPixmap(str(ASSETS_DIR / "matchmatch-logo.png"))
         if not logo_pixmap.isNull():
-            logo.setPixmap(
-                logo_pixmap.scaled(
-                    720,
-                    360,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
+            logo.setPixmap(_fixed_size_pixmap(logo_pixmap, PRESET_EMPTY_LOGO_SIZE))
         self.preset_empty_logo = logo
         layout.addWidget(logo)
 
@@ -5726,7 +5744,7 @@ class MeasurementOptimizationDialog(QDialog):
         layout = QVBoxLayout(self)
         toolbar = QToolBar("Measurement", self)
         toolbar.setMovable(False)
-        toolbar.setIconSize(QSize(18, 18))
+        toolbar.setIconSize(QSize(TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE))
         self._speaker_icon = _speaker_icon(enabled=True)
         self._speaker_off_icon = _speaker_icon(enabled=False)
         self.play_recorded_output_button = QToolButton(self)

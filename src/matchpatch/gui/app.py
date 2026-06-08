@@ -19,8 +19,8 @@ DESKTOP_FILE_ID = "matchpatch-gui"
 DESKTOP_ICON_SIZE = 512
 DEFAULT_XDG_DATA_DIRS = "/usr/local/share:/usr/share"
 GUI_STYLE = "Fusion"
-GUI_FONT_FAMILY = "Sans Serif"
-GUI_FONT_POINT_SIZE = 9
+GUI_FONT_FAMILY = "DejaVu Sans"
+GUI_FONT_POINT_SIZE = 10
 
 
 def qt_message_handler(
