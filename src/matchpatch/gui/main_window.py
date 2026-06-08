@@ -27,6 +27,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPropertyAnimation,
+    QRect,
     QSize,
     QThread,
     QTimer,
@@ -313,9 +314,22 @@ class _MeasurementProgressEstimate:
             preset_total * self.preset_wait + preset_total * snapshot_total * self.snapshot_seconds
         )
 
+    def total_seconds_for_counts(self, preset_total: int, measured_snapshot_total: int) -> float:
+        return preset_total * self.preset_wait + measured_snapshot_total * self.snapshot_seconds
+
     def seconds_per_snapshot(self, preset_total: int, snapshot_total: int) -> float:
         measured_snapshots = max(1, preset_total) * max(1, snapshot_total)
         return self.total_seconds(preset_total, snapshot_total) / measured_snapshots
+
+    def seconds_per_measured_snapshot(
+        self,
+        preset_total: int,
+        measured_snapshot_total: int,
+    ) -> float:
+        return self.total_seconds_for_counts(
+            preset_total,
+            measured_snapshot_total,
+        ) / max(1, measured_snapshot_total)
 
     def remaining_seconds(
         self, event: ProgressEvent, preset_total: int, snapshot_total: int
@@ -335,6 +349,68 @@ class _MeasurementProgressEstimate:
         return max(0, remaining_preset_waits) * self.preset_wait + (
             remaining_snapshots * self.snapshot_seconds
         )
+
+    def remaining_seconds_for_plan(
+        self,
+        event: ProgressEvent,
+        plan: _MeasurementProgressPlan,
+    ) -> float:
+        completed_presets = max(0, (event.preset_index or 1) - 1)
+        completed_snapshots = plan.completed_snapshots(event)
+        remaining_preset_waits = (
+            plan.preset_total - completed_presets
+            if event.snapshot is None
+            else plan.preset_total - (event.preset_index or 1)
+        )
+        remaining_snapshots = max(0, plan.measured_snapshot_total - completed_snapshots)
+        return max(0, remaining_preset_waits) * self.preset_wait + (
+            remaining_snapshots * self.snapshot_seconds
+        )
+
+
+@dataclass(frozen=True)
+class _MeasurementProgressPlan:
+    preset_snapshots: tuple[tuple[str, tuple[int, ...]], ...]
+
+    @property
+    def preset_total(self) -> int:
+        return len(self.preset_snapshots)
+
+    @property
+    def measured_snapshot_total(self) -> int:
+        return sum(len(snapshots) for _, snapshots in self.preset_snapshots)
+
+    def completed_snapshots(self, event: ProgressEvent) -> int:
+        if not self.preset_snapshots:
+            return 0
+
+        preset_index = max(1, event.preset_index or 1)
+        completed = sum(
+            len(snapshots) for _, snapshots in self.preset_snapshots[: preset_index - 1]
+        )
+        current = self._snapshots_for_event(event)
+        if event.snapshot is not None:
+            completed += sum(1 for snapshot in current if snapshot < event.snapshot)
+            if event.kind == "snapshot_completed" and event.snapshot in current:
+                completed += 1
+        return completed
+
+    def progress_value(self, event: ProgressEvent) -> int:
+        completed = self.completed_snapshots(event)
+        if event.kind == "snapshot_started" and event.snapshot in self._snapshots_for_event(event):
+            return completed + 1
+        return completed
+
+    def _snapshots_for_event(self, event: ProgressEvent) -> tuple[int, ...]:
+        if event.device_patch:
+            for patch, snapshots in self.preset_snapshots:
+                if patch == event.device_patch:
+                    return snapshots
+
+        preset_index = event.preset_index or 1
+        if 1 <= preset_index <= len(self.preset_snapshots):
+            return self.preset_snapshots[preset_index - 1][1]
+        return ()
 
 
 def _float_or_zero(value: float | None) -> float:
@@ -669,6 +745,7 @@ class MainWindow(QMainWindow):
         self._optimization_stability_tolerance = 2.0
         self._last_measurement_optimization_settings: MeasurementOptimizationSettings | None = None
         self._measurement_progress_estimate: _MeasurementProgressEstimate | None = None
+        self._measurement_progress_plan: _MeasurementProgressPlan | None = None
         self._deferred_gain_correction_logs: list[str] = []
         self._deferred_gain_correction_patch: str | None = None
         self._playback_toggle_path: Path | None = None
@@ -1513,13 +1590,17 @@ class MainWindow(QMainWindow):
             return
 
         preset_total = self._loaded_preset_count_for_estimate()
-        snapshot_total = self._snapshot_count_for_estimate()
-        seconds = estimate.seconds_per_snapshot(preset_total, snapshot_total)
+        measured_snapshot_total = self._loaded_snapshot_count_for_estimate()
+        seconds = estimate.seconds_per_measured_snapshot(
+            preset_total,
+            measured_snapshot_total,
+        )
         self.measurement_time_estimate.setText(
             "Estimated measurement time per snapshot: "
             f"{_format_short_seconds(seconds)} "
             f"({preset_total} preset{'s' if preset_total != 1 else ''}, "
-            f"{snapshot_total} snapshot{'s' if snapshot_total != 1 else ''})"
+            f"{measured_snapshot_total} snapshot"
+            f"{'s' if measured_snapshot_total != 1 else ''})"
         )
         self._refresh_preset_measurement_time_estimate(estimate)
 
@@ -1547,13 +1628,14 @@ class MainWindow(QMainWindow):
                 return
 
         preset_total = self._selected_preset_count_for_estimate()
-        snapshot_total = self._snapshot_count_for_estimate()
-        seconds = estimate.total_seconds(preset_total, snapshot_total)
+        measured_snapshot_total = self._selected_snapshot_count_for_estimate()
+        seconds = estimate.total_seconds_for_counts(preset_total, measured_snapshot_total)
         self.preset_measurement_time_estimate.setText(
             "Estimated total measurement time for selected presets: "
             f"{_format_short_seconds(seconds)} "
             f"({preset_total} preset{'s' if preset_total != 1 else ''}, "
-            f"{snapshot_total} snapshot{'s' if snapshot_total != 1 else ''})"
+            f"{measured_snapshot_total} snapshot"
+            f"{'s' if measured_snapshot_total != 1 else ''})"
         )
 
     @staticmethod
@@ -1566,22 +1648,78 @@ class MainWindow(QMainWindow):
     def _loaded_preset_count_for_estimate(self) -> int:
         if not hasattr(self, "preset_table"):
             return 1
-        return max(1, self.preset_table.rowCount())
+        return max(
+            1,
+            sum(
+                1
+                for row in range(self.preset_table.rowCount())
+                if self._row_has_measured_snapshots(row)
+            ),
+        )
 
     def _selected_preset_count_for_estimate(self) -> int:
         if not hasattr(self, "preset_table") or self.preset_table.rowCount() == 0:
             return 1
-        selected = 0
-        for row in range(self.preset_table.rowCount()):
-            item = self.preset_table.item(row, 0)
-            if item is not None and item.checkState() == Qt.CheckState.Checked:
-                selected += 1
-        return selected
+        return max(1, len(self._selected_measurable_preset_rows()))
+
+    def _loaded_snapshot_count_for_estimate(self) -> int:
+        if not hasattr(self, "preset_table") or self.preset_table.rowCount() == 0:
+            return self._snapshot_count_for_estimate()
+        return max(
+            1,
+            sum(
+                self._row_measured_snapshot_count(row)
+                for row in range(self.preset_table.rowCount())
+            ),
+        )
+
+    def _selected_snapshot_count_for_estimate(self) -> int:
+        if not hasattr(self, "preset_table") or self.preset_table.rowCount() == 0:
+            return self._snapshot_count_for_estimate()
+        return max(
+            1,
+            sum(
+                self._row_measured_snapshot_count(row)
+                for row in self._selected_measurable_preset_rows()
+            ),
+        )
 
     def _snapshot_count_for_estimate(self) -> int:
         if hasattr(self, "snapshot_count_input"):
             return max(1, self.snapshot_count_input.value())
         return max(1, self.snapshot_count)
+
+    def _row_measured_snapshot_indexes(self, row: int) -> tuple[int, ...]:
+        indexes = []
+        for snapshot_index in range(self._snapshot_count_for_estimate()):
+            item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
+            if item is None or not item.data(IGNORED_SNAPSHOT_ROLE):
+                indexes.append(snapshot_index + 1)
+        return tuple(indexes)
+
+    def _row_measured_snapshot_count(self, row: int) -> int:
+        return len(self._row_measured_snapshot_indexes(row))
+
+    def _row_has_measured_snapshots(self, row: int) -> bool:
+        return self._row_measured_snapshot_count(row) > 0
+
+    def _checked_preset_rows(self) -> list[int]:
+        rows = []
+        for row in range(self.preset_table.rowCount()):
+            item = self.preset_table.item(row, 0)
+            if item is not None and item.checkState() == Qt.CheckState.Checked:
+                rows.append(row)
+        return rows
+
+    def _selected_measurable_preset_rows(self) -> list[int]:
+        if not hasattr(self, "preset_table"):
+            return []
+        if Path(self.input_path.text()).suffix.lower() == ".hlx":
+            candidate_rows = [0] if self.preset_table.rowCount() else []
+        else:
+            checked_rows = self._checked_preset_rows()
+            candidate_rows = checked_rows or list(range(self.preset_table.rowCount()))
+        return [row for row in candidate_rows if self._row_has_measured_snapshots(row)]
 
     def _build_lufs(self) -> QWidget:
         content = QWidget()
@@ -1609,6 +1747,7 @@ class MainWindow(QMainWindow):
             "Regular expression used to identify snapshots skipped during normalization."
         )
         self.ignore_snapshot_regex.textChanged.connect(self._refresh_all_snapshot_names)
+        self.ignore_snapshot_regex.textChanged.connect(self._refresh_measurement_time_estimate)
         snapshot_regexes = QWidget()
         snapshot_regex_layout = QHBoxLayout(snapshot_regexes)
         snapshot_regex_layout.setContentsMargins(0, 0, 0, 0)
@@ -2417,6 +2556,14 @@ class MainWindow(QMainWindow):
         if not self._validate_single_preset_slot_for_run():
             return
 
+        if self.preset_table.rowCount() and not self._selected_measurable_preset_rows():
+            QMessageBox.warning(
+                self,
+                "No measurable snapshots",
+                "Every selected preset has all snapshots ignored. Adjust the ignore regex or select a preset with at least one measurable snapshot.",
+            )
+            return
+
         if (
             self._preset_table_has_unsaved_changes()
             and not self._prompt_save_before_normalization()
@@ -2731,6 +2878,7 @@ class MainWindow(QMainWindow):
         self._start_busy_phase()
         self.completed_request = request
         self._measurement_progress_estimate = _MeasurementProgressEstimate.from_request(request)
+        self._measurement_progress_plan = self._measurement_progress_plan_for_request(request)
         self.worker = NormalizationWorker(request, self)
         self.worker.progress.connect(self.update_progress)
         self.worker.import_requested.connect(self.confirm_import)
@@ -2740,6 +2888,35 @@ class MainWindow(QMainWindow):
         self.worker.finished.connect(self.worker_finished)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+
+    def _measurement_progress_plan_for_request(
+        self,
+        request: NormalizationRequest,
+    ) -> _MeasurementProgressPlan | None:
+        if not hasattr(self, "preset_table") or self.preset_table.rowCount() == 0:
+            return None
+
+        requested_patches = None
+        if request.preset_set:
+            requested_patches = {patch.strip().upper() for patch in request.preset_set.split(",")}
+
+        preset_snapshots = []
+        for row in range(self.preset_table.rowCount()):
+            patch_item = self.preset_table.item(row, 1)
+            if patch_item is None:
+                continue
+            patch = patch_item.text().strip().upper()
+            if not patch:
+                continue
+            if requested_patches is not None and patch not in requested_patches:
+                continue
+            snapshots = self._row_measured_snapshot_indexes(row)
+            if snapshots:
+                preset_snapshots.append((patch, snapshots))
+
+        if not preset_snapshots:
+            return None
+        return _MeasurementProgressPlan(tuple(preset_snapshots))
 
     def _start_hardware_check(
         self,
@@ -2964,9 +3141,14 @@ class MainWindow(QMainWindow):
             self.progress_group.show()
             if progress_was_hidden:
                 self._schedule_resize_for_content()
-            total = event.preset_total * event.snapshot_total
-            snapshot = event.snapshot or 1
-            value = (event.preset_index - 1) * event.snapshot_total + snapshot
+            plan = self._measurement_progress_plan
+            if plan is not None:
+                total = max(1, plan.measured_snapshot_total)
+                value = min(total, plan.progress_value(event))
+            else:
+                total = event.preset_total * event.snapshot_total
+                snapshot = event.snapshot or 1
+                value = (event.preset_index - 1) * event.snapshot_total + snapshot
             self.preset_progress.setRange(0, total)
             self.preset_progress.setValue(value)
             self._update_measurement_progress_format(event)
@@ -3039,6 +3221,10 @@ class MainWindow(QMainWindow):
             return
 
         if event.kind == "preset_started":
+            self._set_normalization_focus(event.device_patch, None)
+            return
+
+        if event.kind in {"snapshot_completed", "snapshot_failed"}:
             self._set_normalization_focus(event.device_patch, None)
             return
 
@@ -3207,12 +3393,20 @@ class MainWindow(QMainWindow):
             self.preset_progress.resetFormat()
             return
 
-        total_seconds = estimate.total_seconds(event.preset_total, event.snapshot_total)
-        remaining_seconds = estimate.remaining_seconds(
-            event,
-            event.preset_total,
-            event.snapshot_total,
-        )
+        plan = self._measurement_progress_plan
+        if plan is not None:
+            total_seconds = estimate.total_seconds_for_counts(
+                plan.preset_total,
+                plan.measured_snapshot_total,
+            )
+            remaining_seconds = estimate.remaining_seconds_for_plan(event, plan)
+        else:
+            total_seconds = estimate.total_seconds(event.preset_total, event.snapshot_total)
+            remaining_seconds = estimate.remaining_seconds(
+                event,
+                event.preset_total,
+                event.snapshot_total,
+            )
         self.preset_progress.setFormat(
             "%p% | total "
             f"{_format_duration(total_seconds)} | ETA {_format_duration(remaining_seconds)}"
@@ -3510,6 +3704,7 @@ class MainWindow(QMainWindow):
         self.start_cancel_stack.setCurrentWidget(self.start_button)
         self.worker = None
         self._measurement_progress_estimate = None
+        self._measurement_progress_plan = None
         self._clear_normalization_focus()
         self._apply_deferred_gain_correction_logs()
         self._refresh_recorded_output_buttons()
@@ -3627,18 +3822,10 @@ class MainWindow(QMainWindow):
         _append_optional_argument(argv, "--measurement-wait", self.measurement_wait.text())
 
     def _selected_preset_set(self) -> str:
-        if Path(self.input_path.text()).suffix.lower() == ".hlx":
-            return self._single_preset_slot_text()
-
         selected = []
-        for row in range(self.preset_table.rowCount()):
-            selected_item = self.preset_table.item(row, 0)
+        for row in self._selected_measurable_preset_rows():
             patch_item = self.preset_table.item(row, 1)
-            if (
-                selected_item is not None
-                and patch_item is not None
-                and selected_item.checkState() == Qt.CheckState.Checked
-            ):
+            if patch_item is not None and patch_item.text().strip():
                 selected.append(patch_item.text())
         return ",".join(selected)
 
@@ -4621,7 +4808,10 @@ class MainWindow(QMainWindow):
             if adjustment is not None:
                 if ignored:
                     self._set_adjustment_ignored(adjustment)
-                elif adjustment.text() in {"-", "Ignore"} and adjustment.data(ADJUSTMENT_VALUE_ROLE) is None:
+                elif (
+                    adjustment.text() in {"-", "Ignore"}
+                    and adjustment.data(ADJUSTMENT_VALUE_ROLE) is None
+                ):
                     self._set_adjustment_value(adjustment, "+0", 0)
         finally:
             self.preset_table.blockSignals(signals_blocked)
@@ -4844,6 +5034,7 @@ class MainWindow(QMainWindow):
                     item.column() - SNAPSHOT_TABLE_START_COLUMN
                 ) // SNAPSHOT_TABLE_COLUMN_STRIDE
                 self._set_ignored_snapshot_highlight(item.row(), snapshot_index, is_ignored)
+                self._refresh_measurement_time_estimate()
             elif self._is_snapshot_adjustment_column(item.column()):
                 try:
                     value = float(item.text())
@@ -5214,18 +5405,23 @@ class ContentHeightTableWidget(QTableWidget):
 
     def set_normalization_focus(self, row: int, snapshot_index: int | None) -> None:
         previous_row = self._normalizing_row
+        previous_snapshot = self._normalizing_snapshot
         self._normalizing_row = row
         self._normalizing_snapshot = snapshot_index
         self._refresh_normalization_focus_background(previous_row)
         self._refresh_normalization_focus_background(row)
+        self._update_normalization_focus_rect(previous_row, previous_snapshot)
+        self._update_normalization_focus_rect(row, snapshot_index)
 
     def clear_normalization_focus(self) -> None:
         if self._normalizing_row is None and self._normalizing_snapshot is None:
             return
         previous_row = self._normalizing_row
+        previous_snapshot = self._normalizing_snapshot
         self._normalizing_row = None
         self._normalizing_snapshot = None
         self._refresh_normalization_focus_background(previous_row)
+        self._update_normalization_focus_rect(previous_row, previous_snapshot)
 
     def _refresh_normalization_focus_background(self, row: int | None) -> None:
         if row is None or not 0 <= row < self.rowCount():
@@ -5247,6 +5443,15 @@ class ContentHeightTableWidget(QTableWidget):
             MainWindow._refresh_preset_item_background(item)
             MainWindow._refresh_preset_cell_widget_background(item)
         self.viewport().update()
+
+    def _update_normalization_focus_rect(
+        self,
+        row: int | None,
+        snapshot_index: int | None,
+    ) -> None:
+        rect = self._normalization_focus_rect(row, snapshot_index)
+        if rect is not None:
+            self.viewport().update(rect.adjusted(-3, -3, 3, 3))
 
     def sizeHint(self) -> QSize:
         hint = super().sizeHint()
@@ -5284,24 +5489,10 @@ class ContentHeightTableWidget(QTableWidget):
     def _paint_normalization_focus(self) -> None:
         if self._normalizing_row is None:
             return
-        if not 0 <= self._normalizing_row < self.rowCount():
-            return
-
-        if self._normalizing_snapshot is None:
-            return
-
-        snapshot_rect = None
-        for column in (
-            MainWindow._snapshot_name_column(self._normalizing_snapshot),
-            MainWindow._snapshot_output_column(self._normalizing_snapshot),
-            MainWindow._snapshot_adjustment_column(self._normalizing_snapshot),
-        ):
-            if column >= self.columnCount() or self.isColumnHidden(column):
-                continue
-            cell_rect = self.visualRect(self.model().index(self._normalizing_row, column))
-            if not cell_rect.isValid():
-                continue
-            snapshot_rect = cell_rect if snapshot_rect is None else snapshot_rect.united(cell_rect)
+        snapshot_rect = self._normalization_focus_rect(
+            self._normalizing_row,
+            self._normalizing_snapshot,
+        )
         if snapshot_rect is None:
             return
 
@@ -5311,6 +5502,30 @@ class ContentHeightTableWidget(QTableWidget):
         snapshot_pen.setWidth(3)
         painter.setPen(snapshot_pen)
         painter.drawRect(snapshot_rect.adjusted(0, 0, -1, -1))
+
+    def _normalization_focus_rect(
+        self,
+        row: int | None,
+        snapshot_index: int | None,
+    ) -> QRect | None:
+        if row is None or snapshot_index is None:
+            return None
+        if not 0 <= row < self.rowCount():
+            return None
+
+        snapshot_rect = None
+        for column in (
+            MainWindow._snapshot_name_column(snapshot_index),
+            MainWindow._snapshot_output_column(snapshot_index),
+            MainWindow._snapshot_adjustment_column(snapshot_index),
+        ):
+            if column >= self.columnCount() or self.isColumnHidden(column):
+                continue
+            cell_rect = self.visualRect(self.model().index(row, column))
+            if not cell_rect.isValid():
+                continue
+            snapshot_rect = cell_rect if snapshot_rect is None else snapshot_rect.united(cell_rect)
+        return snapshot_rect
 
 
 class MeasurementOptimizationSetupDialog(QDialog):

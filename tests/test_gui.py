@@ -730,6 +730,29 @@ def test_ignore_snapshot_regex_marks_and_skips_default_snapshots(monkeypatch, ap
     window.close()
 
 
+def test_all_ignored_presets_are_excluded_from_normalization_request(app) -> None:
+    window = MainWindow()
+    window.snapshot_count_input.setValue(2)
+    for row, preset_id in enumerate(("02B", "02C")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked)
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+
+    window._set_ignored_snapshot_highlight(0, 0, True)
+    window._set_ignored_snapshot_highlight(0, 1, True)
+    window._set_ignored_snapshot_highlight(1, 0, True)
+
+    argv = window._build_argv()
+
+    assert argv[argv.index("--preset-set") + 1] == "02C"
+
+    window.close()
+
+
 def test_single_preset_run_warns_when_preset_id_is_missing(monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch)
@@ -1082,6 +1105,20 @@ def test_preset_table_highlights_current_normalization_focus(app) -> None:
         main_window.IGNORED_SNAPSHOT_BACKGROUND
     )
 
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="02B",
+            snapshot=2,
+            lufs=-18.0,
+        )
+    )
+
+    assert window.preset_table._normalizing_snapshot is None
+    assert window.preset_table.item(0, 6).background().color() == (
+        main_window.NORMALIZATION_FOCUS_BACKGROUND
+    )
+
     window.update_progress(ProgressEvent("snapshot_started", device_patch="02B", snapshot=3))
 
     assert window.preset_table._normalizing_row == 0
@@ -1101,6 +1138,9 @@ def test_preset_table_highlights_current_normalization_focus(app) -> None:
     assert window.preset_table._normalizing_snapshot is None
     assert window.preset_table.item(0, 1).background().style() == Qt.BrushStyle.NoBrush
 
+    window._preset_table_clean_signature = window._preset_table_content_signature()
+    window._preset_table_modified = False
+    window._adjusted_presets.clear()
     window.close()
 
 
@@ -1324,10 +1364,10 @@ def test_measurement_time_estimate_updates_with_timing_and_loaded_counts(
     window.snapshot_count_input.setValue(2)
 
     assert window.measurement_time_estimate.text() == (
-        "Estimated measurement time per snapshot: 9.90 s (2 presets, 2 snapshots)"
+        "Estimated measurement time per snapshot: 9.90 s (2 presets, 4 snapshots)"
     )
     assert window.preset_measurement_time_estimate.text() == (
-        "Estimated total measurement time for selected presets: 39.6 s (2 presets, 2 snapshots)"
+        "Estimated total measurement time for selected presets: 39.6 s (2 presets, 4 snapshots)"
     )
 
     window.preset_table.item(1, 0).setCheckState(Qt.CheckState.Unchecked)
@@ -1341,7 +1381,7 @@ def test_measurement_time_estimate_updates_with_timing_and_loaded_counts(
     window.reference_di.setText(str(shorter_reference_di))
 
     assert window.measurement_time_estimate.text() == (
-        "Estimated measurement time per snapshot: 5.90 s (2 presets, 2 snapshots)"
+        "Estimated measurement time per snapshot: 5.90 s (2 presets, 4 snapshots)"
     )
     assert window.preset_measurement_time_estimate.text() == (
         "Estimated total measurement time for selected presets: 11.8 s (1 preset, 2 snapshots)"
@@ -1354,6 +1394,41 @@ def test_measurement_time_estimate_updates_with_timing_and_loaded_counts(
     )
     assert window.preset_measurement_time_estimate.text() == (
         "Estimated total measurement time for selected presets: invalid timing value"
+    )
+
+    window.close()
+
+
+def test_measurement_time_estimate_counts_only_measurable_snapshots(
+    tmp_path,
+    app,
+) -> None:
+    window = MainWindow()
+    reference_di = tmp_path / "reference.wav"
+    _write_silent_wav(reference_di, seconds=1.0)
+    window.reference_di.setText(str(reference_di))
+    window.preset_wait.setText("5")
+    window.snapshot_count_input.setValue(2)
+
+    for row, preset_id in enumerate(("02B", "02C")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked)
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+
+    window._set_ignored_snapshot_highlight(0, 0, True)
+    window._set_ignored_snapshot_highlight(0, 1, True)
+    window._set_ignored_snapshot_highlight(1, 0, True)
+    window._refresh_measurement_time_estimate()
+
+    assert window.measurement_time_estimate.text() == (
+        "Estimated measurement time per snapshot: 8.40 s (1 preset, 1 snapshot)"
+    )
+    assert window.preset_measurement_time_estimate.text() == (
+        "Estimated total measurement time for selected presets: 8.40 s (1 preset, 1 snapshot)"
     )
 
     window.close()
@@ -1973,9 +2048,9 @@ def test_gain_log_with_output_prefix_keeps_bad_lufs_on_matching_snapshot(monkeyp
     assert window.preset_table.item(0, 8).text() == "+0.7"
     assert window.preset_table.item(0, 11).text() == "+23.7 ⚠️"
     assert window.preset_table.item(0, 14).text() == "+23.7 ⚠️"
-    assert "Resulting output block level would be 30.6 dB" in window.preset_table.item(
-        0, 11
-    ).toolTip()
+    assert (
+        "Resulting output block level would be 30.6 dB" in window.preset_table.item(0, 11).toolTip()
+    )
 
     window.close()
 
