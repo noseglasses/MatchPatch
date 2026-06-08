@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from matchpatch import __version__
 
 PROJECT_URL = "https://github.com/noseglasses/MatchPatch"
-ASSETS_DIR = Path(__file__).resolve().parents[3] / "doc" / "assets"
+ASSETS_DIR = Path(__file__).resolve().parents[3] / "docs" / "assets"
 
 
 class AboutDialog(QDialog):

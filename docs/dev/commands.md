@@ -209,7 +209,7 @@ Application packaging is not yet completed in the checked-in project. Current
 canonical package artifacts are the Python wheel and source distribution built
 with `uv build --no-sources`.
 
-Brand assets for future app packaging live in `doc/assets/`.
+Brand assets for future app packaging live in `docs/assets/`.
 
 ## Docs
 

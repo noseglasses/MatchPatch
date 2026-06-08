@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication
 from matchpatch.gui.main_window import MainWindow
 
 IGNORED_QT_MESSAGES = {"This plugin supports grabbing the mouse only for popup windows"}
-ASSETS_DIR = Path(__file__).resolve().parents[3] / "doc" / "assets"
+ASSETS_DIR = Path(__file__).resolve().parents[3] / "docs" / "assets"
 DESKTOP_FILE_ID = "matchpatch-gui"
 DESKTOP_ICON_SIZE = 512
 DEFAULT_XDG_DATA_DIRS = "/usr/local/share:/usr/share"

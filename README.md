@@ -1,7 +1,7 @@
 # MatchPatch
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/noseglasses/MatchPatch/main/doc/assets/matchmatch-logo.png" alt="MatchPatch: Normalize presets. Match volume." width="520">
+  <img src="https://raw.githubusercontent.com/noseglasses/MatchPatch/main/docs/assets/matchmatch-logo.png" alt="MatchPatch: Normalize presets. Match volume." width="520">
 </p>
 
 [![Quality](https://github.com/noseglasses/MatchPatch/actions/workflows/quality.yml/badge.svg)](https://github.com/noseglasses/MatchPatch/actions/workflows/quality.yml)
@@ -9,98 +9,74 @@
 [![PyPI](https://img.shields.io/pypi/v/matchpatch.svg)](https://pypi.org/project/matchpatch/)
 [![Python](https://img.shields.io/pypi/pyversions/matchpatch.svg)](https://pypi.org/project/matchpatch/)
 
-**Measure. Match. Play. Automatic Loudness Alignment for Presets.**
+**No more unexpected volume jumps when switching sounds.**
 
-Playing in a cover band with one preset per song? Tired of balancing presets
-and snapshots by hand, frustrating your sound engineer, or losing a gorgeous
-solo because its level was too low? MatchPatch gets every patch stage-ready.
-
-MatchPatch normalizes gain across audio-processor presets and snapshots. It
-plays a reference DI through each patch, measures LUFS and crest factor, then
-writes adjusted preset files with balanced output levels.
-
-The first supported device is the **Line 6 Helix**. The architecture is
-device-aware, so additional processors can provide their own file handling,
-steering commands, and audio routing later. MatchPatch is designed to support
-Windows, Linux, and WSL.
+MatchPatch automatically equalizes the loudness of presets and snapshots in
+guitar processors such as the Line 6 Helix.
 
 ## Why MatchPatch?
 
-- Replace manual gain matching with a guided workflow.
-- Normalize Helix `.hls` setlists and `.hlx` presets.
-- Exercise the complete workflow without hardware using loopback mode.
-- Keep environments and dependencies reproducible with one `uv.lock`.
+You create a great clean sound. You create a great lead sound. Then you switch
+between them and one is much louder than the other.
 
-## How It Works
+MatchPatch measures your presets and calculates the gain adjustments needed to
+make them consistent, so your setlist feels balanced before rehearsal or stage
+use.
 
-```text
-MatchPatch GUI
-  -> choose a preset or setlist file
-  -> preset and snapshot selection
-  -> reference playback and processed-audio recording
-  -> LUFS and crest-factor analysis
-  -> adjusted processor preset file
-```
+## Features
 
-## Quick Setup
+- Measure preset loudness automatically.
+- Analyze snapshots.
+- Calculate required gain corrections.
+- Modify Helix setlists and presets.
+- Test the workflow without hardware.
+- Configure normal runs from the GUI.
+- Use CLI and worker commands for advanced scripting.
+- Open source.
 
-MatchPatch uses [uv](https://docs.astral.sh/uv/) for environments, dependency
-locking, and package installation. Install uv for your platform:
+## Current Support
 
-```bash
-# Linux or WSL
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+Current normal workflows support:
 
-```powershell
-# Windows PowerShell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
+- Line 6 Helix
+- `.hls` Helix setlists
+- `.hlx` Helix presets
+- GUI-first workflows
 
-Synchronize the environment:
+Loopback and simulated modes are available for no-hardware tests. Hardware mode
+is for real Helix measurement.
 
-```bash
-# Linux or WSL
-scripts/sync-wsl.sh
-source "$HOME/.local/share/matchpatch/.venv-wsl/bin/activate"
-```
+## Documentation
 
-```powershell
-# Windows PowerShell
-cd C:\src\MatchPatch-windows
-.\scripts\sync-windows.cmd
-.\.venv-windows\Scripts\Activate.ps1
-```
+- Start here: [docs/index.md](docs/index.md)
+- 10-minute guide: [docs/quick-start.md](docs/quick-start.md)
+- Main manual: [docs/musician-guide.md](docs/musician-guide.md)
+- Test without hardware: [docs/workflows/test-without-hardware.md](docs/workflows/test-without-hardware.md)
+- Hardware measurement: [docs/workflows/hardware-measurement.md](docs/workflows/hardware-measurement.md)
+- Reference DI: [docs/concepts/reference-di.md](docs/concepts/reference-di.md)
+- Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
+- FAQ: [docs/faq.md](docs/faq.md)
+- Glossary: [docs/glossary.md](docs/glossary.md)
 
-Run the native Windows environment from a directory on a Windows drive, such as
-`C:\src\MatchPatch-windows`. Do not run `.\scripts\sync-windows.cmd` or
-`.\.venv-windows\Scripts\matchpatch-gui.exe` from a WSL UNC path such as
-`\\wsl.localhost\Ubuntu-24.04\home\...\MatchPatch`; `cmd.exe` and the uv
-console-script launchers cannot reliably canonicalize those paths.
+## Safety Notes
 
-If PowerShell blocks activation scripts on your machine, either run commands
-through `.\.venv-windows\Scripts\python.exe -m ...` or allow local scripts for
-the current user:
+> Warning:
+> Keep backups of your original Helix files.
 
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
+> Warning:
+> Measurement files are for measuring, not for live playing.
 
-When running the Helix hardware workflow from WSL, also install uv on Windows
-and synchronize a Windows runtime mirror:
+## Install And Launch
 
-```bash
-scripts/sync-windows-from-wsl.sh --extra gui
-export MATCHPATCH_WINDOWS_PYTHON=/mnt/c/src/MatchPatch-windows/.venv-windows/Scripts/python.exe
-```
+Installation instructions are still being consolidated. For now, use the
+verified local setup commands below and see [Developer Notes](docs/developer-notes.md)
+and [developer commands](docs/dev/commands.md) for fuller setup details.
 
-## Graphical Quick Start
-
-Install the optional PySide6 interface and launch it:
+Install the optional GUI support and launch MatchPatch:
 
 ```bash
 # Linux or WSL
-uv sync --locked --no-default-groups --group wsl --extra gui
+scripts/sync-wsl.sh --extra gui
 matchpatch-gui
 ```
 
@@ -111,334 +87,18 @@ cd C:\src\MatchPatch-windows
 .\.venv-windows\Scripts\matchpatch-gui.exe
 ```
 
-The GUI starts in `loopback` mode so the guided workflow can be exercised
-without processor hardware. Choose an `.hls` or `.hlx` file, select the presets,
-choose an output file, and follow the import confirmation dialogs. Switch to
-`hardware` when a Helix and its native Windows audio environment are available.
+Hardware measurement from WSL needs a synced native Windows runtime. See
+[developer commands](docs/dev/commands.md) before using real Helix hardware from
+WSL.
 
-On WSL, the launcher automatically selects the WSL Wayland socket when the
-shell's systemd runtime directory does not contain it. If Wayland is unavailable
-and Qt must use XCB, install the Ubuntu runtime packages:
+## Advanced And Developer Information
 
-```bash
-sudo apt install \
-  libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
-  libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xkb1 libxcb-util1
-```
+Technical details live in the developer docs:
 
-## Configuration
-
-Use a TOML file for durable machine settings and normalization policy. MatchPatch
-loads `~/.config/matchpatch/config.toml` automatically when it exists. Pass
-`--config PATH` to use a different file. Command-line options override the file;
-the `MATCHPATCH_BACKEND`, `MATCHPATCH_WINDOWS_PYTHON`, and
-`MATCHPATCH_REFERENCE_DI` environment variables override matching file values.
-Use `--snapshot-count N` to override `policy.measured_snapshots` for one run.
-Line 6 Helix supports between `1` and `8` measured snapshots; the default is `4`.
-
-```toml
-[normalize]
-backend = "hardware"
-reference_di = "/path/to/reference-di.wav"
-target_lufs = -16.0
-timeout_seconds = 300
-
-[devices.helix.audio]
-device = "Helix"
-sample_rate = 48000
-input_mapping = [1, 2]
-output_mapping = [3, 4]
-blocksize = 0
-
-[devices.helix.steering]
-output = "Helix"
-channel = 0
-preset_wait_seconds = 0.5
-snapshot_wait_seconds = 0.2
-measurement_wait_seconds = 0.1
-
-[policy]
-measured_snapshots = 4
-solo_regex = '(?i)\bsolo\b'
-solo_gain_bump_db = 3.0
-crest_factor_reference_db = 12.0
-crest_factor_correction_ratio = 0.4
-max_crest_factor_correction_db = 3.0
-gain_deadband_db = 0.25
-
-[analysis]
-window_seconds = 3.0
-interval_seconds = 0.1
-minimum_valid_lufs = -100.0
-pre_roll_seconds = 0.2
-post_roll_seconds = 0.1
-round_trip_latency_seconds = 0.02
-```
-
-Hardware measurement sends silent pre-roll and post-roll around the reference DI,
-then trims the recording by the configured round-trip latency before analysis.
-`post_roll_seconds` must be at least as large as `round_trip_latency_seconds`.
-
-Helix defaults:
-
-| Purpose | USB channels |
-|---|---|
-| Processed audio recording | USB `1/2` |
-| Reference DI playback | USB `3/4` |
-
-## Choosing A Reference DI
-
-Use a clean DI measurement track that represents the playing style you want to
-normalize. Patch levels react differently to palm-muted attacks, chords, and
-sustained notes, especially when compression or gain staging varies between
-presets.
-
-Bundled reference tracks live under `audio/reference-di/`. The shorter
-Strandberg track is the default.
-
-The current reference track is intended for a guitarist playing various
-genres, mainly rock. The guitar is tuned to E-flat; the notes below are written
-as played and therefore sound one semitone lower:
-
-- two palm-muted chugs on the low E string;
-- an A5 chord rooted on the low E string;
-- a B5 chord rooted on the low E string;
-- 12th fret on the G string;
-- 12th fret on the B string;
-- 15th fret on the B string;
-- 15th fret on the high E string, ringing out.
-
-```text
-    1      &      2      &      3      &      4      &
-e|------------------------------------------------15~~~~|
-B|----------------------------12------15----------------|
-G|--------------------12--------------------------------|
-D|------7------9----------------------------------------|
-A|------7------9----------------------------------------|
-E|-0.-0-5------7----------------------------------------|
-    PM-- PM-
-```
-
-Tailor the DI measurement track to the player's style. For instruments other
-than guitar, use a track designed for that instrument's dynamics and frequency
-range.
-
-## Supported Files
-
-| Extension | Meaning | Notes |
-|---|---|---|
-| `.hls` | Helix setlist | Contains multiple presets |
-| `.hlx` | Helix preset | Contains one preset and requires one `-S` slot during measurement |
-| `.json` | Unpacked Helix data | Supported by selected legacy utilities |
-
-Keep backups of original processor files. Generated measurement files are meant for
-measurement, not stage use.
-
-## Command-Line Interface
-
-The GUI is the easiest way to use MatchPatch. The CLI exposes the same
-normalization workflow for scripting, testing, and advanced setups.
-
-### Normalize With A Helix
-
-List available audio devices and MIDI outputs:
-
-```bash
-# From WSL, query the native Windows worker
-scripts/measure-windows-from-wsl.sh devices
-```
-
-```powershell
-# Native Windows
-.\.venv-windows\Scripts\python.exe -m matchpatch.measure devices
-```
-
-Run the guided hardware workflow:
-
-```bash
-matchpatch normalize --device helix -a -i setlist_original.hls
-```
-
-```powershell
-.\.venv-windows\Scripts\matchpatch.exe normalize --device helix -a -i setlist_original.hls
-```
-
-MatchPatch creates a measurement file, pauses while you import it into the Helix,
-measures the presets, and creates the adjusted file.
-
-For a single `.hlx` preset, specify the temporary Helix slot:
-
-```bash
-matchpatch normalize --device helix -a -i "Song.hlx" -S 12A
-```
-
-Useful options:
-
-| Option | Purpose |
-|---|---|
-| `-S 01A,01B,02A` | Measure selected processor slots |
-| `-n 8` | Limit measurement to the first eight selected presets |
-| `--target-lufs -18` | Override the default `-16 LUFS` target |
-| `--config ~/.config/matchpatch/config.toml` | Load durable machine and policy defaults |
-| `--keep-temp` | Keep the generated measurement CSV |
-| `--audio-device "Helix ASIO"` | Select an ambiguous audio device |
-| `--midi-output "Helix"` | Select an ambiguous MIDI output |
-| `--timeout 300` | Limit analysis time |
-
-### Try It Without Hardware
-
-Loopback mode simulates an empty processor patch by feeding the reference DI
-directly into the analyzer. It is useful for quick signal-analysis smoke tests:
-
-```bash
-matchpatch normalize \
-  --device helix \
-  --backend loopback \
-  -i setlist_original.hls \
-  -o setlist_loopback_adjusted.hls \
-  -S 01A \
-  --keep-temp
-```
-
-Simulated-hardware mode adds stateful preset and snapshot steering, routing
-validation, deterministic gain differences, and snapshot compression. Use it
-for portable integration testing without USB hardware:
-
-```bash
-matchpatch normalize \
-  --device helix \
-  --backend simulated \
-  -i setlist_original.hls \
-  -o setlist_simulated_adjusted.hls \
-  -S 01A,01B \
-  --keep-temp
-```
-
-The worker can also inject deterministic processor failures for error-path
-tests:
-
-```bash
-python -m matchpatch.measure measure \
-  --device helix \
-  --backend simulated \
-  --simulate-fail-presets 6 \
-  --preset-ids 1,6 \
-  --csv analysis.csv \
-  --reference-di reference.wav
-```
-
-## Device Profiles
-
-Processor-specific code lives in `src/matchpatch/devices/`. A profile supplies:
-
-- preset and setlist file handling;
-- preset and snapshot steering;
-- default processor USB channels.
-
-The measurement workflow and loopback backend stay device-independent. To add
-another processor, implement `DeviceProfile`, `PatchFileHandler`, and
-`DeviceController`, then register the profile in
-`src/matchpatch/devices/registry.py`.
-
-## Helix Utilities
-
-Additional Helix utilities are available under `Python/`:
-
-| Script | Purpose |
-|---|---|
-| `preset_handling.py` | Convert routing, list presets, and apply LUFS adjustments |
-| `list_cab_presets.py` | List presets containing isolated cab blocks |
-| `replace_amp.py` | Replace amp+cab blocks with amp-only blocks |
-| `remove_inactive_blocks.py` | Remove blocks inactive in the first four snapshots |
-| `reset_output_levels.py` | Reset active and snapshot-assigned output gains |
-| `stereofy.py` | Convert identifiable post-cab or post-IR blocks to stereo |
-| `decrypt_hls.py` | Unpack `.hls` data to JSON |
-| `encrypt_hls.py` | Pack JSON data into `.hls` |
-
-Run a utility from the repository root:
-
-```bash
-python3 Python/preset_handling.py --help
-```
-
-## Development
-
-Synchronize dependencies and run the same checks enforced by GitHub Actions:
-
-```bash
-scripts/sync-wsl.sh
-source "$HOME/.local/share/matchpatch/.venv-wsl/bin/activate"
-
-ruff check .
-ruff format --check .
-ty check
-pytest
-```
-
-For native Windows development while keeping Git in WSL, treat the WSL checkout
-as the only real repository and synchronize a disposable Windows runtime mirror.
-The default mirror is `/mnt/c/src/MatchPatch-windows`, which appears in Windows
-as `C:\src\MatchPatch-windows`:
-
-```bash
-# From the WSL repository
-scripts/sync-windows-from-wsl.sh --extra gui
-export MATCHPATCH_WINDOWS_PYTHON=/mnt/c/src/MatchPatch-windows/.venv-windows/Scripts/python.exe
-```
-
-```powershell
-# From Windows PowerShell
-cd C:\src\MatchPatch-windows
-.\.venv-windows\Scripts\ruff.exe check .
-.\.venv-windows\Scripts\ruff.exe format --check .
-.\.venv-windows\Scripts\ty.exe check
-.\.venv-windows\Scripts\pytest.exe
-```
-
-The recommended two-environment workflow is:
-
-1. Keep the authoritative Git worktree in WSL, for example
-   `/home/flo/MatchPatch`, and run Git operations there.
-2. Use `scripts/sync-wsl.sh` for WSL tests and Linux/WSLg GUI checks.
-3. Use `scripts/sync-windows-from-wsl.sh --extra gui` to copy the current WSL
-   files to `/mnt/c/src/MatchPatch-windows` and update the native Windows venv.
-4. Run native Windows GUI, audio, MIDI, and hardware checks from
-   `C:\src\MatchPatch-windows`.
-5. Do not commit, rebase, or edit long-lived work in the Windows mirror. Delete
-   and recreate it freely; share source changes through the WSL worktree and
-   `uv.lock`.
-
-The pytest suite includes Hypothesis property tests and reports branch-aware
-coverage in the terminal and under `htmlcov/`.
-
-Install Git hooks:
-
-```bash
-pre-commit install --install-hooks
-pre-commit run --all-files --hook-stage pre-push
-```
-
-CI runs on Python `3.12`, `3.13`, and `3.14` across Linux, Windows, and WSL.
-Dependabot maintains uv, GitHub Actions, and pre-commit dependencies.
-
-## Releases
-
-Push a version tag matching `pyproject.toml`, such as `v0.1.0`, to trigger the
-trusted-publishing workflow:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The release workflow builds and smoke-tests the wheel and source distribution,
-then publishes to PyPI through GitHub OIDC without a stored API token.
-
-## Brand Assets
-
-The project logo and square icons live under `doc/assets/`. Use
-`matchmatch-icon-512.png` for GitHub's social preview and future application
-packaging.
+- [Developer Notes](docs/developer-notes.md)
+- [Architecture](docs/dev/architecture.md)
+- [Commands](docs/dev/commands.md)
+- [File Formats](docs/dev/file-formats.md)
 
 ## License
 
