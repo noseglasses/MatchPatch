@@ -3458,6 +3458,59 @@ class MainWindow(QMainWindow):
         if result.retained_csv_path is not None:
             self._mark_preset_table_modified()
         self._log("Measurement completed; save the active file to write adjustments", "success")
+        self._show_normalization_completion_popup()
+
+    def _show_normalization_completion_popup(self) -> None:
+        save_message = (
+            'You need to save the setlist or preset with "Save" or "Save As", then import '
+            "the saved file on your device."
+        )
+        manual_targets = self._manual_adjustment_targets()
+        if manual_targets:
+            target_lines = "\n".join(f"- {target}" for target in manual_targets)
+            QMessageBox.warning(
+                self,
+                "Normalization completed with errors",
+                "Normalization completed with errors.\n\n"
+                "For the highlighted presets/snapshots, manual modifications are required "
+                "to adjust the gain staging so there is enough headroom to raise the output "
+                "level if necessary.\n\n"
+                f"{target_lines}\n\n"
+                f"{save_message}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Normalization completed",
+            f"Normalization completed successfully.\n\n{save_message}",
+        )
+
+    def _manual_adjustment_targets(self) -> list[str]:
+        targets: list[str] = []
+        for row in range(self.preset_table.rowCount()):
+            patch_item = self.preset_table.item(row, 1)
+            preset_item = self.preset_table.item(row, 2)
+            patch = patch_item.text().strip() if patch_item is not None else ""
+            preset = preset_item.text().strip() if preset_item is not None else ""
+            prefix = " ".join(part for part in (patch, preset) if part)
+            for snapshot_index in range(self.snapshot_count):
+                adjustment_item = self.preset_table.item(
+                    row,
+                    self._snapshot_adjustment_column(snapshot_index),
+                )
+                if adjustment_item is None or not adjustment_item.data(BAD_LUFS_HIGHLIGHT_ROLE):
+                    continue
+                name_item = self.preset_table.item(
+                    row,
+                    self._snapshot_name_column(snapshot_index),
+                )
+                snapshot_name = name_item.text().strip() if name_item is not None else ""
+                snapshot_label = f"snapshot {snapshot_index + 1}"
+                if snapshot_name:
+                    snapshot_label = f"{snapshot_label} ({snapshot_name})"
+                targets.append(f"{prefix}: {snapshot_label}" if prefix else snapshot_label)
+        return targets
 
     def export_output(self) -> None:
         self.save_active_file()

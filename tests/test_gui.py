@@ -2772,21 +2772,69 @@ def test_retained_csv_path_and_colored_timestamped_log_are_displayed(app) -> Non
     window.close()
 
 
-def test_completion_enables_save_without_redundant_popup(tmp_path, monkeypatch, app) -> None:
+def test_completion_enables_save_and_shows_success_popup(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     window.input_path.setText(str(tmp_path / "input.hls"))
     window._loaded_input_path = window.input_path.text()
-    popups = []
-    monkeypatch.setattr(QMessageBox, "information", lambda *args: popups.append(args))
+    information_popups = []
+    warning_popups = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: information_popups.append(args))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warning_popups.append(args))
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
 
     window.normalization_completed(
         NormalizationResult(None, tmp_path, tmp_path / "lufs_analysis.csv")
     )
 
-    assert popups == []
+    assert len(information_popups) == 1
+    assert information_popups[0][1] == "Normalization completed"
+    assert "Normalization completed successfully" in information_popups[0][2]
+    assert '"Save" or "Save As"' in information_popups[0][2]
+    assert "import the saved file on your device" in information_popups[0][2]
+    assert warning_popups == []
     assert window.save_action.isEnabled()
     assert "save the active file" in window.log.toHtml()
+
+    window.close()
+
+
+def test_completion_with_bad_lufs_shows_manual_adjustment_popup(
+    tmp_path,
+    monkeypatch,
+    app,
+) -> None:
+    window = MainWindow()
+    window.input_path.setText(str(tmp_path / "input.hls"))
+    window._loaded_input_path = window.input_path.text()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    information_popups = []
+    warning_popups = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: information_popups.append(args))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warning_popups.append(args))
+
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Clean", "Solo"))
+    window.update_progress(ProgressEvent("log", message="[GAIN] 02B Clean | bad LUFS"))
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
+
+    window.normalization_completed(
+        NormalizationResult(None, tmp_path, tmp_path / "lufs_analysis.csv")
+    )
+
+    assert information_popups == []
+    assert len(warning_popups) == 1
+    assert warning_popups[0][1] == "Normalization completed with errors"
+    assert "manual modifications are required" in warning_popups[0][2]
+    assert "enough headroom to raise the output level if necessary" in warning_popups[0][2]
+    assert "- 02B Song: snapshot 1 (Clean)" in warning_popups[0][2]
+    assert '"Save" or "Save As"' in warning_popups[0][2]
+    assert "import the saved file on your device" in warning_popups[0][2]
 
     window.close()
 
