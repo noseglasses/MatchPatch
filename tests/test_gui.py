@@ -2028,9 +2028,18 @@ def test_gain_log_updates_preset_correction_columns(monkeypatch, app) -> None:
     assert window.preset_table.columnWidth(0) == window.style().pixelMetric(
         QStyle.PixelMetric.PM_IndicatorWidth
     ) + 2 * window.style().pixelMetric(QStyle.PixelMetric.PM_CheckBoxLabelSpacing)
-    assert window.preset_table.columnWidth(5) >= (
-        window.preset_table.fontMetrics().horizontalAdvance("+12.5 (+12.5)") + 18
+    metrics = window.preset_table.fontMetrics()
+    assert window.preset_table.columnWidth(4) == max(
+        58,
+        metrics.horizontalAdvance("-120.0") + 14,
+        metrics.horizontalAdvance("20.0") + 14,
     )
+    assert window.preset_table.columnWidth(5) == max(
+        58,
+        metrics.horizontalAdvance("-140.0") + 14,
+        metrics.horizontalAdvance("+140.0") + 14,
+    )
+    assert window.preset_table.columnWidth(5) < (metrics.horizontalAdvance("+12.5 (+12.5)") + 18)
     assert (
         window.preset_table.horizontalHeader().sectionResizeMode(0) == QHeaderView.ResizeMode.Fixed
     )
@@ -2226,8 +2235,9 @@ def test_recorded_pending_adjustment_widget_updates_with_gain_value(tmp_path, mo
     )
 
     assert window.preset_table.item(0, 5).text() == "?"
-    pending_widget = window.preset_table.cellWidget(0, 5)
-    assert pending_widget.findChild(QLabel).text() == "?"
+    assert window.preset_table.cellWidget(0, 5) is None
+    name_widget = window.preset_table.cellWidget(0, 3)
+    assert name_widget.findChild(main_window.QToolButton) is not None
 
     window.target_lufs.setText("-16.0")
     window.update_progress(
@@ -2241,13 +2251,9 @@ def test_recorded_pending_adjustment_widget_updates_with_gain_value(tmp_path, mo
     )
 
     item = window.preset_table.item(0, 5)
-    cell_widget = window.preset_table.cellWidget(0, 5)
-    label = cell_widget.findChild(QLabel)
     assert item.text() == "+1.5"
-    assert cell_widget.autoFillBackground()
-    assert label.text() == "+1.5"
-    assert not label.font().bold()
-    assert label.styleSheet() == ""
+    assert window.preset_table.cellWidget(0, 5) is None
+    assert window.preset_table.cellWidget(0, 3).autoFillBackground()
 
     window.close()
 
@@ -2277,7 +2283,7 @@ def test_recorded_snapshot_playback_is_disabled_while_normalizing(
         )
     )
 
-    speaker_button = window.preset_table.cellWidget(0, 5).findChild(main_window.QToolButton)
+    speaker_button = window.preset_table.cellWidget(0, 3).findChild(main_window.QToolButton)
     assert speaker_button is not None
     assert not speaker_button.isEnabled()
 
@@ -2291,7 +2297,7 @@ def test_recorded_snapshot_playback_is_disabled_while_normalizing(
     window.worker = None
     window._refresh_recorded_output_buttons()
 
-    speaker_button = window.preset_table.cellWidget(0, 5).findChild(main_window.QToolButton)
+    speaker_button = window.preset_table.cellWidget(0, 3).findChild(main_window.QToolButton)
     assert speaker_button is not None
     assert speaker_button.isEnabled()
 

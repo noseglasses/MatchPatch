@@ -39,6 +39,7 @@ from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QFont,
+    QFontMetrics,
     QIcon,
     QKeyEvent,
     QPainter,
@@ -442,6 +443,11 @@ RECORDED_OUTPUT_PATH_ROLE = Qt.ItemDataRole.UserRole + 5
 SNAPSHOT_OUTPUT_LEVELS_ROLE = Qt.ItemDataRole.UserRole + 6
 NORMALIZATION_FOCUS_ROLE = Qt.ItemDataRole.UserRole + 7
 IGNORED_SNAPSHOT_ROLE = Qt.ItemDataRole.UserRole + 8
+SOLO_SNAPSHOT_ROLE = Qt.ItemDataRole.UserRole + 9
+OUTPUT_LEVEL_MIN_DB = -120.0
+OUTPUT_LEVEL_MAX_DB = 20.0
+ADJUSTMENT_MIN_DB = OUTPUT_LEVEL_MIN_DB - OUTPUT_LEVEL_MAX_DB
+ADJUSTMENT_MAX_DB = OUTPUT_LEVEL_MAX_DB - OUTPUT_LEVEL_MIN_DB
 CUSTOM_ADJUSTMENT_COLOR = "#2563eb"
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
@@ -3280,61 +3286,32 @@ class MainWindow(QMainWindow):
         row = self._preset_row(event.device_patch)
         if row is None:
             return
-        column = self._snapshot_adjustment_column(event.snapshot - 1)
+        column = self._snapshot_name_column(event.snapshot - 1)
         item = self.preset_table.item(row, column)
         if item is None:
             return
         if item.data(IGNORED_SNAPSHOT_ROLE):
-            self._set_adjustment_ignored(item)
             return
         path = Path(event.path)
         item.setData(RECORDED_OUTPUT_PATH_ROLE, str(path))
         self._recording_paths[(event.device_patch, event.snapshot - 1)] = path
-        self._refresh_adjustment_cell_widget(item)
+        self._refresh_snapshot_name_cell_widget(item)
 
     def _refresh_adjustment_cell_widget(self, item: QTableWidgetItem) -> None:
         table = item.tableWidget()
         if table is None:
             return
         table.removeCellWidget(item.row(), item.column())
-        recorded_path = item.data(RECORDED_OUTPUT_PATH_ROLE)
         has_custom_adjustment = item.toolTip().startswith("Custom loudness adjustment:")
-        if not recorded_path:
-            if has_custom_adjustment:
-                label = QLabel(_custom_adjustment_label_text(item.text()))
-                self._style_adjustment_cell_widget(label, item)
-                self._style_adjustment_label(label, item)
-                label.setContentsMargins(3, 0, 0, 0)
-                label.setToolTip(item.toolTip())
-                label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-                table.setCellWidget(item.row(), item.column(), label)
-            return
-
-        content = QWidget(table)
-        self._style_adjustment_cell_widget(content, item)
-        layout = QHBoxLayout(content)
-        layout.setContentsMargins(2, 0, 2, 0)
-        layout.setSpacing(2)
-        label = QLabel(
-            _custom_adjustment_label_text(item.text()) if has_custom_adjustment else item.text()
-        )
-        self._style_adjustment_label(label, item)
-        label.setToolTip(item.toolTip())
-        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        layout.addWidget(label, 1)
-        if recorded_path:
-            button = QToolButton(content)
-            button.setIcon(self._speaker_icon)
-            button.setAutoRaise(True)
-            button.setIconSize(QSize(14, 14))
-            button.setFixedSize(22, 22)
-            button.setToolTip("Play recorded snapshot output.")
-            button.setEnabled(not self._normalization_in_progress())
-            button.clicked.connect(
-                lambda checked=False, path=Path(recorded_path): self._play_recording(path)
-            )
-            layout.addWidget(button)
-        table.setCellWidget(item.row(), item.column(), content)
+        if has_custom_adjustment:
+            label = QLabel(_custom_adjustment_label_text(item.text()))
+            self._style_adjustment_cell_widget(label, item)
+            self._style_adjustment_label(label, item)
+            label.setContentsMargins(3, 0, 0, 0)
+            label.setToolTip(item.toolTip())
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            table.setCellWidget(item.row(), item.column(), label)
+        self._ensure_item_column_width(item)
 
     @staticmethod
     def _style_adjustment_cell_widget(widget: QWidget, item: QTableWidgetItem) -> None:
@@ -3367,6 +3344,19 @@ class MainWindow(QMainWindow):
         else:
             label.setStyleSheet("")
 
+    @staticmethod
+    def _ensure_item_column_width(item: QTableWidgetItem, padding: int = 18) -> None:
+        table = item.tableWidget()
+        if table is None:
+            return
+        metrics = QFontMetrics(item.font())
+        text_width = metrics.horizontalAdvance(item.text()) + padding
+        widget = table.cellWidget(item.row(), item.column())
+        widget_width = widget.sizeHint().width() + 4 if widget is not None else 0
+        required_width = max(text_width, widget_width)
+        if table.columnWidth(item.column()) < required_width:
+            table.setColumnWidth(item.column(), required_width)
+
     def _play_recording(self, path: Path) -> None:
         if self._normalization_in_progress():
             return
@@ -3388,9 +3378,9 @@ class MainWindow(QMainWindow):
     def _refresh_recorded_output_buttons(self) -> None:
         for row in range(self.preset_table.rowCount()):
             for snapshot_index in range(self.snapshot_count):
-                item = self.preset_table.item(row, self._snapshot_adjustment_column(snapshot_index))
+                item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
                 if item is not None and item.data(RECORDED_OUTPUT_PATH_ROLE):
-                    self._refresh_adjustment_cell_widget(item)
+                    self._refresh_snapshot_name_cell_widget(item)
 
     def _show_indeterminate_progress(self, message: str) -> None:
         progress_was_hidden = self.progress_group.isHidden()
@@ -4602,7 +4592,7 @@ class MainWindow(QMainWindow):
             return None
         for value in _parse_output_level_display_text(item.text()):
             output_gain = round(value + gain_delta, 2)
-            if not -120.0 <= output_gain <= 20.0:
+            if not OUTPUT_LEVEL_MIN_DB <= output_gain <= OUTPUT_LEVEL_MAX_DB:
                 return output_gain
         return None
 
@@ -4700,19 +4690,22 @@ class MainWindow(QMainWindow):
             self._configure_snapshot_columns(snapshot_count)
 
     def _adjustment_column_width(self) -> int:
-        sample = "+12.5 (+12.5)"
-        padding = 18
-        return max(92, self.preset_table.fontMetrics().horizontalAdvance(sample) + padding)
-
-    def _output_level_column_width(self) -> int:
-        sample = "Out (dB)"
-        value_sample = "-60.0, -60.0"
-        padding = 18
+        sample = f"{ADJUSTMENT_MIN_DB:.1f}"
+        padding = 14
         metrics = self.preset_table.fontMetrics()
         return max(
-            64,
+            58,
             metrics.horizontalAdvance(sample) + padding,
-            metrics.horizontalAdvance(value_sample) + padding,
+            metrics.horizontalAdvance(f"+{ADJUSTMENT_MAX_DB:.1f}") + padding,
+        )
+
+    def _output_level_column_width(self) -> int:
+        padding = 14
+        metrics = self.preset_table.fontMetrics()
+        return max(
+            58,
+            metrics.horizontalAdvance(f"{OUTPUT_LEVEL_MIN_DB:.1f}") + padding,
+            metrics.horizontalAdvance(f"{OUTPUT_LEVEL_MAX_DB:.1f}") + padding,
         )
 
     @staticmethod
@@ -4771,6 +4764,7 @@ class MainWindow(QMainWindow):
             if adjustment is None:
                 adjustment = QTableWidgetItem()
                 self.preset_table.setItem(row, adjustment_column, adjustment)
+            name.setData(RECORDED_OUTPUT_PATH_ROLE, None)
             self._set_preset_item_editable(
                 name,
                 False,
@@ -4816,6 +4810,7 @@ class MainWindow(QMainWindow):
             item.setForeground(QBrush(QColor("#6b7280")))
             if table is not None:
                 table.removeCellWidget(item.row(), item.column())
+                MainWindow._ensure_item_column_width(item)
         finally:
             if table is not None:
                 table.blockSignals(signals_blocked)
@@ -4872,8 +4867,13 @@ class MainWindow(QMainWindow):
                 if item is None:
                     continue
                 item.setData(IGNORED_SNAPSHOT_ROLE, True if ignored else None)
+                if column == self._snapshot_name_column(snapshot_index):
+                    if ignored:
+                        item.setData(RECORDED_OUTPUT_PATH_ROLE, None)
                 item.setForeground(QBrush(IGNORED_SNAPSHOT_FOREGROUND) if ignored else QBrush())
                 self._refresh_preset_item_background(item)
+                if column == self._snapshot_name_column(snapshot_index):
+                    self._refresh_snapshot_name_cell_widget(item)
                 self._refresh_preset_cell_widget_background(item)
             adjustment = self.preset_table.item(
                 row,
@@ -4906,6 +4906,7 @@ class MainWindow(QMainWindow):
             item.setForeground(QBrush(IGNORED_SNAPSHOT_FOREGROUND))
             if table is not None:
                 table.removeCellWidget(item.row(), item.column())
+                MainWindow._ensure_item_column_width(item)
         finally:
             if table is not None:
                 table.blockSignals(signals_blocked)
@@ -5005,8 +5006,8 @@ class MainWindow(QMainWindow):
         for row in range(self.preset_table.rowCount()):
             self._refresh_snapshot_names(row)
 
-    @staticmethod
     def _set_snapshot_name(
+        self,
         item: QTableWidgetItem,
         name: str,
         is_solo: bool,
@@ -5017,21 +5018,83 @@ class MainWindow(QMainWindow):
         try:
             item.setText(name)
             item.setIcon(QIcon())
+            item.setData(SOLO_SNAPSHOT_ROLE, True if is_solo else None)
             item.setToolTip(_snapshot_tooltip(is_solo, is_ignored))
         finally:
             if table is not None:
                 table.blockSignals(signals_blocked)
+        self._refresh_snapshot_name_cell_widget(item)
+
+    def _refresh_snapshot_name_cell_widget(self, item: QTableWidgetItem) -> None:
+        table = item.tableWidget()
         if table is None:
             return
-        if not is_solo:
-            table.removeCellWidget(item.row(), item.column())
+        is_solo = bool(item.data(SOLO_SNAPSHOT_ROLE))
+        recorded_path = item.data(RECORDED_OUTPUT_PATH_ROLE)
+        table.removeCellWidget(item.row(), item.column())
+        if not is_solo and not recorded_path:
+            self._ensure_item_column_width(item)
             return
-        label = SnapshotNameCellWidget(f"{escape(name)} <span style='color: #f59e0b;'>★</span>")
+        name_text = item.text()
+        if not is_solo:
+            content = SnapshotNameCellWidget(table)
+            MainWindow._style_table_cell_widget(content, item)
+            layout = QHBoxLayout(content)
+            layout.setContentsMargins(3, 0, 2, 0)
+            layout.setSpacing(2)
+            label = QLabel(escape(name_text))
+            label.setFont(item.font())
+            label.setToolTip(item.toolTip())
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            layout.addWidget(label, 1)
+            self._add_recorded_output_button(layout, content, Path(recorded_path))
+            content.setToolTip(item.toolTip())
+            table.setCellWidget(item.row(), item.column(), content)
+            self._ensure_item_column_width(item)
+            return
+
+        label_text = f"{escape(name_text)} <span style='color: #f59e0b;'>★</span>"
+        if not recorded_path:
+            label = SnapshotNameCellWidget(label_text)
+            label.setContentsMargins(3, 0, 0, 0)
+            label.setToolTip(item.toolTip())
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            MainWindow._style_table_cell_widget(label, item)
+            table.setCellWidget(item.row(), item.column(), label)
+            self._ensure_item_column_width(item)
+            return
+
+        content = SnapshotNameCellWidget(table)
+        MainWindow._style_table_cell_widget(content, item)
+        layout = QHBoxLayout(content)
+        layout.setContentsMargins(3, 0, 2, 0)
+        layout.setSpacing(2)
+        label = QLabel(label_text)
+        label.setFont(item.font())
         label.setContentsMargins(3, 0, 0, 0)
         label.setToolTip(item.toolTip())
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        MainWindow._style_table_cell_widget(label, item)
-        table.setCellWidget(item.row(), item.column(), label)
+        layout.addWidget(label, 1)
+        self._add_recorded_output_button(layout, content, Path(recorded_path))
+        content.setToolTip(item.toolTip())
+        table.setCellWidget(item.row(), item.column(), content)
+        self._ensure_item_column_width(item)
+
+    def _add_recorded_output_button(
+        self,
+        layout: QHBoxLayout,
+        parent: QWidget,
+        path: Path,
+    ) -> None:
+        button = QToolButton(parent)
+        button.setIcon(self._speaker_icon)
+        button.setAutoRaise(True)
+        button.setIconSize(QSize(14, 14))
+        button.setFixedSize(22, 22)
+        button.setToolTip("Play recorded snapshot output.")
+        button.setEnabled(not self._normalization_in_progress())
+        button.clicked.connect(lambda checked=False, path=path: self._play_recording(path))
+        layout.addWidget(button)
 
     def _preset_item_changed(self, item: QTableWidgetItem) -> None:
         if item.data(PRESET_TABLE_ATTENTION_ROLE):
@@ -5239,6 +5302,7 @@ class MainWindow(QMainWindow):
                     label.setToolTip(item.toolTip())
                     label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
                     table.setCellWidget(item.row(), item.column(), label)
+                MainWindow._ensure_item_column_width(item)
         finally:
             if table is not None:
                 table.blockSignals(signals_blocked)
@@ -5265,6 +5329,7 @@ class MainWindow(QMainWindow):
             )
             if table is not None:
                 table.removeCellWidget(item.row(), item.column())
+                MainWindow._ensure_item_column_width(item)
         finally:
             if table is not None:
                 table.blockSignals(signals_blocked)
