@@ -12,4 +12,4 @@ dist
 *.json
 *.hls
 *.hlx
-matchpatch_gain_*
+matchpatch_normalization_*
