@@ -1154,7 +1154,7 @@ class MainWindow(QMainWindow):
         if not logo_pixmap.isNull():
             logo.setPixmap(_fixed_size_pixmap(logo_pixmap, PRESET_EMPTY_LOGO_SIZE))
         self.preset_empty_logo = logo
-        layout.addWidget(logo)
+        layout.addWidget(logo, 0, Qt.AlignmentFlag.AlignHCenter)
 
         file_dialog_title = QLabel("Open setlist/preset file")
         file_dialog_title.setAlignment(Qt.AlignmentFlag.AlignCenter)

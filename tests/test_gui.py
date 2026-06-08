@@ -300,6 +300,10 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.preset_empty_logo.pixmap().isNull()
     assert window.preset_empty_logo.pixmap().size() == main_window.QSize(360, 360)
     assert window.preset_empty_logo.size() == main_window.QSize(360, 360)
+    assert (
+        window.preset_empty_state.layout().itemAt(1).alignment()
+        & Qt.AlignmentFlag.AlignHCenter
+    )
     assert window.preset_empty_file_dialog_title.text() == "Open setlist/preset file"
     assert window.preset_empty_file_dialog_title.alignment() == Qt.AlignmentFlag.AlignCenter
     assert window.preset_empty_file_dialog_title.font().pointSize() >= app.font().pointSize() + 2
