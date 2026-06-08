@@ -28,6 +28,7 @@ from PySide6.QtCore import (
     QObject,
     QPropertyAnimation,
     QRect,
+    QSettings,
     QSize,
     QThread,
     QTimer,
@@ -167,6 +168,8 @@ MEASUREMENT_TIMING_PRESETS: dict[str, dict[str, float]] = {
         "round_trip_latency": 0.001,
     },
 }
+RECENT_FILES_SETTINGS_KEY = "recentFiles"
+MAX_RECENT_FILES = 8
 
 
 @dataclass(frozen=True)
@@ -783,6 +786,7 @@ class MainWindow(QMainWindow):
         self._speaker_off_icon = _speaker_icon(enabled=False)
         self._record_icon = _record_icon(recording=True)
         self._record_off_icon = _record_icon(recording=False)
+        self.settings = QSettings()
 
         self.input_path = QLineEdit()
         self.output_path = QLineEdit()
@@ -1172,7 +1176,28 @@ class MainWindow(QMainWindow):
         )
         file_dialog_title.setFont(title_font)
         self.preset_empty_file_dialog_title = file_dialog_title
-        layout.addWidget(file_dialog_title)
+
+        title_row = QWidget(pane)
+        title_layout = QHBoxLayout(title_row)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(8)
+        title_layout.addStretch(1)
+        title_layout.addWidget(file_dialog_title)
+        title_layout.addStretch(1)
+        recent_label = QLabel("Recent")
+        recent_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        recent_files = QComboBox(title_row)
+        recent_files.setToolTip("Open a recently loaded Helix setlist or preset file.")
+        recent_files.setMaximumWidth(340)
+        recent_files.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        recent_files.activated.connect(self._recent_file_activated)
+        self.recent_files = recent_files
+        title_layout.addWidget(recent_label)
+        title_layout.addWidget(recent_files)
+        self.preset_empty_recent_label = recent_label
+        self.preset_empty_title_row = title_row
+        layout.addWidget(title_row)
+        self._refresh_recent_files_selector()
 
         file_dialog = QFileDialog(pane, "Choose patch file")
         file_dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
@@ -1181,7 +1206,7 @@ class MainWindow(QMainWindow):
         file_dialog.setNameFilter("Patches (*.hls *.hlx)")
         file_dialog.setToolTip("Open a Helix setlist or preset file.")
         file_dialog.setWindowFlags(Qt.WindowType.Widget)
-        file_dialog.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        file_dialog.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         file_dialog.fileSelected.connect(self._open_input_path)
         self.preset_empty_file_dialog = file_dialog
         layout.addWidget(file_dialog, 3)
@@ -1204,7 +1229,7 @@ class MainWindow(QMainWindow):
             self.manual_adjustments.sizeHint().height(),
         )
         spacing = self.presets.layout().spacing() if self.presets.layout() is not None else 0
-        self.preset_empty_state.setMinimumHeight(table_height + row_height * 3 + spacing * 3 + 4)
+        self.preset_empty_state.setMinimumHeight(table_height + row_height * 3 + spacing + 2)
 
     def _show_preset_empty_state(self) -> None:
         self.preset_header.hide()
@@ -1798,6 +1823,56 @@ class MainWindow(QMainWindow):
             self, "Choose patch file", filter="Patches (*.hls *.hlx)"
         )
         self._open_input_path(path)
+
+    def _recent_file_paths(self) -> list[str]:
+        value = self.settings.value(RECENT_FILES_SETTINGS_KEY, [])
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, (list, tuple)):
+            values = [str(path) for path in value]
+        else:
+            values = []
+        paths: list[str] = []
+        seen: set[str] = set()
+        for path in values:
+            path = path.strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            paths.append(path)
+        return paths[:MAX_RECENT_FILES]
+
+    def _store_recent_file(self, path: Path) -> None:
+        recent = [str(path)]
+        recent.extend(
+            path_text for path_text in self._recent_file_paths() if path_text != str(path)
+        )
+        self.settings.setValue(RECENT_FILES_SETTINGS_KEY, recent[:MAX_RECENT_FILES])
+        self._refresh_recent_files_selector()
+
+    def _refresh_recent_files_selector(self) -> None:
+        if not hasattr(self, "recent_files"):
+            return
+        signals_blocked = self.recent_files.blockSignals(True)
+        try:
+            self.recent_files.clear()
+            self.recent_files.addItem("Open recent file...", "")
+            for path_text in self._recent_file_paths():
+                path = Path(path_text)
+                label = f"{path.name} - {path.parent}" if path.name else path_text
+                self.recent_files.addItem(label, path_text)
+            self.recent_files.setCurrentIndex(0)
+            self.recent_files.setEnabled(self.recent_files.count() > 1)
+        finally:
+            self.recent_files.blockSignals(signals_blocked)
+
+    def _recent_file_activated(self, index: int) -> None:
+        path = self.recent_files.itemData(index) if hasattr(self, "recent_files") else ""
+        if not path:
+            self._refresh_recent_files_selector()
+            return
+        self._open_input_path(str(path))
+        self._refresh_recent_files_selector()
 
     def _open_input_path(self, path: str) -> None:
         if not path or path == self.input_path.text():
@@ -2473,6 +2548,7 @@ class MainWindow(QMainWindow):
             self._populate_single_preset_table(path, assignments[0] if assignments else None)
             self._loaded_input_path = str(path)
             self._set_active_file(path)
+            self._store_recent_file(path)
             self._reset_preset_table_modified()
             self._refresh_file_actions()
             self._set_preset_csv_buttons_enabled(self.preset_table.rowCount() > 0)
@@ -2515,6 +2591,7 @@ class MainWindow(QMainWindow):
 
         self._loaded_input_path = str(path)
         self._set_active_file(path)
+        self._store_recent_file(path)
         self._reset_preset_table_modified()
         self._refresh_file_actions()
         self.preset_hint.setText("Select the presets to normalize.")

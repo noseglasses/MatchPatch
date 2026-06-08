@@ -14,7 +14,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QAbstractAnimation, QCoreApplication, QEvent, QPoint
+from PySide6.QtCore import QAbstractAnimation, QCoreApplication, QEvent, QPoint, QSettings
 from PySide6.QtGui import QCloseEvent, QColor, QPalette, QPixmap, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -48,6 +48,15 @@ from matchpatch.workflow import ImportRequest, NormalizationRequest, Normalizati
 def app():
     instance = QApplication.instance() or QApplication([])
     yield instance
+
+
+@pytest.fixture(autouse=True)
+def isolated_qsettings(tmp_path):
+    QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope, str(tmp_path))
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    QSettings().clear()
+    yield
+    QSettings().clear()
 
 
 def _request(**kwargs) -> NormalizationRequest:
@@ -2389,6 +2398,41 @@ def test_embedded_startup_file_selection_loads_like_open_button(monkeypatch, app
     assert window.preset_table.item(0, 1).text() == ""
     assert window.preset_table.item(0, 2).text() == "Embedded"
     assert window.preset_empty_state.isHidden()
+    assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == ["/tmp/embedded.hlx"]
+
+    window.close()
+
+
+def test_startup_recent_files_selector_loads_selected_file(monkeypatch, app) -> None:
+    recent = ["/tmp/older.hls", "/tmp/recent.hlx"]
+    QSettings().setValue(main_window.RECENT_FILES_SETTINGS_KEY, recent)
+    window = MainWindow()
+    _mock_single_hlx_handler(monkeypatch, name="Recent")
+
+    assert window.recent_files.isEnabled()
+    assert window.recent_files.itemText(0) == "Open recent file..."
+    assert window.recent_files.itemData(1) == "/tmp/older.hls"
+    assert "older.hls" in window.recent_files.itemText(1)
+
+    window._recent_file_activated(2)
+
+    assert window.input_path.text() == "/tmp/recent.hlx"
+    assert window.preset_table.rowCount() == 1
+    assert window.preset_table.item(0, 2).text() == "Recent"
+    assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == [
+        "/tmp/recent.hlx",
+        "/tmp/older.hls",
+    ]
+
+    window.close()
+
+
+def test_startup_recent_files_selector_is_disabled_without_history(app) -> None:
+    window = MainWindow()
+
+    assert not window.recent_files.isEnabled()
+    assert window.recent_files.count() == 1
+    assert window.recent_files.itemText(0) == "Open recent file..."
 
     window.close()
 
