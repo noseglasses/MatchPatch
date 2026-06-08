@@ -3178,9 +3178,11 @@ class MainWindow(QMainWindow):
         if event.kind == "log":
             self._handle_gain_correction_log(message)
         elif event.kind == "snapshot_completed":
-            self._apply_snapshot_measurement(event)
+            with self.preset_table.updates_paused():
+                self._apply_snapshot_measurement(event)
         elif event.kind == "snapshot_failed":
-            self._apply_snapshot_measurement_failure(event)
+            with self.preset_table.updates_paused():
+                self._apply_snapshot_measurement_failure(event)
         elif event.kind == "preset_completed":
             self._apply_deferred_gain_correction_logs(event.device_patch)
         if event.lufs is not None and event.crest_factor_db is not None:
@@ -3225,7 +3227,7 @@ class MainWindow(QMainWindow):
             return
 
         if event.kind in {"snapshot_completed", "snapshot_failed"}:
-            self._set_normalization_focus(event.device_patch, None)
+            self._clear_normalization_snapshot_focus(event.device_patch)
             return
 
         if event.kind == "snapshot_started":
@@ -3249,6 +3251,14 @@ class MainWindow(QMainWindow):
     def _clear_normalization_focus(self) -> None:
         if hasattr(self, "preset_table"):
             self.preset_table.clear_normalization_focus()
+
+    def _clear_normalization_snapshot_focus(self, device_patch: str | None) -> None:
+        if device_patch is None:
+            return
+        row = self._preset_row(device_patch)
+        if row is None:
+            return
+        self.preset_table.clear_normalization_snapshot_focus(row)
 
     def _set_recorded_output(self, event: ProgressEvent) -> None:
         if not event.device_patch or event.snapshot is None or event.path is None:
@@ -3331,9 +3341,6 @@ class MainWindow(QMainWindow):
         palette.setColor(QPalette.ColorRole.Base, color)
         widget.setPalette(palette)
         widget.setAutoFillBackground(True)
-        widget.setProperty("normalizationFocus", bool(item.data(NORMALIZATION_FOCUS_ROLE)))
-        widget.style().unpolish(widget)
-        widget.style().polish(widget)
         widget.update()
 
     @staticmethod
@@ -5373,19 +5380,6 @@ class SnapshotNameCellWidget(QLabel):
         pen.setWidth(2)
         painter.setPen(pen)
         painter.drawLine(0, 0, 0, self.height())
-        if self.property("normalizationFocus"):
-            focus_pen = QPen(NORMALIZATION_FOCUS_BLUE)
-            focus_pen.setWidth(3)
-            painter.setPen(focus_pen)
-            offset = focus_pen.width() // 2
-            painter.drawLine(offset, 0, offset, self.height())
-            painter.drawLine(0, offset, self.width(), offset)
-            painter.drawLine(
-                0,
-                self.height() - offset - 1,
-                self.width(),
-                self.height() - offset - 1,
-            )
 
 
 class ContentHeightTableWidget(QTableWidget):
@@ -5422,6 +5416,29 @@ class ContentHeightTableWidget(QTableWidget):
         self._normalizing_snapshot = None
         self._refresh_normalization_focus_background(previous_row)
         self._update_normalization_focus_rect(previous_row, previous_snapshot)
+
+    def clear_normalization_snapshot_focus(self, row: int) -> None:
+        if self._normalizing_row != row or self._normalizing_snapshot is None:
+            return
+        previous_snapshot = self._normalizing_snapshot
+        previous_columns = self._normalization_focus_columns(previous_snapshot)
+        previous_rects = self._normalization_focus_cell_rects(row, previous_snapshot)
+        self._normalizing_snapshot = None
+        for column in previous_columns:
+            item = self.item(row, column)
+            if item is None:
+                continue
+            item.setData(NORMALIZATION_FOCUS_ROLE, None)
+            MainWindow._refresh_preset_item_background(item)
+            MainWindow._refresh_preset_cell_widget_background(item)
+            widget = self.cellWidget(row, column)
+            if widget is not None:
+                widget.repaint()
+        for rect in previous_rects:
+            self.viewport().repaint(rect.adjusted(-3, -3, 3, 3))
+        previous_rect = _united_rects(previous_rects)
+        if previous_rect is not None:
+            self.viewport().repaint(previous_rect.adjusted(-3, -3, 3, 3))
 
     def _refresh_normalization_focus_background(self, row: int | None) -> None:
         if row is None or not 0 <= row < self.rowCount():
@@ -5508,24 +5525,52 @@ class ContentHeightTableWidget(QTableWidget):
         row: int | None,
         snapshot_index: int | None,
     ) -> QRect | None:
-        if row is None or snapshot_index is None:
-            return None
-        if not 0 <= row < self.rowCount():
-            return None
+        return _united_rects(self._normalization_focus_cell_rects(row, snapshot_index))
 
-        snapshot_rect = None
-        for column in (
-            MainWindow._snapshot_name_column(snapshot_index),
-            MainWindow._snapshot_output_column(snapshot_index),
-            MainWindow._snapshot_adjustment_column(snapshot_index),
-        ):
+    def _normalization_focus_cell_rects(
+        self,
+        row: int | None,
+        snapshot_index: int | None,
+    ) -> tuple[QRect, ...]:
+        if row is None or snapshot_index is None:
+            return ()
+        if not 0 <= row < self.rowCount():
+            return ()
+
+        rects = []
+        for column in self._normalization_focus_columns(snapshot_index):
             if column >= self.columnCount() or self.isColumnHidden(column):
                 continue
             cell_rect = self.visualRect(self.model().index(row, column))
             if not cell_rect.isValid():
                 continue
-            snapshot_rect = cell_rect if snapshot_rect is None else snapshot_rect.united(cell_rect)
-        return snapshot_rect
+            rects.append(cell_rect)
+        return tuple(rects)
+
+    @staticmethod
+    def _normalization_focus_columns(snapshot_index: int) -> tuple[int, int, int]:
+        return (
+            MainWindow._snapshot_name_column(snapshot_index),
+            MainWindow._snapshot_output_column(snapshot_index),
+            MainWindow._snapshot_adjustment_column(snapshot_index),
+        )
+
+    @contextmanager
+    def updates_paused(self) -> Iterator[None]:
+        updates_enabled = self.updatesEnabled()
+        self.setUpdatesEnabled(False)
+        try:
+            yield
+        finally:
+            self.setUpdatesEnabled(updates_enabled)
+            self.viewport().update()
+
+
+def _united_rects(rects: tuple[QRect, ...]) -> QRect | None:
+    united = None
+    for rect in rects:
+        united = QRect(rect) if united is None else united.united(rect)
+    return united
 
 
 class MeasurementOptimizationSetupDialog(QDialog):

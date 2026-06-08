@@ -1052,7 +1052,7 @@ def test_preset_progress_shows_most_recently_measured_preset_and_snapshot_names(
     window.close()
 
 
-def test_preset_table_highlights_current_normalization_focus(app) -> None:
+def test_preset_table_highlights_current_normalization_focus(monkeypatch, app) -> None:
     window = MainWindow()
     for row, preset_id in enumerate(("02B", "02C")):
         window.preset_table.insertRow(row)
@@ -1105,6 +1105,20 @@ def test_preset_table_highlights_current_normalization_focus(app) -> None:
         main_window.IGNORED_SNAPSHOT_BACKGROUND
     )
 
+    focus_during_completion = []
+
+    def capture_completion_focus(event):
+        focus_during_completion.append(window.preset_table._normalizing_snapshot)
+        for column in (6, 7, 8):
+            assert not window.preset_table.item(0, column).data(
+                main_window.NORMALIZATION_FOCUS_ROLE
+            )
+
+    monkeypatch.setattr(
+        window,
+        "_apply_snapshot_measurement",
+        capture_completion_focus,
+    )
     window.update_progress(
         ProgressEvent(
             "snapshot_completed",
@@ -1114,10 +1128,9 @@ def test_preset_table_highlights_current_normalization_focus(app) -> None:
         )
     )
 
+    assert focus_during_completion == [None]
     assert window.preset_table._normalizing_snapshot is None
-    assert window.preset_table.item(0, 6).background().color() == (
-        main_window.NORMALIZATION_FOCUS_BACKGROUND
-    )
+    assert window.preset_table.item(0, 6).background().style() == Qt.BrushStyle.NoBrush
 
     window.update_progress(ProgressEvent("snapshot_started", device_patch="02B", snapshot=3))
 
