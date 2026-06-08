@@ -1359,7 +1359,7 @@ class MainWindow(QMainWindow):
         self.advanced_tabs = CurrentPageHeightTabWidget()
         self.advanced_tabs.addTab(self._build_device_settings(), "Device")
         self.advanced_tabs.addTab(self._build_files(), "Files")
-        self.advanced_tabs.addTab(self._build_measurement(), "Measurement")
+        self.advanced_tabs.addTab(self._build_measurement(), "Timing")
         self.advanced_tabs.addTab(self._build_lufs(), "LUFS")
         self.advanced_tabs.addTab(self._build_misc(), "Misc")
         self.advanced_tabs.addTab(self._build_metadata(), "Meta Data")
@@ -2838,7 +2838,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Apply optimized parameters",
-            "Applied optimized timing parameters to Advanced > Measurement.",
+            "Applied optimized timing parameters to Advanced > Timing.",
         )
 
     def _measurement_optimization_cancelled(self) -> None:

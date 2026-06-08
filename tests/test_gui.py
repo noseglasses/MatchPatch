@@ -234,7 +234,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert [window.advanced_tabs.tabText(index) for index in range(7)] == [
         "Device",
         "Files",
-        "Measurement",
+        "Timing",
         "LUFS",
         "Misc",
         "Meta Data",
