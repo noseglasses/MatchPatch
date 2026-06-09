@@ -47,6 +47,8 @@ from matchpatch.workflow import ImportRequest, NormalizationRequest, Normalizati
 @pytest.fixture(scope="module")
 def app():
     instance = QApplication.instance() or QApplication([])
+    QCoreApplication.setOrganizationName("MatchPatchTests")
+    QCoreApplication.setApplicationName("MatchPatchTests")
     yield instance
 
 
@@ -2406,7 +2408,9 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
 def test_embedded_startup_file_selection_loads_like_open_button(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="Embedded")
-    path = str(tmp_path / "embedded.hlx")
+    input_file = tmp_path / "embedded.hlx"
+    input_file.touch()
+    path = str(input_file)
 
     window.preset_empty_file_dialog.fileSelected.emit(path)
 
@@ -2421,8 +2425,12 @@ def test_embedded_startup_file_selection_loads_like_open_button(tmp_path, monkey
 
 
 def test_startup_recent_files_selector_loads_selected_file(tmp_path, monkeypatch, app) -> None:
-    older = str(tmp_path / "older.hls")
-    recent_path = str(tmp_path / "recent.hlx")
+    older_file = tmp_path / "older.hls"
+    recent_file = tmp_path / "recent.hlx"
+    older_file.touch()
+    recent_file.touch()
+    older = str(older_file)
+    recent_path = str(recent_file)
     recent = [older, recent_path]
     QSettings().setValue(main_window.RECENT_FILES_SETTINGS_KEY, recent)
     window = MainWindow()
