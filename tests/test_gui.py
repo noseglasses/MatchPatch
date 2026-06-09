@@ -2607,6 +2607,62 @@ def test_snapshot_failure_replaces_pending_adjustment_immediately(monkeypatch, a
     window.close()
 
 
+def test_live_snapshot_completion_marks_processed_snapshot_cells_green(monkeypatch, app) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("18D"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Clean", "Skip"))
+    window._set_ignored_snapshot_highlight(0, 1, True)
+
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="18D",
+            snapshot=1,
+            lufs=-20.0,
+            crest_factor_db=12.0,
+        )
+    )
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="18D",
+            snapshot=2,
+            lufs=-20.0,
+            crest_factor_db=12.0,
+        )
+    )
+
+    assert all(
+        window.preset_table.item(0, column).background().color()
+        == main_window.PROCESSED_SNAPSHOT_BACKGROUND
+        for column in (3, 4, 5)
+    )
+    assert all(
+        window.preset_table.item(0, column).background().color()
+        == main_window.IGNORED_SNAPSHOT_BACKGROUND
+        for column in (6, 7, 8)
+    )
+    assert window.preset_table.item(0, 0).background().style() == Qt.BrushStyle.NoBrush
+    assert window.preset_table.item(0, 1).background().style() == Qt.BrushStyle.NoBrush
+    assert window.preset_table.item(0, 2).background().style() == Qt.BrushStyle.NoBrush
+
+    window._clear_preset_adjustments(0)
+
+    assert all(
+        window.preset_table.item(0, column).background().style() == Qt.BrushStyle.NoBrush
+        for column in (3, 4, 5)
+    )
+
+    window.close()
+
+
 def test_live_snapshot_completion_marks_implausible_output_gain_immediately(
     monkeypatch, app
 ) -> None:
@@ -2826,6 +2882,41 @@ def test_bad_lufs_log_derives_adjustment_from_matching_multi_output_levels(
 
     adjustment = window.preset_table.item(0, 5)
     assert adjustment.text() == "+7.2 ⚠️"
+    assert "output block level is unavailable" not in adjustment.toolTip()
+    assert "Resulting output block level would be 21.2 dB" in adjustment.toolTip()
+
+    window.close()
+
+
+def test_bad_lufs_log_matches_named_output_path_for_different_output_levels(
+    monkeypatch, app
+) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("06C"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Tuerlich"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Intro",))
+    window._set_snapshot_output_levels(0, ((17.3, 6.3),), ("dsp0.outputA", "dsp1.outputA"))
+
+    window.update_progress(
+        ProgressEvent(
+            "log",
+            message=(
+                "[GAIN] 06C Intro | measurement unavailable "
+                "(Implausible output gain 21.2 dB for 06C Intro dsp1.outputA. "
+                "This usually means the measurement recorded silence.)"
+            ),
+        )
+    )
+    window.update_progress(ProgressEvent("preset_completed", device_patch="06C"))
+
+    adjustment = window.preset_table.item(0, 5)
+    assert adjustment.text() == "+14.9 ⚠️"
     assert "output block level is unavailable" not in adjustment.toolTip()
     assert "Resulting output block level would be 21.2 dB" in adjustment.toolTip()
 
@@ -3328,7 +3419,7 @@ def test_save_measurement_file_rejects_mismatched_suffix(tmp_path, monkeypatch, 
     window.close()
 
 
-def test_single_preset_save_as_preserves_target_preset_id(tmp_path, monkeypatch, app) -> None:
+def test_single_preset_save_as_preserves_preset_table_state(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     input_path = tmp_path / "input.hlx"
     output_path = tmp_path / "output.hlx"
@@ -3349,10 +3440,11 @@ def test_single_preset_save_as_preserves_target_preset_id(tmp_path, monkeypatch,
 
         @staticmethod
         def list_assignments(path):
+            name = "Saved" if path == output_path else "Loaded"
             return [
                 SimpleNamespace(
                     device_patch="01A",
-                    name="Saved",
+                    name=name,
                     snapshot_names=("Clean", "Solo"),
                 )
             ]
@@ -3388,8 +3480,8 @@ def test_single_preset_save_as_preserves_target_preset_id(tmp_path, monkeypatch,
     assert len(exports) == 1
     assert window.input_path.text() == str(output_path)
     assert window.preset_table.item(0, 1).text() == "12A"
-    assert window.preset_table.item(0, 2).text() == "Saved"
-    assert window.preset_table.item(0, 5).text() == "0"
+    assert window.preset_table.item(0, 2).text() == "Loaded"
+    assert window.preset_table.item(0, 5).text() == "+1.0"
     assert not window._preset_table_has_unsaved_changes()
 
     window.close()

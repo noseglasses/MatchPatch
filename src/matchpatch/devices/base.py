@@ -17,6 +17,7 @@ class PatchAssignment:
     name: str
     snapshot_names: tuple[str, ...] = ()
     snapshot_output_levels: tuple[tuple[float, ...], ...] = ()
+    snapshot_output_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

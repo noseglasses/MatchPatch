@@ -104,6 +104,7 @@ def test_assignment_extraction_includes_snapshot_names() -> None:
     assignments = module.extract_preset_assignments(data)
 
     assert assignments[0]["snapshot_names"] == ["Rhythm", "Solo"]
+    assert assignments[0]["snapshot_output_paths"] == ["dsp0.outputA"]
     assert assignments[0]["snapshot_output_levels"] == [[-3.0], [-1.5]]
 
 

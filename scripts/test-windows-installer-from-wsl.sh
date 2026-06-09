@@ -13,21 +13,28 @@ if [[ ! -f "$test_script" ]]; then
     exit 1
 fi
 
-test_script_windows_path="$(wslpath -w "$test_script")"
 windows_workdir_windows_path="$(wslpath -w "$windows_workdir")"
+windows_workdir_cmd_path="${windows_workdir_windows_path//\\/\\\\}"
+unsafe_cmd_regex='[[:space:]"&()<>^|]'
+
+if [[ "$windows_workdir_windows_path" =~ $unsafe_cmd_regex ]]; then
+    echo "Windows mirror path cannot be forwarded safely to cmd.exe: $windows_workdir_windows_path" >&2
+    echo "Set MATCHPATCH_WINDOWS_WORKDIR to a path without spaces or cmd metacharacters." >&2
+    exit 1
+fi
 
 cmd_args=()
 for arg in "$@"; do
-    if [[ "$arg" == *\"* ]]; then
-        echo "Arguments containing double quotes cannot be forwarded safely to cmd.exe: $arg" >&2
+    if [[ "$arg" =~ $unsafe_cmd_regex ]]; then
+        echo "Argument cannot be forwarded safely to cmd.exe: $arg" >&2
         exit 1
     fi
     cmd_args+=("$arg")
 done
 
-cmd_line="cd /d \"$windows_workdir_windows_path\" && call \"$test_script_windows_path\""
+cmd_line="cd /d $windows_workdir_cmd_path && call scripts\\\\test-windows-installer.cmd"
 for arg in "${cmd_args[@]}"; do
-    cmd_line+=" \"$arg\""
+    cmd_line+=" $arg"
 done
 
 cmd.exe /d /c "$cmd_line"

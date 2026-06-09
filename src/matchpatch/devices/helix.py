@@ -83,6 +83,9 @@ class HelixPatchFileHandler(PatchFileHandler):
                 device_patch=assignment["helix_preset"],
                 name=assignment["name"],
                 snapshot_names=tuple(assignment.get("snapshot_names", ())),
+                snapshot_output_paths=tuple(
+                    str(path) for path in assignment.get("snapshot_output_paths", ())
+                ),
                 snapshot_output_levels=tuple(
                     tuple(float(level) for level in levels)
                     for levels in assignment.get("snapshot_output_levels", ())

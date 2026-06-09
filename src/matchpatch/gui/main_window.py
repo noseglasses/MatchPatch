@@ -149,6 +149,7 @@ BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
 BAD_LUFS_FOREGROUND = QColor("#b91c1c")
 NORMALIZATION_FOCUS_BLUE = QColor("#2563eb")
 NORMALIZATION_FOCUS_BACKGROUND = QColor("#dbeafe")
+PROCESSED_SNAPSHOT_BACKGROUND = QColor("#dcfce7")
 MANUAL_NAME_MODIFIED_BACKGROUND = QColor("#fef3c7")
 IGNORED_SNAPSHOT_BACKGROUND = QColor("#e5e7eb")
 IGNORED_SNAPSHOT_FOREGROUND = QColor("#4b5563")
@@ -452,6 +453,8 @@ NORMALIZATION_FOCUS_ROLE = Qt.ItemDataRole.UserRole + 7
 IGNORED_SNAPSHOT_ROLE = Qt.ItemDataRole.UserRole + 8
 SOLO_SNAPSHOT_ROLE = Qt.ItemDataRole.UserRole + 9
 MEASURED_ADJUSTMENT_ROLE = Qt.ItemDataRole.UserRole + 10
+SNAPSHOT_OUTPUT_PATHS_ROLE = Qt.ItemDataRole.UserRole + 11
+PROCESSED_SNAPSHOT_ROLE = Qt.ItemDataRole.UserRole + 12
 OUTPUT_LEVEL_MIN_DB = -120.0
 OUTPUT_LEVEL_MAX_DB = 20.0
 ADJUSTMENT_MIN_DB = OUTPUT_LEVEL_MIN_DB - OUTPUT_LEVEL_MAX_DB
@@ -2716,6 +2719,7 @@ class MainWindow(QMainWindow):
                     self._set_snapshot_output_levels(
                         row,
                         getattr(assignment, "snapshot_output_levels", ()),
+                        getattr(assignment, "snapshot_output_paths", ()),
                     )
                 self._refresh_preset_table_editable_flags()
         except Exception as exc:  # noqa: BLE001
@@ -2755,6 +2759,7 @@ class MainWindow(QMainWindow):
         if not isinstance(snapshot_names, tuple):
             snapshot_names = tuple(snapshot_names)
         snapshot_output_levels = getattr(assignment, "snapshot_output_levels", ())
+        snapshot_output_paths = getattr(assignment, "snapshot_output_paths", ())
         with self._sorting_paused():
             self.preset_table.setRowCount(0)
             self.preset_table.insertRow(0)
@@ -2765,7 +2770,7 @@ class MainWindow(QMainWindow):
             self.preset_table.setItem(0, 2, QTableWidgetItem(preset_name))
             self._clear_preset_adjustments(0)
             self._set_snapshot_names(0, snapshot_names)
-            self._set_snapshot_output_levels(0, snapshot_output_levels)
+            self._set_snapshot_output_levels(0, snapshot_output_levels, snapshot_output_paths)
             self._refresh_preset_table_editable_flags()
 
     def _load_metadata(self) -> None:
@@ -3831,16 +3836,7 @@ class MainWindow(QMainWindow):
         self._set_phase("completed")
         self._log(f"Saved: {output_path.resolve()}", "success")
         if make_active:
-            preserved_single_preset_slot = (
-                self._single_preset_slot_text()
-                if request.input_path.suffix.lower() == ".hlx"
-                else None
-            )
-            self._activate_saved_file(
-                output_path,
-                preserved_single_preset_slot=preserved_single_preset_slot,
-                preserved_preset_selection=preserved_preset_selection,
-            )
+            self._activate_saved_file_without_reloading_preset_table(output_path)
         else:
             self._reset_preset_table_modified()
             self._refresh_file_actions()
@@ -3878,6 +3874,15 @@ class MainWindow(QMainWindow):
         finally:
             self.preset_table.blockSignals(signals_blocked)
         self._reset_preset_table_modified()
+
+    def _activate_saved_file_without_reloading_preset_table(self, path: Path) -> None:
+        self.input_path.setText(str(path))
+        self._loaded_input_path = str(path)
+        self._set_active_file(path)
+        self._store_recent_file(path)
+        self._load_metadata()
+        self._reset_preset_table_modified()
+        self._refresh_file_actions()
 
     def _set_active_file(self, path: Path) -> None:
         filename = path.name if str(path) else ""
@@ -4612,7 +4617,12 @@ class MainWindow(QMainWindow):
                     else None
                 )
             if adjustment is None:
-                adjustment = _bad_lufs_adjustment(detail, output_item.text())
+                preset_item = self.preset_table.item(row, 2)
+                output_paths = (
+                    preset_item.data(SNAPSHOT_OUTPUT_PATHS_ROLE) if preset_item is not None else ()
+                )
+                output_paths = output_paths if isinstance(output_paths, tuple) else ()
+                adjustment = _bad_lufs_adjustment(detail, output_item.text(), output_paths)
             if adjustment is None and adjustment_item.data(BAD_LUFS_HIGHLIGHT_ROLE):
                 try:
                     adjustment = _parse_adjustment_display_text(adjustment_item.text())
@@ -4753,6 +4763,7 @@ class MainWindow(QMainWindow):
             display_adjustment if custom_adjustment is not None else None,
         )
         self._refresh_adjustment_cell_widget(adjustment_item)
+        self._set_processed_snapshot_highlight(row, snapshot_index, True)
         self._adjusted_presets.add(event.device_patch)
 
     def _apply_snapshot_measurement_failure(self, event: ProgressEvent) -> None:
@@ -4809,6 +4820,7 @@ class MainWindow(QMainWindow):
         font.setPointSize(max(QApplication.font().pointSize(), 9))
         adjustment_item.setFont(font)
         self._refresh_adjustment_cell_widget(adjustment_item)
+        self._set_processed_snapshot_highlight(row, snapshot_index, False)
         self._set_bad_lufs_highlight(row, snapshot_index)
 
     def _implausible_snapshot_output_gain(
@@ -4983,6 +4995,7 @@ class MainWindow(QMainWindow):
         if patch is not None:
             self._adjusted_presets.discard(patch.text())
         self._clear_bad_lufs_highlight(row)
+        self._clear_processed_snapshot_highlight(row)
         for snapshot_index in range(self.snapshot_count):
             name_column = self._snapshot_name_column(snapshot_index)
             output_column = self._snapshot_output_column(snapshot_index)
@@ -5064,6 +5077,7 @@ class MainWindow(QMainWindow):
             for column in columns:
                 item = self.preset_table.item(row, column)
                 if item is not None:
+                    item.setData(PROCESSED_SNAPSHOT_ROLE, None)
                     item.setData(BAD_LUFS_HIGHLIGHT_ROLE, True)
                     self._refresh_preset_item_background(item)
                     self._refresh_preset_cell_widget_background(item)
@@ -5086,6 +5100,43 @@ class MainWindow(QMainWindow):
         for row in range(self.preset_table.rowCount()):
             self._clear_bad_lufs_highlight(row)
 
+    def _set_processed_snapshot_highlight(
+        self,
+        row: int,
+        snapshot_index: int,
+        processed: bool,
+    ) -> None:
+        signals_blocked = self.preset_table.blockSignals(True)
+        try:
+            for column in (
+                self._snapshot_name_column(snapshot_index),
+                self._snapshot_output_column(snapshot_index),
+                self._snapshot_adjustment_column(snapshot_index),
+            ):
+                item = self.preset_table.item(row, column)
+                if item is None:
+                    continue
+                if item.data(IGNORED_SNAPSHOT_ROLE) or item.data(BAD_LUFS_HIGHLIGHT_ROLE):
+                    item.setData(PROCESSED_SNAPSHOT_ROLE, None)
+                else:
+                    item.setData(PROCESSED_SNAPSHOT_ROLE, True if processed else None)
+                self._refresh_preset_item_background(item)
+                self._refresh_preset_cell_widget_background(item)
+        finally:
+            self.preset_table.blockSignals(signals_blocked)
+
+    def _clear_processed_snapshot_highlight(self, row: int) -> None:
+        signals_blocked = self.preset_table.blockSignals(True)
+        try:
+            for column in range(self.preset_table.columnCount()):
+                item = self.preset_table.item(row, column)
+                if item is not None:
+                    item.setData(PROCESSED_SNAPSHOT_ROLE, None)
+                    self._refresh_preset_item_background(item)
+                    self._refresh_preset_cell_widget_background(item)
+        finally:
+            self.preset_table.blockSignals(signals_blocked)
+
     def _set_ignored_snapshot_highlight(
         self,
         row: int,
@@ -5103,6 +5154,8 @@ class MainWindow(QMainWindow):
                 if item is None:
                     continue
                 item.setData(IGNORED_SNAPSHOT_ROLE, True if ignored else None)
+                if ignored:
+                    item.setData(PROCESSED_SNAPSHOT_ROLE, None)
                 if column == self._snapshot_name_column(snapshot_index):
                     if ignored:
                         item.setData(RECORDED_OUTPUT_PATH_ROLE, None)
@@ -5167,6 +5220,8 @@ class MainWindow(QMainWindow):
     def _refresh_preset_item_background(item: QTableWidgetItem) -> None:
         if item.data(BAD_LUFS_HIGHLIGHT_ROLE):
             item.setBackground(BAD_LUFS_ROW_BACKGROUND)
+        elif item.data(PROCESSED_SNAPSHOT_ROLE):
+            item.setBackground(PROCESSED_SNAPSHOT_BACKGROUND)
         elif item.data(NORMALIZATION_FOCUS_ROLE):
             item.setBackground(NORMALIZATION_FOCUS_BACKGROUND)
         elif item.data(MANUAL_NAME_MODIFIED_ROLE):
@@ -5191,11 +5246,19 @@ class MainWindow(QMainWindow):
             name_item.setData(Qt.ItemDataRole.UserRole, snapshot_names)
         self._refresh_snapshot_names(row)
 
-    def _set_snapshot_output_levels(self, row: int, levels: object) -> None:
+    def _set_snapshot_output_levels(
+        self,
+        row: int,
+        levels: object,
+        output_paths: object = (),
+    ) -> None:
         name_item = self.preset_table.item(row, 2)
         if name_item is not None:
             name_item.setData(
                 SNAPSHOT_OUTPUT_LEVELS_ROLE, _normalize_snapshot_output_levels(levels)
+            )
+            name_item.setData(
+                SNAPSHOT_OUTPUT_PATHS_ROLE, _normalize_snapshot_output_paths(output_paths)
             )
         self._refresh_snapshot_output_levels(row)
 
@@ -5745,6 +5808,8 @@ def _normalization_snapshot_focus_rect_for_cell_widget(
     item: QTableWidgetItem,
 ) -> QRect | None:
     table = item.tableWidget()
+    if not isinstance(table, ContentHeightTableWidget):
+        return None
     snapshot_index = getattr(table, "_normalizing_snapshot", None)
     if snapshot_index is None:
         return None
@@ -6490,6 +6555,12 @@ def _normalize_snapshot_output_levels(levels: object) -> tuple[tuple[float, ...]
     return tuple(normalized)
 
 
+def _normalize_snapshot_output_paths(paths: object) -> tuple[str, ...]:
+    if not isinstance(paths, (list, tuple)):
+        return ()
+    return tuple(path for path in paths if isinstance(path, str) and path)
+
+
 def _format_snapshot_output_levels(
     levels: tuple[tuple[float, ...], ...],
     snapshot_index: int,
@@ -6549,13 +6620,33 @@ def _bad_lufs_output_gain(detail: str | None) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def _bad_lufs_adjustment(detail: str | None, current_output_levels: str) -> float | None:
+def _bad_lufs_output_path(detail: str | None) -> str | None:
+    if not detail:
+        return None
+    match = re.search(r"\b(?P<path>dsp[01]\.output[AB])\b", detail)
+    return match["path"] if match is not None else None
+
+
+def _bad_lufs_adjustment(
+    detail: str | None,
+    current_output_levels: str,
+    output_paths: tuple[str, ...] = (),
+) -> float | None:
     bad_output_gain = _bad_lufs_output_gain(detail)
     if bad_output_gain is None:
         return None
     levels = _parse_output_level_display_text(current_output_levels)
     if not levels:
         return None
+    output_path = _bad_lufs_output_path(detail)
+    if output_path is not None and output_paths:
+        try:
+            output_index = output_paths.index(output_path)
+        except ValueError:
+            return None
+        if output_index >= len(levels):
+            return None
+        return round(bad_output_gain - levels[output_index], 1)
     level = levels[0]
     if any(not math.isclose(candidate, level, abs_tol=0.05) for candidate in levels[1:]):
         return None

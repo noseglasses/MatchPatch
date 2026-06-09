@@ -125,11 +125,20 @@ def extract_preset_assignments(data):
                         snapshot := preset.get("tone", {}).get(f"snapshot{snapshot_index}"), dict
                     )
                 ],
+                "snapshot_output_paths": extract_snapshot_output_paths(preset),
                 "snapshot_output_levels": extract_snapshot_output_levels(preset),
             }
         )
 
     return assignments
+
+
+def extract_snapshot_output_paths(preset):
+    return [
+        f"{dsp_name}.{output_name}"
+        for dsp_name, output_name, output_block in get_final_output_blocks(preset)
+        if "gain" in output_block
+    ]
 
 
 def extract_snapshot_output_levels(preset):
