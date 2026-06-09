@@ -257,9 +257,10 @@ def test_adjust_snapshot_gains_ignores_default_snapshot_names() -> None:
     changes = module.adjust_snapshot_gains(data, {"01A": {0: 2.0}}, snapshot_count=1)
 
     assert changes == 0
-    assert data["presets"][0]["tone"]["snapshot0"]["controllers"]["dsp0"]["outputA"][
-        "gain"
-    ]["@value"] == -1.0
+    assert (
+        data["presets"][0]["tone"]["snapshot0"]["controllers"]["dsp0"]["outputA"]["gain"]["@value"]
+        == -1.0
+    )
 
 
 def test_manual_adjustments_reject_invalid_helix_name() -> None:

@@ -14,7 +14,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from matchpatch.analysis import AnalysisOptions
 from matchpatch.config import Config, config_value, load_config, parse_channel_mapping, prefer
@@ -102,24 +102,27 @@ def _normalization_policy(config: Config, args: argparse.Namespace) -> Normaliza
 
 
 def _analysis_options(config: Config, args: argparse.Namespace) -> AnalysisOptions:
+    def float_prefer(arg_value: object | None, section: str, key: str, default: float) -> float:
+        value = prefer(arg_value, config, section, key, default=default)
+        if value is None:
+            return default
+        return float(cast(Any, value))
+
     return AnalysisOptions(
-        window_seconds=prefer(
+        window_seconds=float_prefer(
             args.analysis_window,
-            config,
             "analysis",
             "window_seconds",
             default=3.0,
         ),
-        interval_seconds=prefer(
+        interval_seconds=float_prefer(
             args.analysis_interval,
-            config,
             "analysis",
             "interval_seconds",
             default=0.1,
         ),
-        minimum_valid_lufs=prefer(
+        minimum_valid_lufs=float_prefer(
             args.minimum_valid_lufs,
-            config,
             "analysis",
             "minimum_valid_lufs",
             default=-100.0,

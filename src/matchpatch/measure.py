@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
 import soundfile as sf
@@ -343,8 +343,7 @@ def measure_presets(
                         )
                         if log_output:
                             print(
-                                f"[ERROR] {profile.name}:{device_patch} "
-                                f"snapshot {snapshot}: {exc}",
+                                f"[ERROR] {profile.name}:{device_patch} snapshot {snapshot}: {exc}",
                                 file=sys.stderr,
                                 flush=True,
                             )
@@ -896,6 +895,12 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     default_steering = profile.default_steering_options()
     device_audio = ("devices", args.device, "audio")
     device_steering = ("devices", args.device, "steering")
+
+    def float_config_value(value: object | None, default: float) -> float:
+        if value is None:
+            return default
+        return float(cast(Any, value))
+
     args.backend = getattr(args, "backend", None) or config_value(
         config, "normalize", "backend", default="hardware"
     )
@@ -994,20 +999,23 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
         validate_snapshot_count(profile, args.snapshot_count)
 
     args.analysis_options = AnalysisOptions(
-        window_seconds=(
+        window_seconds=float_config_value(
             getattr(args, "analysis_window", None)
             if getattr(args, "analysis_window", None) is not None
-            else config_value(config, "analysis", "window_seconds", default=3.0)
+            else config_value(config, "analysis", "window_seconds", default=3.0),
+            3.0,
         ),
-        interval_seconds=(
+        interval_seconds=float_config_value(
             getattr(args, "analysis_interval", None)
             if getattr(args, "analysis_interval", None) is not None
-            else config_value(config, "analysis", "interval_seconds", default=0.1)
+            else config_value(config, "analysis", "interval_seconds", default=0.1),
+            0.1,
         ),
-        minimum_valid_lufs=(
+        minimum_valid_lufs=float_config_value(
             getattr(args, "minimum_valid_lufs", None)
             if getattr(args, "minimum_valid_lufs", None) is not None
-            else config_value(config, "analysis", "minimum_valid_lufs", default=-100.0)
+            else config_value(config, "analysis", "minimum_valid_lufs", default=-100.0),
+            -100.0,
         ),
     )
     return args

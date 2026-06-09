@@ -593,6 +593,12 @@ def test_maximized_window_does_not_resize_when_advanced_side_pane_toggles(monkey
     assert window.size() == initial_size
     assert window.advanced.isHidden()
 
+    window.advanced_button.setChecked(True)
+    app.processEvents()
+
+    assert window.size() == initial_size
+    assert not window.advanced.isHidden()
+
     window.close()
 
 
@@ -832,7 +838,7 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
     assert window.preset_hint.text() == "Select the presets to normalize."
     assert '"file_type": "hls"' in window.metadata_text.toPlainText()
     assert '"name": "Set"' in window.metadata_text.toPlainText()
-    assert window.advanced.isHidden()
+    assert not window.advanced.isHidden()
 
     window.show()
     window.resize(1100, 900)
@@ -960,6 +966,8 @@ def test_log_section_and_busy_indicator(monkeypatch, app) -> None:
 def test_progress_statuses_include_suitable_icons(monkeypatch, app) -> None:
     window = MainWindow()
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: None)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
 
     assert window.phase.text() == "Ready"
     assert not window.phase_icon.pixmap().isNull()
@@ -1009,8 +1017,15 @@ def test_phase_text_marks_in_progress_statuses(phase, text) -> None:
     assert main_window._phase_text(phase) == text
 
 
-def test_preset_progress_shows_most_recently_measured_preset_and_snapshot_names(app) -> None:
+def test_preset_progress_shows_most_recently_measured_preset_and_snapshot_names(
+    monkeypatch, app
+) -> None:
     window = MainWindow()
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: QMessageBox.StandardButton.Discard,
+    )
     window.preset_table.insertRow(0)
     selected = QTableWidgetItem()
     selected.setCheckState(Qt.CheckState.Checked)
@@ -1532,7 +1547,7 @@ def test_preset_bulk_selection_buttons(app) -> None:
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
         for row in range(window.preset_table.rowCount())
     )
-    assert window.preset_table.item(0, 5).text() == "?"
+    assert window.preset_table.item(0, window._snapshot_adjustment_column(0)).text() == "0"
     window.set_all_presets_checked(True)
     assert all(
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Checked
@@ -1623,7 +1638,7 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(monkeypa
     )
 
     answers = iter([("Song 2", True), ("Clean!", True), ("+1.5", True)])
-    for column in (2, 3, 4):
+    for column in (2, window._snapshot_name_column(0), window._snapshot_adjustment_column(0)):
         value, _accepted = next(answers)
         window._manual_table_cell_double_clicked(0, column)
         assert isinstance(window._manual_cell_editor, QLineEdit)
@@ -4445,6 +4460,7 @@ def test_worker_thread_exits_without_processing_gui_events(monkeypatch, app) -> 
 def test_worker_completion_drains_queued_progress_updates(monkeypatch, app) -> None:
     window = MainWindow()
     window.show()
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
     monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
     monkeypatch.setattr(main_window, "apply_config", lambda args: args)
     monkeypatch.setattr(main_window, "request_from_args", lambda args: _request())

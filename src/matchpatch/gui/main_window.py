@@ -26,6 +26,7 @@ from PySide6.QtCore import (
     QItemSelectionModel,
     QModelIndex,
     QObject,
+    QPersistentModelIndex,
     QPropertyAnimation,
     QRect,
     QSettings,
@@ -53,6 +54,7 @@ from PySide6.QtGui import (
     QSyntaxHighlighter,
     Qt,
     QTextCharFormat,
+    QTextDocument,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -516,7 +518,12 @@ class SaveCancelled(Exception):
 class AttentionFrameDelegate(QStyledItemDelegate):
     """Draw an attention frame around cells marked by the window."""
 
-    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         super().paint(painter, option, index)
         if not index.data(PRESET_TABLE_ATTENTION_ROLE):
             return
@@ -1253,7 +1260,8 @@ class MainWindow(QMainWindow):
             self.preset_csv_controls.sizeHint().height(),
             self.manual_adjustments.sizeHint().height(),
         )
-        spacing = self.presets.layout().spacing() if self.presets.layout() is not None else 0
+        presets_layout = self.presets.layout()
+        spacing = presets_layout.spacing() if presets_layout is not None else 0
         self.preset_empty_state.setMinimumHeight(table_height + row_height * 3 + spacing + 2)
 
     def _show_preset_empty_state(self) -> None:
@@ -1664,7 +1672,7 @@ class MainWindow(QMainWindow):
             return
         self._apply_measurement_timing_values(values)
 
-    def _apply_measurement_timing_values(self, values: dict[str, object]) -> None:
+    def _apply_measurement_timing_values(self, values: dict[str, float]) -> None:
         device = self.device.currentData()
         panel = self.device_panels.get(device)
         for name, value in values.items():
@@ -2251,9 +2259,11 @@ class MainWindow(QMainWindow):
         return headers
 
     def _preset_table_csv_row(self, row: int) -> list[str]:
+        preset_id_item = self.preset_table.item(row, 1)
+        preset_name_item = self.preset_table.item(row, 2)
         values = [
-            self.preset_table.item(row, 1).text() if self.preset_table.item(row, 1) else "",
-            self.preset_table.item(row, 2).text() if self.preset_table.item(row, 2) else "",
+            preset_id_item.text() if preset_id_item is not None else "",
+            preset_name_item.text() if preset_name_item is not None else "",
         ]
         for snapshot_index in range(self.snapshot_count):
             name = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
@@ -4107,11 +4117,11 @@ class MainWindow(QMainWindow):
             ):
                 checked_patches.add(patch_item.text())
 
-        selected_patches = {
-            self.preset_table.item(index.row(), 1).text()
-            for index in self.preset_table.selectionModel().selectedIndexes()
-            if self.preset_table.item(index.row(), 1) is not None
-        }
+        selected_patches = set()
+        for index in self.preset_table.selectionModel().selectedIndexes():
+            patch_item = self.preset_table.item(index.row(), 1)
+            if patch_item is not None:
+                selected_patches.add(patch_item.text())
         current_patch = None
         current_row = self.preset_table.currentRow()
         if current_row >= 0:
@@ -4818,6 +4828,8 @@ class MainWindow(QMainWindow):
                 ),
                 policy.max_crest_factor_correction_db,
             )
+        if event.lufs is None:
+            return 0.0
         return round(self._target_lufs() - event.lufs - crest_factor_correction, 1)
 
     def _custom_adjustment_for_snapshot(
@@ -5676,7 +5688,7 @@ class JsonSyntaxHighlighter(QSyntaxHighlighter):
         r"(?P<punctuation>[{}\[\],:])"
     )
 
-    def __init__(self, document: object) -> None:
+    def __init__(self, document: QTextDocument) -> None:
         super().__init__(document)
         self.formats = {
             "key": self._format("#7c3aed", bold=True),
@@ -6131,11 +6143,11 @@ class MeasurementOptimizationDialog(QDialog):
         self.info = QLabel("Apply the optimized timing values or copy the TOML snippet.")
         self.info.setWordWrap(True)
         layout.addWidget(self.info)
-        self.result = QTextEdit()
-        self.result.setReadOnly(False)
-        self.result.setAcceptRichText(False)
-        self.result.setPlaceholderText("Optimized TOML values will appear here.")
-        layout.addWidget(self.result)
+        self.result_text = QTextEdit()
+        self.result_text.setReadOnly(False)
+        self.result_text.setAcceptRichText(False)
+        self.result_text.setPlaceholderText("Optimized TOML values will appear here.")
+        layout.addWidget(self.result_text)
         buttons = QDialogButtonBox()
         self.action_button = buttons.addButton(
             "Abort",
@@ -6183,7 +6195,7 @@ class MeasurementOptimizationDialog(QDialog):
             self.set_result(event.result_toml)
 
     def set_result(self, toml_text: str) -> None:
-        self.result.setPlainText(toml_text)
+        self.result_text.setPlainText(toml_text)
         self.apply_button.setEnabled(bool(toml_text.strip()))
         self.set_status("Parameter study completed.")
         self.set_finished()
@@ -6214,7 +6226,7 @@ class MeasurementOptimizationDialog(QDialog):
             self._abort()
 
     def _apply_result(self) -> None:
-        self.applied.emit(self.result.toPlainText())
+        self.applied.emit(self.result_text.toPlainText())
 
     def _abort(self) -> None:
         self.action_button.setEnabled(False)

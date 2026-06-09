@@ -82,7 +82,7 @@ def _write_square_desktop_icon(source: Path, target: Path) -> None:
     painter = QPainter(icon)
     painter.drawImage(x, y, scaled)
     painter.end()
-    icon.save(str(target), "PNG")
+    icon.save(str(target))
 
 
 def _desktop_entry_data_dirs() -> list[Path]:

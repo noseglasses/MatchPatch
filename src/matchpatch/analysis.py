@@ -49,9 +49,7 @@ def calculate_average_short_term_lufs(
     interval_frames = round(interval_seconds * sample_rate)
 
     if window_seconds < MINIMUM_LUFS_WINDOW_SECONDS:
-        raise ValueError(
-            f"LUFS window must be at least {MINIMUM_LUFS_WINDOW_SECONDS:g} s"
-        )
+        raise ValueError(f"LUFS window must be at least {MINIMUM_LUFS_WINDOW_SECONDS:g} s")
 
     if samples.shape[0] < window_frames:
         raise ValueError(f"Audio is shorter than the {window_seconds:g} s LUFS window")
