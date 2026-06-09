@@ -40,7 +40,7 @@ def test_configure_wslg_runtime_selects_wslg_socket(tmp_path, monkeypatch) -> No
 
     configure_wslg_runtime()
 
-    assert os.environ["XDG_RUNTIME_DIR"] == "/mnt/wslg/runtime-dir"
+    assert os.environ["XDG_RUNTIME_DIR"] == str(Path("/mnt/wslg/runtime-dir"))
     assert os.environ["QT_QPA_PLATFORM"] == "wayland"
 
 

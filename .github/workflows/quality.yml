@@ -55,6 +55,10 @@ jobs:
       - name: Synchronize environment
         run: uv sync --locked --no-default-groups --group wsl --extra gui
 
+      - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1
+
       - name: Ruff lint
         run: uv run --frozen --no-default-groups --group wsl --extra gui ruff check .
 

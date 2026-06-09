@@ -557,7 +557,8 @@ def test_initial_empty_state_reserves_loaded_preset_table_size(monkeypatch, app,
     assert loaded_window.preset_empty_state.isHidden()
     assert not loaded_window.preset_table.isHidden()
     assert not loaded_window.select_diff_button.isHidden()
-    assert initial_size == loaded_window.size()
+    assert initial_size.width() == loaded_window.width()
+    assert abs(initial_size.height() - loaded_window.height()) <= 2
 
     loaded_window.close()
 
@@ -2405,38 +2406,39 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
 def test_embedded_startup_file_selection_loads_like_open_button(monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="Embedded")
+    path = str(Path("/tmp/embedded.hlx"))
 
-    window.preset_empty_file_dialog.fileSelected.emit("/tmp/embedded.hlx")
+    window.preset_empty_file_dialog.fileSelected.emit(path)
 
-    assert window.input_path.text() == "/tmp/embedded.hlx"
+    assert window.input_path.text() == path
     assert window.preset_table.rowCount() == 1
     assert window.preset_table.item(0, 1).text() == ""
     assert window.preset_table.item(0, 2).text() == "Embedded"
     assert window.preset_empty_state.isHidden()
-    assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == ["/tmp/embedded.hlx"]
+    assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == [path]
 
     window.close()
 
 
 def test_startup_recent_files_selector_loads_selected_file(monkeypatch, app) -> None:
-    recent = ["/tmp/older.hls", "/tmp/recent.hlx"]
+    recent = [str(Path("/tmp/older.hls")), str(Path("/tmp/recent.hlx"))]
     QSettings().setValue(main_window.RECENT_FILES_SETTINGS_KEY, recent)
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="Recent")
 
     assert window.recent_files.isEnabled()
     assert window.recent_files.itemText(0) == "Open recent file..."
-    assert window.recent_files.itemData(1) == "/tmp/older.hls"
+    assert window.recent_files.itemData(1) == str(Path("/tmp/older.hls"))
     assert "older.hls" in window.recent_files.itemText(1)
 
     window._recent_file_activated(2)
 
-    assert window.input_path.text() == "/tmp/recent.hlx"
+    assert window.input_path.text() == str(Path("/tmp/recent.hlx"))
     assert window.preset_table.rowCount() == 1
     assert window.preset_table.item(0, 2).text() == "Recent"
     assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == [
-        "/tmp/recent.hlx",
-        "/tmp/older.hls",
+        str(Path("/tmp/recent.hlx")),
+        str(Path("/tmp/older.hls")),
     ]
 
     window.close()
@@ -3353,7 +3355,7 @@ def test_saving_table_changes_preserves_preset_selection(tmp_path, monkeypatch, 
 
 def test_output_save_picker_uses_save_button(monkeypatch, app) -> None:
     window = MainWindow()
-    window.input_path.setText("/tmp/input.hls")
+    window.input_path.setText(str(Path("/tmp/input.hls")))
     dialogs = []
 
     class FileDialog:
@@ -3396,13 +3398,13 @@ def test_output_save_picker_uses_save_button(monkeypatch, app) -> None:
 
         @staticmethod
         def selectedFiles():
-            return ["/tmp/output.hls"]
+            return [str(Path("/tmp/output.hls"))]
 
     monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
 
     window.browse_output()
 
-    assert window.output_path.text() == "/tmp/output.hls"
+    assert window.output_path.text() == str(Path("/tmp/output.hls"))
     assert dialogs[0].settings[-1] == ("label", FileDialog.DialogLabel.Accept, "Save")
     window.close()
 

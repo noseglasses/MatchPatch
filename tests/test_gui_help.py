@@ -41,7 +41,7 @@ def test_help_topic_resolves_to_local_file_url(tmp_path) -> None:
     url = gui_help.resolve_help_url(HelpId.REFERENCE_DI, docs_root=docs_root)
 
     assert url.isLocalFile()
-    assert url.toLocalFile() == str(target)
+    assert Path(url.toLocalFile()) == target
     assert url.fragment() == "help-reference-di"
 
 
@@ -62,7 +62,7 @@ def test_unknown_help_topic_falls_back_to_docs_index(tmp_path) -> None:
     url = gui_help.resolve_help_url("missing_topic", docs_root=docs_root)
 
     assert url.isLocalFile()
-    assert url.toLocalFile() == str(index)
+    assert Path(url.toLocalFile()) == index
     assert url.fragment() == ""
 
 

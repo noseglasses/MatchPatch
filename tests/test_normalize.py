@@ -4,7 +4,7 @@ import argparse
 import csv
 import subprocess
 import threading
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -169,9 +169,13 @@ def test_subprocess_helpers_delegate_and_translate_paths(tmp_path, monkeypatch) 
     )
 
     normalize.run_command(["tool", Path("input.hls")], timeout=3)
-    assert normalize.wsl_path_to_windows(tmp_path / "file.hls") == "C:\\MatchPatch\\file.hls"
     assert calls[0] == ((["tool", "input.hls"],), {"check": True, "text": True, "timeout": 3})
-    assert calls[1][0][0][0:2] == ["wslpath", "-w"]
+    if normalize._is_windows():
+        assert normalize.wsl_path_to_windows(tmp_path / "file.hls") == str(tmp_path / "file.hls")
+        assert len(calls) == 1
+    else:
+        assert normalize.wsl_path_to_windows(tmp_path / "file.hls") == "C:\\MatchPatch\\file.hls"
+        assert calls[1][0][0][0:2] == ["wslpath", "-w"]
 
 
 def test_wait_for_user_confirmation_prompts(monkeypatch, capsys) -> None:
@@ -352,9 +356,8 @@ def test_wsl_path_to_windows_returns_native_windows_path(monkeypatch) -> None:
         lambda *args, **kwargs: pytest.fail("native Windows should not call wslpath"),
     )
 
-    assert (
-        normalize.wsl_path_to_windows(Path("C:/MatchPatch/results.csv"))
-        == "C:/MatchPatch/results.csv"
+    assert PureWindowsPath(normalize.wsl_path_to_windows(Path("C:/MatchPatch/results.csv"))) == (
+        PureWindowsPath("C:/MatchPatch/results.csv")
     )
 
 
@@ -366,9 +369,8 @@ def test_wsl_path_to_windows_keeps_drive_path_on_wsl(monkeypatch) -> None:
         lambda *args, **kwargs: pytest.fail("Windows-style paths should not call wslpath"),
     )
 
-    assert (
-        normalize.wsl_path_to_windows(Path("C:/MatchPatch/results.csv"))
-        == "C:/MatchPatch/results.csv"
+    assert PureWindowsPath(normalize.wsl_path_to_windows(Path("C:/MatchPatch/results.csv"))) == (
+        PureWindowsPath("C:/MatchPatch/results.csv")
     )
 
 
