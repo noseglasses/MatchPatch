@@ -26,6 +26,9 @@ docs = [
     "myst-parser>=4",
     "sphinx>=8",
 ]
+installer = [
+    "pyinstaller>=6.0",
+]
 wsl = [
     "hypothesis>=6.0",
     "numpy>=2.0",

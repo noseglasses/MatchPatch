@@ -14,13 +14,35 @@ from PySide6.QtWidgets import QApplication
 from matchpatch.gui.main_window import MainWindow
 
 IGNORED_QT_MESSAGES = {"This plugin supports grabbing the mouse only for popup windows"}
-ASSETS_DIR = Path(__file__).resolve().parents[3] / "docs" / "assets"
+SOURCE_ROOT = Path(__file__).resolve().parents[3]
 DESKTOP_FILE_ID = "matchpatch-gui"
 DESKTOP_ICON_SIZE = 512
 DEFAULT_XDG_DATA_DIRS = "/usr/local/share:/usr/share"
 GUI_STYLE = "Fusion"
 GUI_FONT_FAMILY = "DejaVu Sans"
 GUI_FONT_POINT_SIZE = 10
+GUI_SMOKE_ENV = "MATCHPATCH_GUI_SMOKE"
+
+
+def resource_path(*parts: str) -> Path:
+    """Resolve bundled resources in frozen and source-tree execution."""
+    relative_path = Path(*parts)
+    candidates: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if getattr(sys, "frozen", False):
+        if meipass:
+            candidates.append(Path(meipass) / relative_path)
+        candidates.append(Path(sys.executable).resolve().parent / relative_path)
+    candidates.append(SOURCE_ROOT / relative_path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def assets_dir() -> Path:
+    return resource_path("docs", "assets")
 
 
 def qt_message_handler(
@@ -120,7 +142,7 @@ def register_desktop_entry() -> None:
         try:
             applications.mkdir(parents=True, exist_ok=True)
             icons.mkdir(parents=True, exist_ok=True)
-            _write_square_desktop_icon(ASSETS_DIR / "matchmatch-icon-512.png", installed_icon)
+            _write_square_desktop_icon(assets_dir() / "matchmatch-icon-512.png", installed_icon)
             if not desktop_file.exists() or desktop_file.read_text(encoding="utf-8") != entry:
                 desktop_file.write_text(entry, encoding="utf-8")
         except OSError:
@@ -140,6 +162,10 @@ def install_terminal_interrupt_handler(app: QApplication, window: MainWindow) ->
     return timer
 
 
+def gui_smoke_enabled() -> bool:
+    return os.getenv(GUI_SMOKE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def main() -> None:
     configure_wslg_runtime()
     configure_high_dpi_scaling()
@@ -150,9 +176,14 @@ def main() -> None:
     app.setApplicationName(DESKTOP_FILE_ID)
     app.setApplicationDisplayName("MatchPatch")
     app.setDesktopFileName(DESKTOP_FILE_ID)
-    icon = ASSETS_DIR / "matchmatch-icon.png"
+    icon = assets_dir() / "matchmatch-icon.png"
     app.setWindowIcon(QIcon(str(icon)))
     window = MainWindow()
+    if gui_smoke_enabled():
+        window.show()
+        app.processEvents()
+        window.close()
+        raise SystemExit(0)
     window.showMaximized()
     _interrupt_timer = install_terminal_interrupt_handler(app, window)
     raise SystemExit(app.exec())

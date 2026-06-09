@@ -67,3 +67,63 @@ jobs:
 
       - name: Publish distributions
         run: uv publish
+
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Resolve package version
+        id: version
+        shell: pwsh
+        run: |
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Release tag '$env:GITHUB_REF_NAME' does not match package version 'v$version'."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "installer=dist/installer/MatchPatch-Setup-$version.exe" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build and test installer
+        shell: cmd
+        run: scripts\test-windows-installer.cmd
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: matchpatch-installer-${{ github.ref_name }}
+          path: ${{ steps.version.outputs.installer }}
+          if-no-files-found: error
+
+      - name: Attach installer to GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $installer = "${{ steps.version.outputs.installer }}"
+          if (-not (Test-Path -LiteralPath $installer)) {
+            throw "Installer artifact was not found: $installer"
+          }
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title $tag --notes "MatchPatch $tag"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create GitHub Release for $tag."
+            }
+          }
+          gh release upload $tag $installer --clobber

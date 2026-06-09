@@ -8,8 +8,11 @@ __pycache__
 .venv-windows
 .coverage
 htmlcov
-docs_html
-dist
+/docs_html/
+/dist/
+/build/
+/installer-payload/
+*.spec.bak
 *.json
 *.hls
 *.hlx

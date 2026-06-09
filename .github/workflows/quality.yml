@@ -105,3 +105,31 @@ jobs:
           uv run --frozen --no-default-groups --group wsl --extra gui ruff format --check .
           uv run --frozen --no-default-groups --group wsl --extra gui ty check
           uv run --frozen --no-default-groups --group wsl --extra gui pytest
+
+  installer:
+    name: Windows installer smoke
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build and test installer
+        shell: cmd
+        run: scripts\test-windows-installer.cmd
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: matchpatch-installer-smoke
+          path: dist/installer/*.exe
+          if-no-files-found: error

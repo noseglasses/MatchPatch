@@ -68,9 +68,14 @@ is for real Helix measurement.
 
 ## Install And Launch
 
-Installation instructions are still being consolidated. For now, use the
-verified local setup commands below and see [Developer Notes](docs/developer-notes.md)
-and [developer commands](docs/dev/commands.md) for fuller setup details.
+On Windows, download `MatchPatch-Setup-<version>.exe` from
+[GitHub Releases](https://github.com/noseglasses/MatchPatch/releases), run the
+installer, then launch MatchPatch from the Start Menu. The installed app bundles
+offline Help, available from the GUI.
+
+For source checkouts, use the verified local setup commands below and see
+[Developer Notes](docs/developer-notes.md) and
+[developer commands](docs/dev/commands.md) for fuller setup details.
 
 Install the optional GUI support and launch MatchPatch:
 

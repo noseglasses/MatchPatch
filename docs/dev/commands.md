@@ -205,13 +205,86 @@ uv run --isolated --no-project --with dist/*.tar.gz python -c "import matchpatch
 
 ## Packaging
 
-Application packaging is not yet completed in the checked-in project. Current
-canonical package artifacts are the Python wheel and source distribution built
-with `uv build --no-sources`.
+The checked-in Windows packaging pipeline builds a frozen application payload
+with PyInstaller, then packages that payload with Inno Setup 6.
 
-Brand assets for future app packaging live in `docs/assets/`.
+Prerequisites:
 
-Stage the offline documentation payload for a future installer with:
+- A native Windows checkout, or WSL with the Windows mirror workflow.
+- `uv`.
+- Inno Setup 6, with `ISCC.exe` on `PATH`, installed in the default location,
+  or referenced by `INNO_SETUP_ISCC`.
+
+Build and test the installer from WSL:
+
+```bash
+scripts/test-windows-installer-from-wsl.sh
+```
+
+Build only the installer from WSL:
+
+```bash
+scripts/build-windows-installer-from-wsl.sh
+```
+
+Build and test from a native Windows checkout:
+
+```bat
+scripts\test-windows-installer.cmd
+```
+
+Build only from a native Windows checkout:
+
+```bat
+scripts\build-windows-installer.cmd
+```
+
+Build only the frozen payload:
+
+```bat
+scripts\build-windows-payload.cmd
+```
+
+The default WSL mirror lives at `/mnt/c/src/MatchPatch-windows`. Override it
+with `MATCHPATCH_WINDOWS_WORKDIR` if your Windows checkout lives elsewhere.
+
+Generated outputs:
+
+- Payload: `build/windows-payload/MatchPatch/`
+- Payload manifest: `build/windows-payload/MatchPatch/build-info.json`
+- Installer: `dist/installer/MatchPatch-Setup-<version>.exe`
+- Offline help staged beside the executable: `docs_html/`
+
+Run smoke tests against an existing installer artifact:
+
+```bat
+scripts\test-windows-installer.cmd --reuse-artifact
+scripts\test-windows-installer.cmd --installer C:\path\to\MatchPatch-Setup-0.1.0.exe
+```
+
+Add `--gui-smoke` to initialize the GUI in non-interactive smoke mode as part
+of the payload and installed-app checks.
+
+The smoke tests verify that `MatchPatch.exe`, `matchpatch.exe`, bundled
+`docs_html/index.html`, and `build-info.json` exist; that
+`matchpatch.exe --version` reports the expected version; and that the installer
+can install and uninstall silently.
+
+Troubleshooting:
+
+- If a script reports a UNC path problem, run from a native Windows path or use
+  the WSL wrapper so the project is mirrored to a Windows filesystem.
+- If `ISCC.exe` is missing, install Inno Setup 6, add it to `PATH`, or set
+  `INNO_SETUP_ISCC` to the full compiler path.
+- If the GUI fails with Qt or PySide6 plugin startup errors, rebuild the payload
+  with `scripts\build-windows-payload.cmd` so PyInstaller can restage Qt
+  plugins and runtime files.
+- Antivirus warnings can happen while testing the unsigned installer. Verify the
+  artifact came from your local build or GitHub Actions before allowing it.
+
+Brand assets for app packaging live in `docs/assets/`.
+
+Stage the offline documentation payload manually with:
 
 ```bash
 scripts/stage-installer-docs.sh <installer-payload-dir>
@@ -223,6 +296,16 @@ the docs index, quick start, workflow pages, concept pages, and Sphinx static
 assets. Installers should place that `docs_html/` directory beside the GUI
 executable so `matchpatch.gui.help.local_docs_root()` can resolve local
 `file://` help URLs.
+
+Sync the opt-in Windows installer build environment from a native Windows
+checkout with:
+
+```bat
+uv sync --locked --no-default-groups --group windows --group docs --group installer --extra gui
+```
+
+Inno Setup is intentionally not a Python dependency. Install Inno Setup on the
+Windows host or provide it in CI before running installer packaging scripts.
 
 ## Docs
 
@@ -258,7 +341,7 @@ git push origin v0.1.0
 ```
 
 The release workflow verifies the tag/version match, runs `uv build
---no-sources`, smoke-tests the wheel and source distribution, builds
-`docs_html/`, stages it under `installer-payload/docs_html/`, uploads that as a
-`matchpatch-docs-html-<tag>` artifact, then publishes with PyPI trusted
-publishing.
+--no-sources`, smoke-tests the wheel and source distribution, builds and uploads
+the offline docs artifact, publishes to PyPI with trusted publishing, and runs a
+separate Windows job that builds, smoke-tests, uploads, and attaches
+`MatchPatch-Setup-<version>.exe` to the GitHub Release.

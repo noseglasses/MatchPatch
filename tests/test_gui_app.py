@@ -44,6 +44,39 @@ def test_configure_wslg_runtime_selects_wslg_socket(tmp_path, monkeypatch) -> No
     assert os.environ["QT_QPA_PLATFORM"] == "wayland"
 
 
+def test_resource_path_uses_pyinstaller_meipass(tmp_path, monkeypatch) -> None:
+    meipass = tmp_path / "bundle"
+    asset = meipass / "docs" / "assets" / "matchmatch-icon.png"
+    asset.parent.mkdir(parents=True)
+    asset.touch()
+    monkeypatch.setattr(gui_app.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(gui_app.sys, "_MEIPASS", str(meipass), raising=False)
+    monkeypatch.setattr(gui_app.sys, "executable", str(tmp_path / "app" / "MatchPatch.exe"))
+
+    assert gui_app.resource_path("docs", "assets", "matchmatch-icon.png") == asset
+    assert gui_app.assets_dir() == asset.parent
+
+
+def test_resource_path_uses_frozen_executable_dir_when_meipass_is_missing(
+    tmp_path, monkeypatch
+) -> None:
+    executable = tmp_path / "MatchPatch" / "MatchPatch.exe"
+    asset = executable.parent / "docs" / "assets" / "matchmatch-icon.png"
+    asset.parent.mkdir(parents=True)
+    asset.touch()
+    monkeypatch.setattr(gui_app.sys, "frozen", True, raising=False)
+    monkeypatch.delattr(gui_app.sys, "_MEIPASS", raising=False)
+    monkeypatch.setattr(gui_app.sys, "executable", str(executable))
+
+    assert gui_app.resource_path("docs", "assets", "matchmatch-icon.png") == asset
+
+
+def test_resource_path_falls_back_to_source_tree(monkeypatch) -> None:
+    monkeypatch.setattr(gui_app.sys, "frozen", False, raising=False)
+
+    assert gui_app.resource_path("docs", "assets") == gui_app.SOURCE_ROOT / "docs" / "assets"
+
+
 def test_configure_high_dpi_scaling_uses_pass_through(monkeypatch) -> None:
     policies = []
 
@@ -147,6 +180,9 @@ def test_main_shows_window_maximized(monkeypatch) -> None:
         def setWindowIcon(self, icon) -> None:
             calls.append(("window_icon", icon))
 
+        def processEvents(self) -> None:
+            calls.append(("process_events",))
+
         def exec(self) -> int:
             calls.append(("exec",))
             return 0
@@ -181,6 +217,8 @@ def test_main_shows_window_maximized(monkeypatch) -> None:
         lambda app, window: calls.append(("interrupt", app, window)),
     )
 
+    monkeypatch.delenv(gui_app.GUI_SMOKE_ENV, raising=False)
+
     try:
         gui_app.main()
     except SystemExit as exc:
@@ -199,3 +237,73 @@ def test_main_shows_window_maximized(monkeypatch) -> None:
         ("show_maximized",)
     )
     assert calls.index(("show_maximized",)) < calls.index(("exec",))
+
+
+def test_main_smoke_mode_processes_events_and_exits(monkeypatch) -> None:
+    calls = []
+
+    class FakeApplication:
+        def __init__(self, argv) -> None:
+            self.argv = argv
+
+        def setApplicationName(self, name: str) -> None:
+            calls.append(("application_name", name))
+
+        def setApplicationDisplayName(self, name: str) -> None:
+            calls.append(("display_name", name))
+
+        def setDesktopFileName(self, name: str) -> None:
+            calls.append(("desktop_file", name))
+
+        def setWindowIcon(self, icon) -> None:
+            calls.append(("window_icon", icon))
+
+        def processEvents(self) -> None:
+            calls.append(("process_events",))
+
+        def exec(self) -> int:
+            calls.append(("exec",))
+            return 0
+
+    class FakeWindow:
+        def showMaximized(self) -> None:
+            calls.append(("show_maximized",))
+
+        def show(self) -> None:
+            calls.append(("show",))
+
+        def close(self) -> None:
+            calls.append(("close",))
+
+    monkeypatch.setenv(gui_app.GUI_SMOKE_ENV, "1")
+    monkeypatch.setattr(gui_app, "configure_wslg_runtime", lambda: calls.append(("wslg",)))
+    monkeypatch.setattr(gui_app, "configure_high_dpi_scaling", lambda: calls.append(("dpi",)))
+    monkeypatch.setattr(
+        gui_app,
+        "configure_gui_appearance",
+        lambda app: calls.append(("appearance", app)),
+    )
+    monkeypatch.setattr(gui_app, "register_desktop_entry", lambda: calls.append(("desktop",)))
+    monkeypatch.setattr(
+        gui_app, "qInstallMessageHandler", lambda handler: calls.append(("qt", handler))
+    )
+    monkeypatch.setattr(gui_app, "QApplication", FakeApplication)
+    monkeypatch.setattr(gui_app, "QIcon", lambda path: path)
+    monkeypatch.setattr(gui_app, "MainWindow", FakeWindow)
+    monkeypatch.setattr(
+        gui_app,
+        "install_terminal_interrupt_handler",
+        lambda app, window: calls.append(("interrupt", app, window)),
+    )
+
+    try:
+        gui_app.main()
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    assert ("show",) in calls
+    assert ("process_events",) in calls
+    assert ("close",) in calls
+    assert ("show_maximized",) not in calls
+    assert ("exec",) not in calls
+    assert not any(call[0] == "interrupt" for call in calls)

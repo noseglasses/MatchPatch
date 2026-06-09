@@ -14,9 +14,13 @@ measurement, and device-specific adapters so more processors can be added later.
 - `Python/` contains legacy Helix file-manipulation utilities. The modern Helix
   profile still delegates `.hls`/`.hlx` parsing and rewriting to
   `Python/preset_handling.py`.
-- `scripts/` contains WSL/Windows environment and worker wrappers.
+- `scripts/` contains WSL/Windows environment, worker, installer build, and
+  installer smoke-test wrappers.
+- `installer/` contains the Inno Setup script, PyInstaller specs, and
+  PowerShell smoke tests for the Windows installer.
 - `tests/` contains unit, workflow, CLI, measurement, and GUI tests.
-- `.github/workflows/` defines quality and PyPI release automation.
+- `.github/workflows/` defines quality, installer smoke, PyPI release, and
+  GitHub Release artifact automation.
 
 ## Entry Points
 
@@ -243,8 +247,29 @@ The quality workflow runs Linux, Windows, and WSL jobs across Python 3.12,
 3.13, and 3.14. It syncs dependencies with `uv`, then runs Ruff lint, Ruff
 format check, `ty check`, and pytest with coverage.
 
+The quality workflow also runs a Windows installer smoke job on Python 3.12. It
+installs Inno Setup, builds the PyInstaller payload, packages it with
+`installer/matchpatch.iss`, runs payload and silent install/uninstall smoke
+tests, and uploads the generated installer artifact for inspection.
+
 The release workflow is tag-driven. A `v*` tag must match
 `project.version` in `pyproject.toml`; CI builds distributions with `uv build`,
 smoke-tests the wheel and source distribution, uploads the generated
 `docs_html/` offline help bundle for installer packaging, and publishes to PyPI
-using OIDC trusted publishing.
+using OIDC trusted publishing. A separate Windows release job repeats the
+tag/version check, builds and smoke-tests the installer, uploads it as an
+Actions artifact, and attaches `MatchPatch-Setup-<version>.exe` to the GitHub
+Release.
+
+Windows installer packaging is a three-stage flow:
+
+1. Build strict Sphinx HTML docs into `docs_html/`.
+2. Freeze the GUI and CLI into `build/windows-payload/MatchPatch/` with
+   PyInstaller, including brand assets, offline docs, and `build-info.json`.
+3. Package the payload with Inno Setup into
+   `dist/installer/MatchPatch-Setup-<version>.exe`.
+
+Installer builds run from a native Windows path. WSL users normally invoke
+`scripts/build-windows-installer-from-wsl.sh` or
+`scripts/test-windows-installer-from-wsl.sh`, which synchronize the Windows
+mirror before calling the native `.cmd` scripts.
