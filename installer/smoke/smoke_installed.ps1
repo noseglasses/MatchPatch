@@ -35,18 +35,36 @@ function Invoke-MatchPatchGuiSmoke {
     }
 }
 
+function Invoke-SetupProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$FailureMessage,
+        [Parameter(Mandatory = $true)][string]$LogPath
+    )
+
+    $process = Start-Process -FilePath $Path -ArgumentList $Arguments -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
+            Write-Host "$FailureMessage log tail:"
+            Get-Content -LiteralPath $LogPath -Tail 80 | Write-Host
+        }
+        throw "$FailureMessage with exit code $($process.ExitCode)"
+    }
+}
+
 $installer = (Resolve-Path -LiteralPath $InstallerPath).Path
+$installLog = Join-Path $env:TEMP ("MatchPatch-install-" + [guid]::NewGuid().ToString("N") + ".log")
+$uninstallLog = Join-Path $env:TEMP ("MatchPatch-uninstall-" + [guid]::NewGuid().ToString("N") + ".log")
 $installArgs = @(
     "/VERYSILENT",
     "/SUPPRESSMSGBOXES",
     "/NORESTART",
+    "/LOG=$installLog",
     "/DIR=$InstallDir"
 )
 
-& $installer @installArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "Installer failed with exit code $LASTEXITCODE"
-}
+Invoke-SetupProcess -Path $installer -Arguments $installArgs -FailureMessage "Installer failed" -LogPath $installLog
 
 $guiExe = Join-Path $InstallDir "MatchPatch.exe"
 $cliExe = Join-Path $InstallDir "matchpatch.exe"
@@ -70,10 +88,13 @@ if ($GuiSmoke) {
     Invoke-MatchPatchGuiSmoke $guiExe
 }
 
-& $uninstaller /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-if ($LASTEXITCODE -ne 0) {
-    throw "Uninstaller failed with exit code $LASTEXITCODE"
-}
+$uninstallArgs = @(
+    "/VERYSILENT",
+    "/SUPPRESSMSGBOXES",
+    "/NORESTART",
+    "/LOG=$uninstallLog"
+)
+Invoke-SetupProcess -Path $uninstaller -Arguments $uninstallArgs -FailureMessage "Uninstaller failed" -LogPath $uninstallLog
 
 Start-Sleep -Seconds 2
 if (Test-Path -LiteralPath $InstallDir) {
