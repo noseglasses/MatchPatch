@@ -44,6 +44,10 @@ from matchpatch.progress import ProgressEvent
 if TYPE_CHECKING:
     from matchpatch.audio import AudioConfig
 
+SnapshotPlan = dict[str, tuple[int, ...]]
+SnapshotResult = tuple[float, float] | None
+SNAPSHOT_SKIP_SENTINEL = "SKIP"
+
 
 class MeasurementBackend(Protocol):
     def activate_preset(self, preset_id: int) -> None: ...
@@ -206,7 +210,7 @@ def append_result_row(
     preset_id: int,
     device_patch: str,
     snapshot_count: int,
-    results: list[tuple[float, float] | None] | None,
+    results: list[SnapshotResult] | dict[int, SnapshotResult] | None,
 ) -> None:
     row: dict[str, str | int | float] = {
         "Preset": preset_id,
@@ -217,8 +221,11 @@ def append_result_row(
         if results is None:
             row[f"LUFS{snapshot}"] = "ERROR"
             row[f"CrestFactor{snapshot}"] = "ERROR"
+        elif isinstance(results, dict) and snapshot not in results:
+            row[f"LUFS{snapshot}"] = SNAPSHOT_SKIP_SENTINEL
+            row[f"CrestFactor{snapshot}"] = SNAPSHOT_SKIP_SENTINEL
         else:
-            result = results[snapshot - 1]
+            result = results[snapshot] if isinstance(results, dict) else results[snapshot - 1]
             if result is None:
                 row[f"LUFS{snapshot}"] = "ERROR"
                 row[f"CrestFactor{snapshot}"] = "ERROR"
@@ -244,6 +251,7 @@ def measure_presets(
     log_output: bool = True,
     play_recorded_output: bool | PlaybackEnabled = False,
     recorded_output_dir: Path | None = None,
+    snapshot_plan: SnapshotPlan | None = None,
 ) -> None:
     measured_snapshots = (
         snapshot_count if snapshot_count is not None else getattr(profile, "snapshot_count", 4)
@@ -284,9 +292,14 @@ def measure_presets(
 
             try:
                 backend.activate_preset(preset_id)
-                results = []
+                snapshots_to_measure = _snapshots_to_measure(
+                    snapshot_plan,
+                    device_patch,
+                    measured_snapshots,
+                )
+                results: dict[int, SnapshotResult] = {}
 
-                for snapshot in range(1, measured_snapshots + 1):
+                for snapshot in snapshots_to_measure:
                     _emit_progress(
                         on_progress,
                         ProgressEvent(
@@ -327,7 +340,7 @@ def measure_presets(
                             _play_audio(recorded, sample_rate)
                         values = analyze_audio(recorded, sample_rate, analysis_options)
                     except Exception as exc:  # noqa: BLE001
-                        results.append(None)
+                        results[snapshot] = None
                         _emit_progress(
                             on_progress,
                             ProgressEvent(
@@ -349,12 +362,7 @@ def measure_presets(
                             )
                         continue
 
-                    results.append(
-                        (
-                            values.short_term_lufs,
-                            values.crest_factor_db,
-                        )
-                    )
+                    results[snapshot] = (values.short_term_lufs, values.crest_factor_db)
                     _emit_progress(
                         on_progress,
                         ProgressEvent(
@@ -429,6 +437,43 @@ def measure_presets(
             )
 
     _emit_progress(on_progress, ProgressEvent("measurement_completed"))
+
+
+def _snapshots_to_measure(
+    snapshot_plan: SnapshotPlan | None,
+    device_patch: str,
+    snapshot_count: int,
+) -> tuple[int, ...]:
+    if snapshot_plan is None:
+        return tuple(range(1, snapshot_count + 1))
+
+    snapshots = snapshot_plan.get(device_patch.upper(), ())
+    return tuple(snapshot for snapshot in snapshots if 1 <= snapshot <= snapshot_count)
+
+
+def parse_snapshot_plan(value: str | None) -> SnapshotPlan | None:
+    if not value:
+        return None
+
+    plan: SnapshotPlan = {}
+    for chunk in value.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "=" not in chunk:
+            raise argparse.ArgumentTypeError("Snapshot plan entries must be PATCH=1,2")
+        patch, snapshots_text = chunk.split("=", 1)
+        patch = patch.strip().upper()
+        if not patch:
+            raise argparse.ArgumentTypeError("Snapshot plan patch IDs must not be empty")
+        try:
+            snapshots = tuple(parse_int_list(snapshots_text))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError("Snapshot plan snapshots must be integers") from exc
+        if not snapshots or any(snapshot < 1 for snapshot in snapshots):
+            raise argparse.ArgumentTypeError("Snapshot plan snapshots must be positive integers")
+        plan[patch] = snapshots
+    return plan or None
 
 
 def _recorded_output_path(
@@ -581,6 +626,7 @@ def measure(args: argparse.Namespace) -> None:
     recorded_output_dir = (
         Path(args.recordings_dir) if getattr(args, "recordings_dir", None) else None
     )
+    snapshot_plan = getattr(args, "snapshot_plan", None)
 
     if args.backend == "loopback":
         measure_presets(
@@ -596,6 +642,7 @@ def measure(args: argparse.Namespace) -> None:
             log_output=log_output,
             play_recorded_output=play_recorded_output,
             recorded_output_dir=recorded_output_dir,
+            snapshot_plan=snapshot_plan,
         )
         return
 
@@ -619,6 +666,7 @@ def measure(args: argparse.Namespace) -> None:
             log_output=log_output,
             play_recorded_output=play_recorded_output,
             recorded_output_dir=recorded_output_dir,
+            snapshot_plan=snapshot_plan,
         )
         return
 
@@ -655,6 +703,7 @@ def measure(args: argparse.Namespace) -> None:
             log_output=log_output,
             play_recorded_output=play_recorded_output,
             recorded_output_dir=recorded_output_dir,
+            snapshot_plan=snapshot_plan,
         )
 
 
@@ -1055,6 +1104,7 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated numeric preset IDs that fail in simulated mode",
     )
     measure_parser.add_argument("--snapshot-count", type=int)
+    measure_parser.add_argument("--snapshot-plan", type=parse_snapshot_plan)
     measure_parser.add_argument("--analysis-window", type=float)
     measure_parser.add_argument("--analysis-interval", type=float)
     measure_parser.add_argument("--minimum-valid-lufs", type=float)

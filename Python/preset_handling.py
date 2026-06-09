@@ -41,6 +41,7 @@ TARGET_LUFS = -16.0
 SOLO_GAIN_BUMP = 3.0
 CONTROLLER_ASSIGNMENT_LIMIT = 64
 LUFS_ERROR_SENTINEL = "ERROR"
+LUFS_SKIP_SENTINEL = "SKIP"
 CREST_FACTOR_REFERENCE_DB = 12.0
 CREST_FACTOR_CORRECTION_RATIO = 0.4
 MAX_CREST_FACTOR_CORRECTION_DB = 3.0
@@ -684,6 +685,11 @@ def load_lufs_analysis_file(
                     for key in [lufs_key, crest_factor_key]
                 ):
                     gain_delta = None
+                elif any(
+                    str(row.get(key) or "").strip().upper() == LUFS_SKIP_SENTINEL
+                    for key in [lufs_key, crest_factor_key]
+                ):
+                    continue
                 elif row.get(lufs_key) and row.get(crest_factor_key):
                     lufs_value = float(row[lufs_key])
                     crest_factor_db = float(row[crest_factor_key])

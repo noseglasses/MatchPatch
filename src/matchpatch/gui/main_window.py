@@ -451,6 +451,7 @@ SNAPSHOT_OUTPUT_LEVELS_ROLE = Qt.ItemDataRole.UserRole + 6
 NORMALIZATION_FOCUS_ROLE = Qt.ItemDataRole.UserRole + 7
 IGNORED_SNAPSHOT_ROLE = Qt.ItemDataRole.UserRole + 8
 SOLO_SNAPSHOT_ROLE = Qt.ItemDataRole.UserRole + 9
+MEASURED_ADJUSTMENT_ROLE = Qt.ItemDataRole.UserRole + 10
 OUTPUT_LEVEL_MIN_DB = -120.0
 OUTPUT_LEVEL_MAX_DB = 20.0
 ADJUSTMENT_MIN_DB = OUTPUT_LEVEL_MIN_DB - OUTPUT_LEVEL_MAX_DB
@@ -3108,9 +3109,12 @@ class MainWindow(QMainWindow):
                 "info",
             )
         self._start_busy_phase()
+        progress_plan = self._measurement_progress_plan_for_request(request)
+        if progress_plan is not None:
+            request = replace(request, snapshot_plan=progress_plan.preset_snapshots)
         self.completed_request = request
         self._measurement_progress_estimate = _MeasurementProgressEstimate.from_request(request)
-        self._measurement_progress_plan = self._measurement_progress_plan_for_request(request)
+        self._measurement_progress_plan = progress_plan
         self.worker = NormalizationWorker(request, self)
         self.worker.progress.connect(self.update_progress)
         self.worker.import_requested.connect(self.confirm_import)
@@ -3544,6 +3548,11 @@ class MainWindow(QMainWindow):
         palette.setColor(QPalette.ColorRole.Base, color)
         widget.setPalette(palette)
         widget.setAutoFillBackground(True)
+        if isinstance(widget, SnapshotNameCellWidget):
+            widget.setProperty(
+                "normalizationSnapshotFocusRect",
+                _normalization_snapshot_focus_rect_for_cell_widget(widget, item),
+            )
         widget.update()
 
     @staticmethod
@@ -4593,7 +4602,17 @@ class MainWindow(QMainWindow):
             return
         if match.re is GAIN_BAD_LUFS_PATTERN:
             detail = match.groupdict().get("detail")
-            adjustment = _bad_lufs_adjustment(detail, output_item.text())
+            adjustment = None
+            if adjustment_item.data(BAD_LUFS_HIGHLIGHT_ROLE):
+                stored_adjustment = adjustment_item.data(MEASURED_ADJUSTMENT_ROLE)
+                adjustment = (
+                    stored_adjustment
+                    if isinstance(stored_adjustment, (int, float))
+                    and not isinstance(stored_adjustment, bool)
+                    else None
+                )
+            if adjustment is None:
+                adjustment = _bad_lufs_adjustment(detail, output_item.text())
             if adjustment is None and adjustment_item.data(BAD_LUFS_HIGHLIGHT_ROLE):
                 try:
                     adjustment = _parse_adjustment_display_text(adjustment_item.text())
@@ -4605,6 +4624,7 @@ class MainWindow(QMainWindow):
             )
             adjustment_item.setText(display_text)
             adjustment_item.setData(ADJUSTMENT_VALUE_ROLE, None)
+            adjustment_item.setData(MEASURED_ADJUSTMENT_ROLE, adjustment)
             adjustment_item.setToolTip(tooltip)
             adjustment_item.setForeground(QBrush(BAD_LUFS_FOREGROUND))
             font = adjustment_item.font()
@@ -4781,6 +4801,7 @@ class MainWindow(QMainWindow):
             tooltip = f"{tooltip}\n\nMeasurement detail: {detail}"
         adjustment_item.setText(display_text)
         adjustment_item.setData(ADJUSTMENT_VALUE_ROLE, None)
+        adjustment_item.setData(MEASURED_ADJUSTMENT_ROLE, adjustment)
         adjustment_item.setToolTip(tooltip)
         adjustment_item.setForeground(QBrush(BAD_LUFS_FOREGROUND))
         font = adjustment_item.font()
@@ -5015,6 +5036,7 @@ class MainWindow(QMainWindow):
         try:
             item.setText("?")
             item.setData(ADJUSTMENT_VALUE_ROLE, None)
+            item.setData(MEASURED_ADJUSTMENT_ROLE, None)
             item.setData(RECORDED_OUTPUT_PATH_ROLE, None)
             item.setToolTip("This selected snapshot has not been measured yet.")
             font = item.font()
@@ -5111,6 +5133,7 @@ class MainWindow(QMainWindow):
         try:
             item.setText("-")
             item.setData(ADJUSTMENT_VALUE_ROLE, None)
+            item.setData(MEASURED_ADJUSTMENT_ROLE, None)
             item.setData(RECORDED_OUTPUT_PATH_ROLE, None)
             item.setToolTip("This snapshot is skipped during normalization.")
             font = item.font()
@@ -5487,6 +5510,7 @@ class MainWindow(QMainWindow):
                 display_text += f" ({_format_adjustment(custom_adjustment)})"
             item.setText(display_text)
             item.setData(ADJUSTMENT_VALUE_ROLE, value)
+            item.setData(MEASURED_ADJUSTMENT_ROLE, None)
             item.setToolTip(
                 f"Custom loudness adjustment: {_format_adjustment(custom_adjustment)}"
                 if custom_adjustment is not None
@@ -5716,12 +5740,38 @@ class JsonSyntaxHighlighter(QSyntaxHighlighter):
             self.setFormat(match.start(), match.end() - match.start(), self.formats[token])
 
 
+def _normalization_snapshot_focus_rect_for_cell_widget(
+    widget: QWidget,
+    item: QTableWidgetItem,
+) -> QRect | None:
+    table = item.tableWidget()
+    snapshot_index = getattr(table, "_normalizing_snapshot", None)
+    if snapshot_index is None:
+        return None
+    if item.column() != MainWindow._snapshot_name_column(snapshot_index):
+        return None
+    focus_rect = table._normalization_focus_rect(item.row(), snapshot_index)
+    if focus_rect is None:
+        return None
+    local_rect = QRect(focus_rect.adjusted(0, 0, -1, -1))
+    local_rect.translate(-widget.geometry().x(), -widget.geometry().y())
+    return local_rect
+
+
 class SnapshotNameCellWidget(QLabel):
     """Snapshot-name cell widget that keeps table group separators visible."""
 
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
         painter = QPainter(self)
+        focus_rect = self.property("normalizationSnapshotFocusRect")
+        if isinstance(focus_rect, QRect):
+            pen = QPen(NORMALIZATION_FOCUS_BLUE)
+            pen.setWidth(3)
+            painter.setPen(pen)
+            painter.drawRect(focus_rect)
+            return
+
         pen = QPen(self.palette().mid().color())
         pen.setWidth(2)
         painter.setPen(pen)
@@ -6504,9 +6554,12 @@ def _bad_lufs_adjustment(detail: str | None, current_output_levels: str) -> floa
     if bad_output_gain is None:
         return None
     levels = _parse_output_level_display_text(current_output_levels)
-    if len(levels) != 1:
+    if not levels:
         return None
-    return round(bad_output_gain - levels[0], 1)
+    level = levels[0]
+    if any(not math.isclose(candidate, level, abs_tol=0.05) for candidate in levels[1:]):
+        return None
+    return round(bad_output_gain - level, 1)
 
 
 def _parse_output_level_display_text(text: str) -> tuple[float, ...]:

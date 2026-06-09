@@ -787,6 +787,35 @@ def test_all_ignored_presets_are_excluded_from_normalization_request(app) -> Non
     window.close()
 
 
+def test_normalization_request_includes_measurable_snapshot_plan(monkeypatch, app) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
+    window.snapshot_count_input.setValue(3)
+    for row, preset_id in enumerate(("02B", "02C")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked)
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+
+    window._set_ignored_snapshot_highlight(0, 1, True)
+    window._set_ignored_snapshot_highlight(1, 0, True)
+    window._set_ignored_snapshot_highlight(1, 2, True)
+
+    window._start_normalization_request(_request(preset_set="02B,02C"))
+
+    assert window.worker is not None
+    assert window.worker.request.snapshot_plan == (
+        ("02B", (1, 3)),
+        ("02C", (2,)),
+    )
+
+    window.worker_finished()
+    window.close()
+
+
 def test_single_preset_run_warns_when_preset_id_is_missing(monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch)
@@ -2634,6 +2663,37 @@ def test_solo_snapshot_name_cell_widget_draws_left_separator(app) -> None:
     window.close()
 
 
+def test_focused_solo_snapshot_name_cell_widget_draws_blue_frame(app) -> None:
+    window = MainWindow()
+    window.preset_table.insertRow(0)
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Solo",))
+
+    window.preset_table.set_normalization_focus(0, 0)
+
+    widget = window.preset_table.cellWidget(0, 3)
+    assert isinstance(widget, main_window.SnapshotNameCellWidget)
+    focus_rect = widget.property("normalizationSnapshotFocusRect")
+    table_focus_rect = window.preset_table._normalization_focus_rect(0, 0)
+    assert table_focus_rect is not None
+    expected_rect = table_focus_rect.adjusted(0, 0, -1, -1)
+    expected_rect.translate(-widget.geometry().x(), -widget.geometry().y())
+    assert focus_rect == expected_rect
+
+    pixmap = QPixmap(widget.size())
+    pixmap.fill(widget.palette().color(QPalette.ColorRole.Window))
+    widget.render(pixmap)
+
+    focus_color = main_window.NORMALIZATION_FOCUS_BLUE.name()
+    image = pixmap.toImage()
+    assert image.pixelColor(focus_rect.left() + 1, image.height() // 2).name() == focus_color
+    assert image.pixelColor(image.width() // 2, focus_rect.top() + 1).name() == focus_color
+    assert image.pixelColor(image.width() // 2, focus_rect.bottom()).name() == focus_color
+
+    window.close()
+
+
 def test_snapshot_count_widget_redraws_columns_and_preserves_loaded_names(app) -> None:
     window = MainWindow()
     window.preset_table.insertRow(0)
@@ -2737,6 +2797,41 @@ def test_implausible_gain_warning_is_marked_as_bad_lufs(monkeypatch, app) -> Non
     window.close()
 
 
+def test_bad_lufs_log_derives_adjustment_from_matching_multi_output_levels(
+    monkeypatch, app
+) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("06A"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Snap One",))
+    window._set_output_level(window.preset_table.item(0, 4), "14.0, 14.0")
+
+    window.update_progress(
+        ProgressEvent(
+            "log",
+            message=(
+                "[GAIN] 06A Snap One | measurement unavailable "
+                "(Implausible output gain 21.2 dB for 06A Snap One dsp1.outputA. "
+                "This usually means the measurement recorded silence.)"
+            ),
+        )
+    )
+    window.update_progress(ProgressEvent("preset_completed", device_patch="06A"))
+
+    adjustment = window.preset_table.item(0, 5)
+    assert adjustment.text() == "+7.2 ⚠️"
+    assert "output block level is unavailable" not in adjustment.toolTip()
+    assert "Resulting output block level would be 21.2 dB" in adjustment.toolTip()
+
+    window.close()
+
+
 def test_bad_gain_log_uses_snapshot_label_after_unparsed_gain_line(monkeypatch, app) -> None:
     window = MainWindow()
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
@@ -2750,7 +2845,7 @@ def test_bad_gain_log_uses_snapshot_label_after_unparsed_gain_line(monkeypatch, 
     window._clear_preset_adjustments(0)
     window._set_snapshot_names(0, ("Snap One", "Snap Two"))
     window._set_output_level(window.preset_table.item(0, 4), "14.0, 14.0")
-    window._set_output_level(window.preset_table.item(0, 7), "14.0, 14.0")
+    window._set_output_level(window.preset_table.item(0, 7), "14.0, 10.0")
 
     window.update_progress(
         ProgressEvent(
@@ -2800,6 +2895,7 @@ def test_bad_gain_log_uses_snapshot_label_after_unparsed_gain_line(monkeypatch, 
     assert window.preset_table.item(0, 5).text() == "-1.8"
     assert window.preset_table.item(0, 8).text() == "+7.2 ⚠️"
     assert window.preset_table.item(0, 8).foreground().color().name() == "#b91c1c"
+    assert "output block level is unavailable" not in window.preset_table.item(0, 8).toolTip()
     assert all(
         not window.preset_table.item(0, column).data(main_window.BAD_LUFS_HIGHLIGHT_ROLE)
         for column in (3, 4, 5)

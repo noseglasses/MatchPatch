@@ -381,6 +381,9 @@ def run_windows_analysis(
     for option, value in path_values.items():
         if value is not None:
             command.extend([option, wsl_path_to_windows(Path(value))])
+    snapshot_plan = getattr(args, "snapshot_plan", ())
+    if snapshot_plan:
+        command.extend(["--snapshot-plan", _format_snapshot_plan(snapshot_plan)])
     if getattr(args, "play_recorded_output", False):
         command.append("--play-recorded-output")
 
@@ -393,6 +396,14 @@ def run_windows_analysis(
 
     command.append("--progress-jsonl")
     _run_progress_command(command, args.timeout, on_progress, cancel_requested)
+
+
+def _format_snapshot_plan(snapshot_plan: tuple[tuple[str, tuple[int, ...]], ...]) -> str:
+    return ";".join(
+        f"{patch}={','.join(str(snapshot) for snapshot in snapshots)}"
+        for patch, snapshots in snapshot_plan
+        if snapshots
+    )
 
 
 def run_windows_optimization(

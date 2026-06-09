@@ -74,6 +74,7 @@ class NormalizationRequest:
     record_device_output: bool = False
     playback_toggle_path: Path | None = None
     recorded_output_dir: Path | None = None
+    snapshot_plan: tuple[tuple[str, tuple[int, ...]], ...] = ()
     policy: NormalizationPolicy = NormalizationPolicy()
     analysis_options: AnalysisOptions = AnalysisOptions()
 

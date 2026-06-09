@@ -34,6 +34,19 @@ def test_lufs_error_sentinel_is_retained_per_snapshot(tmp_path) -> None:
     assert deltas == {"01A": {0: None, 1: 1.0}}
 
 
+def test_lufs_skip_sentinel_omits_snapshot(tmp_path) -> None:
+    module = _load_legacy_module()
+    csv_path = tmp_path / "analysis.csv"
+    csv_path.write_text(
+        "HelixPreset,LUFS1,CrestFactor1,LUFS2,CrestFactor2\n01A,SKIP,SKIP,-17.0,12.0\n",
+        encoding="utf-8",
+    )
+
+    deltas = module.load_lufs_analysis_file(csv_path, snapshot_count=2)
+
+    assert deltas == {"01A": {1: 1.0}}
+
+
 def test_custom_adjustments_bump_snapshot_targets(tmp_path) -> None:
     module = _load_legacy_module()
     csv_path = tmp_path / "analysis.csv"

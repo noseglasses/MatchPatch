@@ -34,6 +34,7 @@ from matchpatch.measure import (
     parse_args,
     parse_channel_mapping,
     parse_int_list,
+    parse_snapshot_plan,
     resolve_audio_config,
     resolve_steering_options,
 )
@@ -343,6 +344,14 @@ class PartlySilentBackend(LoopbackBackend):
         return reference
 
 
+class RecordingBackend(LoopbackBackend):
+    def __init__(self) -> None:
+        self.snapshots: list[int] = []
+
+    def reapply_snapshot(self, snapshot: int) -> None:
+        self.snapshots.append(snapshot)
+
+
 def test_measure_presets_writes_error_row_when_backend_fails(tmp_path) -> None:
     csv_path = tmp_path / "errors.csv"
 
@@ -396,6 +405,44 @@ def test_measure_presets_retains_good_snapshots_when_one_snapshot_fails(tmp_path
         "snapshot_started",
         "snapshot_failed",
     ]
+
+
+def test_measure_presets_skips_snapshots_outside_plan(tmp_path) -> None:
+    sample_rate = 48000
+    times = np.arange(sample_rate * 4) / sample_rate
+    reference = np.sin(2 * np.pi * 1000 * times)[:, np.newaxis]
+    backend = RecordingBackend()
+    events = []
+    csv_path = tmp_path / "planned.csv"
+
+    measure_presets(
+        get_device_profile("helix"),
+        [1],
+        csv_path,
+        reference,
+        sample_rate,
+        backend,
+        snapshot_count=3,
+        on_progress=events.append,
+        log_output=False,
+        snapshot_plan={"01A": (1, 3)},
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as csv_file:
+        row = next(csv.DictReader(csv_file))
+
+    assert backend.snapshots == [1, 3]
+    assert row["LUFS1"] != ""
+    assert row["CrestFactor1"] != ""
+    assert row["LUFS2"] == "SKIP"
+    assert row["CrestFactor2"] == "SKIP"
+    assert row["LUFS3"] != ""
+    assert row["CrestFactor3"] != ""
+    assert [event.snapshot for event in events if event.kind == "snapshot_started"] == [1, 3]
+
+
+def test_parse_snapshot_plan_normalizes_patch_ids() -> None:
+    assert parse_snapshot_plan("01a=1,3;02B=2") == {"01A": (1, 3), "02B": (2,)}
 
 
 def test_hardware_backend_delegates_and_waits(monkeypatch) -> None:
@@ -492,6 +539,7 @@ def worker_args(**overrides):
         "post_roll": 0.1,
         "round_trip_latency": 0.02,
         "simulate_fail_presets": [],
+        "snapshot_plan": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)

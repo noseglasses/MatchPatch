@@ -67,6 +67,10 @@ def test_count_csv_rows_handles_header(tmp_path) -> None:
     assert normalize.count_csv_rows(csv_path) == 2
 
 
+def test_snapshot_plan_serializes_for_native_worker() -> None:
+    assert normalize._format_snapshot_plan((("02B", (1, 3)), ("02C", (2,)))) == ("02B=1,3;02C=2")
+
+
 def test_normalize_presets_filters_to_diff_input(tmp_path) -> None:
     handler = FakeHandler()
     input_path = tmp_path / "input.hls"
