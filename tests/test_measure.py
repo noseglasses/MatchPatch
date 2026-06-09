@@ -89,6 +89,7 @@ def test_measure_presets_emits_structured_progress(tmp_path) -> None:
         "snapshot_completed",
         "snapshot_started",
         "snapshot_completed",
+        "preset_completed",
         "measurement_completed",
     ]
     assert events[0].message == "Analyzing reference DI loudness..."
@@ -105,7 +106,9 @@ def test_measure_presets_can_save_and_play_recorded_snapshots(monkeypatch, tmp_p
     played = []
     events = []
 
-    monkeypatch.setattr("matchpatch.measure._play_audio", lambda audio, rate: played.append((audio, rate)))
+    monkeypatch.setattr(
+        "matchpatch.measure._play_audio", lambda audio, rate: played.append((audio, rate))
+    )
 
     measure_presets(
         get_device_profile("helix"),
@@ -327,6 +330,19 @@ class FailingBackend(LoopbackBackend):
         raise RuntimeError("processor unavailable")
 
 
+class PartlySilentBackend(LoopbackBackend):
+    def __init__(self) -> None:
+        self.snapshot = 0
+
+    def reapply_snapshot(self, snapshot: int) -> None:
+        self.snapshot = snapshot
+
+    def record(self, reference: np.ndarray) -> np.ndarray:
+        if self.snapshot == 2:
+            return np.zeros_like(reference)
+        return reference
+
+
 def test_measure_presets_writes_error_row_when_backend_fails(tmp_path) -> None:
     csv_path = tmp_path / "errors.csv"
 
@@ -345,6 +361,41 @@ def test_measure_presets_writes_error_row_when_backend_fails(tmp_path) -> None:
     assert row["DevicePatch"] == "01A"
     assert row["LUFS1"] == "ERROR"
     assert row["CrestFactor4"] == "ERROR"
+
+
+def test_measure_presets_retains_good_snapshots_when_one_snapshot_fails(tmp_path) -> None:
+    sample_rate = 48000
+    times = np.arange(sample_rate * 4) / sample_rate
+    reference = np.sin(2 * np.pi * 1000 * times)[:, np.newaxis]
+    events = []
+    csv_path = tmp_path / "partial.csv"
+
+    measure_presets(
+        get_device_profile("helix"),
+        [1],
+        csv_path,
+        reference,
+        sample_rate,
+        PartlySilentBackend(),
+        snapshot_count=2,
+        on_progress=events.append,
+        log_output=False,
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as csv_file:
+        row = next(csv.DictReader(csv_file))
+
+    assert row["DevicePatch"] == "01A"
+    assert row["LUFS1"] != "ERROR"
+    assert row["CrestFactor1"] != "ERROR"
+    assert row["LUFS2"] == "ERROR"
+    assert row["CrestFactor2"] == "ERROR"
+    assert [event.kind for event in events if event.kind.startswith("snapshot_")] == [
+        "snapshot_started",
+        "snapshot_completed",
+        "snapshot_started",
+        "snapshot_failed",
+    ]
 
 
 def test_hardware_backend_delegates_and_waits(monkeypatch) -> None:

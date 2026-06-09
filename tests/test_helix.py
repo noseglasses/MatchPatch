@@ -95,6 +95,7 @@ def test_list_assignments_and_measurement_delegate_to_legacy_script(tmp_path, mo
             "helix_preset": "01A",
             "name": "Clean",
             "snapshot_names": ["Rhythm", "Solo"],
+            "snapshot_output_levels": [[0.0], [-3.5, -4.0]],
         }
     ]
 
@@ -105,7 +106,7 @@ def test_list_assignments_and_measurement_delegate_to_legacy_script(tmp_path, mo
     monkeypatch.setattr(handler, "_run", fake_run)
 
     assert handler.list_assignments(Path("set.hls")) == [
-        PatchAssignment(1, "01A", "Clean", ("Rhythm", "Solo"))
+        PatchAssignment(1, "01A", "Clean", ("Rhythm", "Solo"), ((0.0,), (-3.5, -4.0)))
     ]
     handler.create_measurement_file(Path("set.hls"), Path("measurement.hls"))
     assert calls[1][0] == ("-i", Path("set.hls"), "-o", Path("measurement.hls"), "--measurement")
@@ -123,11 +124,13 @@ def test_metadata_delegates_to_legacy_script(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(handler, "_run", fake_run)
 
     assert handler.metadata(Path("set.hls")) == payload
-    assert calls == [(
-        ("-i", Path("set.hls"), "--metadata"),
-        True,
-        False,
-    )]
+    assert calls == [
+        (
+            ("-i", Path("set.hls"), "--metadata"),
+            True,
+            False,
+        )
+    ]
 
 
 def test_diff_preset_ids_delegates_to_legacy_script(tmp_path, monkeypatch) -> None:
@@ -141,11 +144,13 @@ def test_diff_preset_ids_delegates_to_legacy_script(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(handler, "_run", fake_run)
 
     assert handler.diff_preset_ids(Path("set.hls"), Path("previous.hls")) == [1, 6]
-    assert calls == [(
-        ("-i", Path("set.hls"), "--diff-presets", Path("previous.hls")),
-        True,
-        False,
-    )]
+    assert calls == [
+        (
+            ("-i", Path("set.hls"), "--diff-presets", Path("previous.hls")),
+            True,
+            False,
+        )
+    ]
 
     with pytest.raises(ValueError, match="same extension"):
         handler.diff_preset_ids(Path("set.hls"), Path("previous.hlx"))
@@ -187,9 +192,9 @@ def test_legacy_diff_signature_ignores_names_and_colors() -> None:
     assert legacy.canonical_preset_signal_content(first) == legacy.canonical_preset_signal_content(
         renamed
     )
-    assert legacy.canonical_preset_signal_content(
-        first
-    ) != legacy.canonical_preset_signal_content(changed_parameter)
+    assert legacy.canonical_preset_signal_content(first) != legacy.canonical_preset_signal_content(
+        changed_parameter
+    )
 
 
 def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> None:

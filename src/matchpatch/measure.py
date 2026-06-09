@@ -206,7 +206,7 @@ def append_result_row(
     preset_id: int,
     device_patch: str,
     snapshot_count: int,
-    results: list[tuple[float, float]] | None,
+    results: list[tuple[float, float] | None] | None,
 ) -> None:
     row: dict[str, str | int | float] = {
         "Preset": preset_id,
@@ -218,9 +218,14 @@ def append_result_row(
             row[f"LUFS{snapshot}"] = "ERROR"
             row[f"CrestFactor{snapshot}"] = "ERROR"
         else:
-            lufs, crest = results[snapshot - 1]
-            row[f"LUFS{snapshot}"] = lufs
-            row[f"CrestFactor{snapshot}"] = crest
+            result = results[snapshot - 1]
+            if result is None:
+                row[f"LUFS{snapshot}"] = "ERROR"
+                row[f"CrestFactor{snapshot}"] = "ERROR"
+            else:
+                lufs, crest = result
+                row[f"LUFS{snapshot}"] = lufs
+                row[f"CrestFactor{snapshot}"] = crest
 
     writer.writerow(row)
 
@@ -294,32 +299,57 @@ def measure_presets(
                             snapshot_total=measured_snapshots,
                         ),
                     )
-                    backend.reapply_snapshot(snapshot)
-                    recorded = backend.record(reference)
-                    recorded_path = _recorded_output_path(
-                        recorded_output_dir,
-                        device_patch,
-                        snapshot,
-                    )
-                    if recorded_path is not None:
-                        recorded_path.parent.mkdir(parents=True, exist_ok=True)
-                        sf.write(recorded_path, recorded, sample_rate)
+                    try:
+                        backend.reapply_snapshot(snapshot)
+                        recorded = backend.record(reference)
+                        recorded_path = _recorded_output_path(
+                            recorded_output_dir,
+                            device_patch,
+                            snapshot,
+                        )
+                        if recorded_path is not None:
+                            recorded_path.parent.mkdir(parents=True, exist_ok=True)
+                            sf.write(recorded_path, recorded, sample_rate)
+                            _emit_progress(
+                                on_progress,
+                                ProgressEvent(
+                                    "snapshot_recorded",
+                                    preset_id=preset_id,
+                                    device_patch=device_patch,
+                                    preset_index=preset_index,
+                                    preset_total=len(preset_ids),
+                                    snapshot=snapshot,
+                                    snapshot_total=measured_snapshots,
+                                    path=str(recorded_path),
+                                ),
+                            )
+                        if _playback_enabled(play_recorded_output):
+                            _play_audio(recorded, sample_rate)
+                        values = analyze_audio(recorded, sample_rate, analysis_options)
+                    except Exception as exc:  # noqa: BLE001
+                        results.append(None)
                         _emit_progress(
                             on_progress,
                             ProgressEvent(
-                                "snapshot_recorded",
+                                "snapshot_failed",
+                                message=str(exc),
                                 preset_id=preset_id,
                                 device_patch=device_patch,
                                 preset_index=preset_index,
                                 preset_total=len(preset_ids),
                                 snapshot=snapshot,
                                 snapshot_total=measured_snapshots,
-                                path=str(recorded_path),
                             ),
                         )
-                    if _playback_enabled(play_recorded_output):
-                        _play_audio(recorded, sample_rate)
-                    values = analyze_audio(recorded, sample_rate, analysis_options)
+                        if log_output:
+                            print(
+                                f"[ERROR] {profile.name}:{device_patch} "
+                                f"snapshot {snapshot}: {exc}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                        continue
+
                     results.append(
                         (
                             values.short_term_lufs,
@@ -387,6 +417,17 @@ def measure_presets(
                 )
 
             csv_file.flush()
+            _emit_progress(
+                on_progress,
+                ProgressEvent(
+                    "preset_completed",
+                    preset_id=preset_id,
+                    device_patch=device_patch,
+                    preset_index=preset_index,
+                    preset_total=len(preset_ids),
+                    snapshot_total=measured_snapshots,
+                ),
+            )
 
     _emit_progress(on_progress, ProgressEvent("measurement_completed"))
 

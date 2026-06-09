@@ -23,6 +23,7 @@ from PySide6.QtCore import (
     QCoreApplication,
     QEasingCurve,
     QEvent,
+    QItemSelectionModel,
     QModelIndex,
     QObject,
     QPropertyAnimation,
@@ -123,18 +124,23 @@ from matchpatch.workflow import (
 
 GAIN_CORRECTION_PATTERN = re.compile(
     r"^\[GAIN\] (?P<patch>\d{2}[A-D]) (?P<label>.*?) \| "
-    r"(?P<before>-?\d+(?:\.\d+)?) dB -> (?P<after>-?\d+(?:\.\d+)?) dB "
+    r"(?:\S+\s+)?(?P<before>-?\d+(?:\.\d+)?) dB -> (?P<after>-?\d+(?:\.\d+)?) dB "
     r"\(Delta: (?P<delta>[+-]\d+(?:\.\d+)?) dB\)$"
 )
 GAIN_STABLE_PATTERN = re.compile(
     r"^\[GAIN\] (?P<patch>\d{2}[A-D]) (?P<label>.*?) \| "
-    r"stable at (?P<after>-?\d+(?:\.\d+)?) dB "
+    r"stable at (?:\S+\s+)?(?P<after>-?\d+(?:\.\d+)?) dB "
     r"\(Delta: (?P<delta>[+-]\d+(?:\.\d+)?) dB\)$"
 )
 GAIN_BAD_LUFS_PATTERN = re.compile(
-    r"^\[GAIN\] (?P<patch>\d{2}[A-D]) (?P<label>.*?) \| bad LUFS(?: \(.*\))?$"
+    r"^\[GAIN\] (?P<patch>\d{2}[A-D]) (?P<label>.*?) \| "
+    r"(?:bad LUFS|measurement unavailable)(?: \((?P<detail>.*)\))?$"
 )
+GAIN_PRESET_SYNC_PATTERN = re.compile(r"^\[GAIN\] (?P<patch>\d{2}[A-D]): synchronized\b")
 BAD_LUFS_ROW_BACKGROUND = QColor("#fee2e2")
+BAD_LUFS_FOREGROUND = QColor("#b91c1c")
+NORMALIZATION_FOCUS_BLUE = QColor("#2563eb")
+NORMALIZATION_FOCUS_BACKGROUND = QColor("#dbeafe")
 MANUAL_NAME_MODIFIED_BACKGROUND = QColor("#fef3c7")
 HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
 HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
@@ -156,6 +162,13 @@ MEASUREMENT_TIMING_PRESETS: dict[str, dict[str, float]] = {
         "round_trip_latency": 0.001,
     },
 }
+
+
+@dataclass(frozen=True)
+class _PresetSelectionState:
+    checked_patches: frozenset[str]
+    selected_patches: frozenset[str]
+    current_patch: str | None
 
 
 @dataclass(frozen=True)
@@ -340,11 +353,15 @@ def _reference_audio_seconds(path: Path | str) -> float:
 
 
 PRESET_TABLE_CSV_DELIMITER = "|"
+SNAPSHOT_TABLE_START_COLUMN = 3
+SNAPSHOT_TABLE_COLUMN_STRIDE = 3
 PRESET_TABLE_ATTENTION_ROLE = Qt.ItemDataRole.UserRole + 1
 ADJUSTMENT_VALUE_ROLE = Qt.ItemDataRole.UserRole + 2
 MANUAL_NAME_MODIFIED_ROLE = Qt.ItemDataRole.UserRole + 3
 BAD_LUFS_HIGHLIGHT_ROLE = Qt.ItemDataRole.UserRole + 4
 RECORDED_OUTPUT_PATH_ROLE = Qt.ItemDataRole.UserRole + 5
+SNAPSHOT_OUTPUT_LEVELS_ROLE = Qt.ItemDataRole.UserRole + 6
+NORMALIZATION_FOCUS_ROLE = Qt.ItemDataRole.UserRole + 7
 CUSTOM_ADJUSTMENT_COLOR = "#2563eb"
 PROCESSING_DOT_GREY = "#9ca3af"
 PROCESSING_DOT_GREEN = "#16a34a"
@@ -649,6 +666,8 @@ class MainWindow(QMainWindow):
         self._optimization_stability_tolerance = 2.0
         self._last_measurement_optimization_settings: MeasurementOptimizationSettings | None = None
         self._measurement_progress_estimate: _MeasurementProgressEstimate | None = None
+        self._deferred_gain_correction_logs: list[str] = []
+        self._deferred_gain_correction_patch: str | None = None
         self._playback_toggle_path: Path | None = None
         self._recording_paths: dict[tuple[str, int], Path] = {}
         self._save_as_icon = _save_as_icon()
@@ -808,8 +827,9 @@ class MainWindow(QMainWindow):
         self.device_action = toolbar.addWidget(self.device)
 
         self.record_output_button = QToolButton(self)
-        self.record_output_button.setIcon(self._record_off_icon)
+        self.record_output_button.setIcon(self._record_icon)
         self.record_output_button.setCheckable(True)
+        self.record_output_button.setChecked(True)
         self.record_output_button.setToolTip(
             "Record measured processor output for each snapshot during normalization."
         )
@@ -1883,14 +1903,16 @@ class MainWindow(QMainWindow):
         preset_item.setText(preset_name)
         preset_item.setData(Qt.ItemDataRole.UserRole, tuple(snapshot_names))
         for snapshot_index, (adjustment_text, adjustment) in enumerate(adjustments):
-            name_item = self.preset_table.item(row, 3 + snapshot_index * 2)
-            adjustment_item = self.preset_table.item(row, 4 + snapshot_index * 2)
+            name_column = self._snapshot_name_column(snapshot_index)
+            adjustment_column = self._snapshot_adjustment_column(snapshot_index)
+            name_item = self.preset_table.item(row, name_column)
+            adjustment_item = self.preset_table.item(row, adjustment_column)
             if name_item is None:
                 name_item = QTableWidgetItem()
-                self.preset_table.setItem(row, 3 + snapshot_index * 2, name_item)
+                self.preset_table.setItem(row, name_column, name_item)
             if adjustment_item is None:
                 adjustment_item = QTableWidgetItem()
-                self.preset_table.setItem(row, 4 + snapshot_index * 2, adjustment_item)
+                self.preset_table.setItem(row, adjustment_column, adjustment_item)
             self._set_snapshot_name(
                 name_item,
                 snapshot_names[snapshot_index],
@@ -1913,12 +1935,15 @@ class MainWindow(QMainWindow):
             self.preset_table.item(row, 1).text() if self.preset_table.item(row, 1) else "",
             self.preset_table.item(row, 2).text() if self.preset_table.item(row, 2) else "",
         ]
-        for column in range(3, self.preset_table.columnCount(), 2):
-            name = self.preset_table.item(row, column)
-            adjustment = self.preset_table.item(row, column + 1)
+        for snapshot_index in range(self.snapshot_count):
+            name = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
+            adjustment = self.preset_table.item(
+                row,
+                self._snapshot_adjustment_column(snapshot_index),
+            )
             adjustment_value = ""
             if adjustment is not None:
-                if adjustment.text() == "⚠️":
+                if adjustment.data(BAD_LUFS_HIGHLIGHT_ROLE):
                     adjustment_value = adjustment.text()
                 else:
                     stored_value = adjustment.data(ADJUSTMENT_VALUE_ROLE)
@@ -2226,6 +2251,7 @@ class MainWindow(QMainWindow):
         self.preset_snapshot_positions.clear()
         self._recording_paths.clear()
         self._clear_bad_lufs_highlights()
+        self._clear_normalization_focus()
         self._load_metadata()
         is_single_preset = path.suffix.lower() == ".hlx"
         self._show_loaded_preset_state(single_preset=is_single_preset)
@@ -2278,6 +2304,10 @@ class MainWindow(QMainWindow):
                     self.preset_table.setItem(row, 2, QTableWidgetItem(assignment.name))
                     self._clear_preset_adjustments(row)
                     self._set_snapshot_names(row, assignment.snapshot_names)
+                    self._set_snapshot_output_levels(
+                        row,
+                        getattr(assignment, "snapshot_output_levels", ()),
+                    )
                 self._refresh_preset_table_editable_flags()
         except Exception as exc:  # noqa: BLE001
             self._show_preset_empty_state()
@@ -2314,6 +2344,7 @@ class MainWindow(QMainWindow):
         snapshot_names = getattr(assignment, "snapshot_names", ())
         if not isinstance(snapshot_names, tuple):
             snapshot_names = tuple(snapshot_names)
+        snapshot_output_levels = getattr(assignment, "snapshot_output_levels", ())
         with self._sorting_paused():
             self.preset_table.setRowCount(0)
             self.preset_table.insertRow(0)
@@ -2324,6 +2355,7 @@ class MainWindow(QMainWindow):
             self.preset_table.setItem(0, 2, QTableWidgetItem(preset_name))
             self._clear_preset_adjustments(0)
             self._set_snapshot_names(0, snapshot_names)
+            self._set_snapshot_output_levels(0, snapshot_output_levels)
             self._refresh_preset_table_editable_flags()
 
     def _load_metadata(self) -> None:
@@ -2638,7 +2670,10 @@ class MainWindow(QMainWindow):
         self.log.clear()
         self.log_entries.clear()
         self.preset_snapshot_positions.clear()
+        self._deferred_gain_correction_logs.clear()
+        self._deferred_gain_correction_patch = None
         self._clear_bad_lufs_highlights()
+        self._clear_normalization_focus()
         self._adjusted_presets.clear()
         with self._sorting_paused():
             for row in range(self.preset_table.rowCount()):
@@ -2870,6 +2905,8 @@ class MainWindow(QMainWindow):
         if event.phase:
             self._set_phase(event.phase)
             self._hide_progress()
+            if event.phase == "completed":
+                self._apply_deferred_gain_correction_logs()
             if event.phase in {
                 "completed",
                 "waiting_for_measurement_import",
@@ -2898,6 +2935,8 @@ class MainWindow(QMainWindow):
         elif event.kind == "measurement_completed":
             self._hide_progress()
 
+        self._update_normalization_focus(event)
+
         if event.lufs is not None:
             if event.device_patch:
                 text = self._preset_progress_text(event)
@@ -2917,9 +2956,13 @@ class MainWindow(QMainWindow):
 
         message = event.message or event.kind.replace("_", " ")
         if event.kind == "log":
-            self._apply_gain_correction(message)
+            self._handle_gain_correction_log(message)
         elif event.kind == "snapshot_completed":
             self._apply_snapshot_measurement(event)
+        elif event.kind == "snapshot_failed":
+            self._apply_snapshot_measurement_failure(event)
+        elif event.kind == "preset_completed":
+            self._apply_deferred_gain_correction_logs(event.device_patch)
         if event.lufs is not None and event.crest_factor_db is not None:
             message += f": {event.lufs:.3f} LUFS, {event.crest_factor_db:.3f} dB crest"
         if event.kind == "temp_retained" and event.path:
@@ -2928,11 +2971,56 @@ class MainWindow(QMainWindow):
         if event.kind == "snapshot_recorded" and event.path:
             self._set_recorded_output(event)
 
-        if "bad LUFS" in message or message.startswith("[WARNING]"):
+        if (
+            "bad LUFS" in message
+            or "measurement unavailable" in message
+            or message.startswith("[WARNING]")
+        ):
             level = "warning"
         else:
             level = "error" if event.kind in {"error_log", "preset_failed"} else "debug"
         self._log(message, level)
+
+    def _update_normalization_focus(self, event: ProgressEvent) -> None:
+        if event.kind in {"measurement_completed", "preset_failed"} or (
+            event.kind == "phase"
+            and event.phase
+            in {
+                "completed",
+                "error",
+                "waiting_for_measurement_import",
+                "waiting_for_adjusted_import",
+                "normalization_cancelled_by_user",
+            }
+        ):
+            self._clear_normalization_focus()
+            return
+
+        if event.kind == "preset_completed":
+            self._set_normalization_focus(event.device_patch, None)
+            return
+
+        if event.kind == "preset_started":
+            self._set_normalization_focus(event.device_patch, None)
+            return
+
+        if event.kind == "snapshot_started":
+            self._set_normalization_focus(event.device_patch, event.snapshot)
+
+    def _set_normalization_focus(self, device_patch: str | None, snapshot: int | None) -> None:
+        if device_patch is None:
+            return
+        row = self._preset_row(device_patch)
+        if row is None:
+            return
+        snapshot_index = None if snapshot is None else snapshot - 1
+        if snapshot_index is not None and not 0 <= snapshot_index < self.snapshot_count:
+            snapshot_index = None
+        self.preset_table.set_normalization_focus(row, snapshot_index)
+
+    def _clear_normalization_focus(self) -> None:
+        if hasattr(self, "preset_table"):
+            self.preset_table.clear_normalization_focus()
 
     def _set_recorded_output(self, event: ProgressEvent) -> None:
         if not event.device_patch or event.snapshot is None or event.path is None:
@@ -2940,7 +3028,7 @@ class MainWindow(QMainWindow):
         row = self._preset_row(event.device_patch)
         if row is None:
             return
-        column = 3 + (event.snapshot - 1) * 2 + 1
+        column = self._snapshot_adjustment_column(event.snapshot - 1)
         item = self.preset_table.item(row, column)
         if item is None:
             return
@@ -2986,6 +3074,7 @@ class MainWindow(QMainWindow):
             button.setIconSize(QSize(14, 14))
             button.setFixedSize(22, 22)
             button.setToolTip("Play recorded snapshot output.")
+            button.setEnabled(not self._normalization_in_progress())
             button.clicked.connect(
                 lambda checked=False, path=Path(recorded_path): self._play_recording(path)
             )
@@ -2994,6 +3083,10 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _style_adjustment_cell_widget(widget: QWidget, item: QTableWidgetItem) -> None:
+        MainWindow._style_table_cell_widget(widget, item)
+
+    @staticmethod
+    def _style_table_cell_widget(widget: QWidget, item: QTableWidgetItem) -> None:
         table = item.tableWidget()
         palette = widget.palette()
         background = item.background()
@@ -3010,9 +3103,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _style_adjustment_label(label: QLabel, item: QTableWidgetItem) -> None:
-        font = item.font()
-        font.setBold(False)
-        label.setFont(font)
+        label.setFont(item.font())
         color = item.foreground().color()
         if color.isValid():
             label.setStyleSheet(f"color: {color.name()};")
@@ -3020,6 +3111,8 @@ class MainWindow(QMainWindow):
             label.setStyleSheet("")
 
     def _play_recording(self, path: Path) -> None:
+        if self._normalization_in_progress():
+            return
         if self.playback_worker is not None and self.playback_worker.isRunning():
             return
         windows_python = self.completed_request.windows_python if self.completed_request else None
@@ -3031,6 +3124,16 @@ class MainWindow(QMainWindow):
 
     def _playback_finished(self) -> None:
         self.playback_worker = None
+
+    def _normalization_in_progress(self) -> bool:
+        return self.worker is not None and self.worker.isRunning()
+
+    def _refresh_recorded_output_buttons(self) -> None:
+        for row in range(self.preset_table.rowCount()):
+            for snapshot_index in range(self.snapshot_count):
+                item = self.preset_table.item(row, self._snapshot_adjustment_column(snapshot_index))
+                if item is not None and item.data(RECORDED_OUTPUT_PATH_ROLE):
+                    self._refresh_adjustment_cell_widget(item)
 
     def _show_indeterminate_progress(self, message: str) -> None:
         progress_was_hidden = self.progress_group.isHidden()
@@ -3110,6 +3213,7 @@ class MainWindow(QMainWindow):
     def _save_to_path(self, output_path: Path, *, make_active: bool = True) -> bool:
         request = self.completed_request
         result = self.completed_result
+        preserved_preset_selection = self._preset_selection_state()
         if not self.input_path.text().strip():
             self.show_error("Open a Helix .hls or .hlx file before saving")
             return False
@@ -3130,6 +3234,7 @@ class MainWindow(QMainWindow):
                 self._activate_saved_file(
                     output_path,
                     preserved_single_preset_slot=preserved_single_preset_slot,
+                    preserved_preset_selection=preserved_preset_selection,
                 )
             return True
 
@@ -3205,6 +3310,7 @@ class MainWindow(QMainWindow):
             self._activate_saved_file(
                 output_path,
                 preserved_single_preset_slot=preserved_single_preset_slot,
+                preserved_preset_selection=preserved_preset_selection,
             )
         else:
             self._reset_preset_table_modified()
@@ -3222,6 +3328,7 @@ class MainWindow(QMainWindow):
         path: Path,
         *,
         preserved_single_preset_slot: str | None = None,
+        preserved_preset_selection: _PresetSelectionState | None = None,
     ) -> None:
         self.input_path.setText(str(path))
         self._preset_load_discard_confirmed = True
@@ -3229,6 +3336,8 @@ class MainWindow(QMainWindow):
             self.load_assignments()
         finally:
             self._preset_load_discard_confirmed = False
+        if preserved_preset_selection is not None and path.suffix.lower() != ".hlx":
+            self._restore_preset_selection_state(preserved_preset_selection)
         if preserved_single_preset_slot is None or path.suffix.lower() != ".hlx":
             return
         item = self.preset_table.item(0, 1)
@@ -3287,11 +3396,14 @@ class MainWindow(QMainWindow):
         return False
 
     def _discard_preset_table_changes(self) -> None:
+        preserved_preset_selection = self._preset_selection_state()
         self._preset_load_discard_confirmed = True
         try:
             self.load_assignments()
         finally:
             self._preset_load_discard_confirmed = False
+        if Path(self.input_path.text()).suffix.lower() != ".hlx":
+            self._restore_preset_selection_state(preserved_preset_selection)
 
     def _confirm_overwrite(self, output_path: Path) -> bool:
         if not output_path.exists():
@@ -3348,6 +3460,9 @@ class MainWindow(QMainWindow):
         self.start_cancel_stack.setCurrentWidget(self.start_button)
         self.worker = None
         self._measurement_progress_estimate = None
+        self._clear_normalization_focus()
+        self._apply_deferred_gain_correction_logs()
+        self._refresh_recorded_output_buttons()
         self._refresh_file_actions()
 
     def _discard_completed_export(self) -> None:
@@ -3475,6 +3590,72 @@ class MainWindow(QMainWindow):
             ):
                 selected.append(patch_item.text())
         return ",".join(selected)
+
+    def _preset_selection_state(self) -> _PresetSelectionState:
+        checked_patches: set[str] = set()
+        for row in range(self.preset_table.rowCount()):
+            selected_item = self.preset_table.item(row, 0)
+            patch_item = self.preset_table.item(row, 1)
+            if (
+                selected_item is not None
+                and patch_item is not None
+                and selected_item.checkState() == Qt.CheckState.Checked
+            ):
+                checked_patches.add(patch_item.text())
+
+        selected_patches = {
+            self.preset_table.item(index.row(), 1).text()
+            for index in self.preset_table.selectionModel().selectedIndexes()
+            if self.preset_table.item(index.row(), 1) is not None
+        }
+        current_patch = None
+        current_row = self.preset_table.currentRow()
+        if current_row >= 0:
+            current_item = self.preset_table.item(current_row, 1)
+            if current_item is not None:
+                current_patch = current_item.text()
+        return _PresetSelectionState(
+            checked_patches=frozenset(checked_patches),
+            selected_patches=frozenset(selected_patches),
+            current_patch=current_patch,
+        )
+
+    def _restore_preset_selection_state(self, state: _PresetSelectionState) -> None:
+        signals_blocked = self.preset_table.blockSignals(True)
+        try:
+            for row in range(self.preset_table.rowCount()):
+                selected_item = self.preset_table.item(row, 0)
+                patch_item = self.preset_table.item(row, 1)
+                if selected_item is None or patch_item is None:
+                    continue
+                selected_item.setCheckState(
+                    Qt.CheckState.Checked
+                    if patch_item.text() in state.checked_patches
+                    else Qt.CheckState.Unchecked
+                )
+        finally:
+            self.preset_table.blockSignals(signals_blocked)
+
+        selection_model = self.preset_table.selectionModel()
+        selection_model.clearSelection()
+        for patch in state.selected_patches:
+            row = self._preset_row(patch)
+            if row is None:
+                continue
+            selection_model.select(
+                self.preset_table.model().index(row, 0),
+                QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+            )
+        if state.current_patch is None:
+            self._refresh_preset_measurement_time_estimate()
+            return
+        current_row = self._preset_row(state.current_patch)
+        if current_row is not None:
+            selection_model.setCurrentIndex(
+                self.preset_table.model().index(current_row, 0),
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
+        self._refresh_preset_measurement_time_estimate()
 
     def _single_preset_slot_text(self) -> str:
         item = self.preset_table.item(0, 1)
@@ -3613,11 +3794,15 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _is_manual_adjustment_column(column: int) -> bool:
-        return column == 2 or column >= 3
+        return (
+            column == 2
+            or MainWindow._is_snapshot_name_column(column)
+            or MainWindow._is_snapshot_adjustment_column(column)
+        )
 
     @staticmethod
     def _is_name_column(column: int) -> bool:
-        return column == 2 or (column >= 3 and column % 2 == 1)
+        return column == 2 or MainWindow._is_snapshot_name_column(column)
 
     @staticmethod
     def _set_preset_item_editable(item: QTableWidgetItem, editable: bool) -> None:
@@ -3676,9 +3861,9 @@ class MainWindow(QMainWindow):
                 item.setText(value.strip().upper())
             elif column == 2:
                 item.setText(self._sanitize_helix_name(value, self._preset_name_max_length()))
-            elif column % 2:
+            elif self._is_snapshot_name_column(column):
                 item.setText(self._sanitize_helix_name(value, self._snapshot_name_max_length()))
-            else:
+            elif self._is_snapshot_adjustment_column(column):
                 try:
                     delta = float(value)
                 except ValueError:
@@ -3703,7 +3888,7 @@ class MainWindow(QMainWindow):
     def _manual_name_max_length(self, column: int) -> int | None:
         if column == 2:
             return self._preset_name_max_length()
-        if column % 2:
+        if self._is_snapshot_name_column(column):
             return self._snapshot_name_max_length()
         return None
 
@@ -3747,16 +3932,19 @@ class MainWindow(QMainWindow):
             )
             patch_snapshot_names = {}
             patch_gain_deltas = {}
-            for snapshot_index, column in enumerate(range(3, self.preset_table.columnCount(), 2)):
-                name_item = self.preset_table.item(row, column)
-                adjustment_item = self.preset_table.item(row, column + 1)
+            for snapshot_index in range(self.snapshot_count):
+                name_item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
+                adjustment_item = self.preset_table.item(
+                    row,
+                    self._snapshot_adjustment_column(snapshot_index),
+                )
                 if name_item is not None:
                     patch_snapshot_names[snapshot_index] = self._validate_helix_name(
                         name_item.text(),
                         self._snapshot_name_max_length(),
                     )
                 if adjustment_item is not None:
-                    if adjustment_item.text() == "⚠️":
+                    if adjustment_item.data(BAD_LUFS_HIGHLIGHT_ROLE):
                         continue
                     stored_value = adjustment_item.data(ADJUSTMENT_VALUE_ROLE)
                     if isinstance(stored_value, (int, float)) and not isinstance(
@@ -3794,12 +3982,56 @@ class MainWindow(QMainWindow):
         )
         self.phase_icon.setPixmap(icon.pixmap(16, 16))
 
-    def _apply_gain_correction(self, message: str) -> None:
-        match = (
+    def _handle_gain_correction_log(self, message: str) -> None:
+        sync_match = GAIN_PRESET_SYNC_PATTERN.match(message)
+        if sync_match is not None:
+            self._apply_deferred_gain_correction_logs(sync_match["patch"])
+            return
+
+        match = self._gain_correction_match(message)
+        if match is None:
+            return
+
+        patch = match["patch"]
+        if (
+            self._deferred_gain_correction_patch is not None
+            and patch != self._deferred_gain_correction_patch
+        ):
+            self._apply_deferred_gain_correction_logs(self._deferred_gain_correction_patch)
+        self._deferred_gain_correction_logs.append(message)
+        self._deferred_gain_correction_patch = patch
+
+    def _apply_deferred_gain_correction_logs(self, device_patch: str | None = None) -> None:
+        remaining: list[str] = []
+        remaining_patches: set[str] = set()
+        for message in self._deferred_gain_correction_logs:
+            match = self._gain_correction_match(message)
+            if (
+                device_patch is not None
+                and match is not None
+                and match.groupdict().get("patch") != device_patch
+            ):
+                remaining.append(message)
+                remaining_patches.add(match["patch"])
+                continue
+            self._apply_gain_correction(message)
+        self._deferred_gain_correction_logs = remaining
+        self._deferred_gain_correction_patch = next(iter(remaining_patches), None)
+
+    @staticmethod
+    def _is_gain_correction_log(message: str) -> bool:
+        return MainWindow._gain_correction_match(message) is not None
+
+    @staticmethod
+    def _gain_correction_match(message: str) -> re.Match[str] | None:
+        return (
             GAIN_CORRECTION_PATTERN.match(message)
             or GAIN_STABLE_PATTERN.match(message)
             or GAIN_BAD_LUFS_PATTERN.match(message)
         )
+
+    def _apply_gain_correction(self, message: str) -> None:
+        match = self._gain_correction_match(message)
         if match is None:
             return
 
@@ -3820,28 +4052,39 @@ class MainWindow(QMainWindow):
         is_solo = label.endswith(" (S)")
         if is_solo:
             label = label[:-4]
-        name_column = 3 + snapshot_position * 2
-        adjustment_column = name_column + 1
+        name_column = self._snapshot_name_column(snapshot_position)
+        output_column = self._snapshot_output_column(snapshot_position)
+        adjustment_column = self._snapshot_adjustment_column(snapshot_position)
         name_item = self.preset_table.item(row, name_column)
+        output_item = self.preset_table.item(row, output_column)
         adjustment_item = self.preset_table.item(row, adjustment_column)
-        if name_item is None or adjustment_item is None:
+        if name_item is None or output_item is None or adjustment_item is None:
             return
         if not name_item.text():
             self._set_snapshot_name(name_item, label, is_solo)
         if match.re is GAIN_BAD_LUFS_PATTERN:
-            adjustment_item.setText("⚠️")
+            detail = match.groupdict().get("detail")
+            display_text, tooltip = _bad_lufs_adjustment_display(
+                detail,
+                adjustment=_bad_lufs_adjustment(detail, output_item.text()),
+            )
+            adjustment_item.setText(display_text)
             adjustment_item.setData(ADJUSTMENT_VALUE_ROLE, None)
-            adjustment_item.setToolTip("This snapshot produced an unusable LUFS measurement.")
-            adjustment_item.setForeground(QBrush(QColor("#b45309")))
+            adjustment_item.setToolTip(tooltip)
+            adjustment_item.setForeground(QBrush(BAD_LUFS_FOREGROUND))
             font = adjustment_item.font()
-            font.setBold(False)
+            font.setBold(True)
             font.setPointSize(max(QApplication.font().pointSize(), 9))
             adjustment_item.setFont(font)
             self._refresh_adjustment_cell_widget(adjustment_item)
-            self._set_bad_lufs_highlight(row)
+            self._set_bad_lufs_highlight(row, snapshot_position)
             self._adjusted_presets.add(match["patch"])
             self.preset_snapshot_positions[match["patch"]] = snapshot_position + 1
             return
+
+        output_level = match.groupdict().get("before") or match.groupdict().get("after")
+        if output_level is not None:
+            self._set_output_level(output_item, output_level)
 
         actual_adjustment = float(match["delta"])
         custom_adjustment = self._custom_adjustment_for_snapshot(
@@ -3882,7 +4125,7 @@ class MainWindow(QMainWindow):
         if snapshot_index < 0 or snapshot_index >= self.snapshot_count:
             return
 
-        adjustment_column = 4 + snapshot_index * 2
+        adjustment_column = self._snapshot_adjustment_column(snapshot_index)
         adjustment_item = self.preset_table.item(row, adjustment_column)
         if adjustment_item is None:
             return
@@ -3890,7 +4133,7 @@ class MainWindow(QMainWindow):
         policy = self._normalization_policy()
         gain_delta = self._measurement_gain_delta(event, policy)
 
-        name_item = self.preset_table.item(row, 3 + snapshot_index * 2)
+        name_item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
         is_solo = name_item is not None and self._is_solo_snapshot_name(name_item.text())
         if is_solo:
             gain_delta += policy.solo_gain_bump_db
@@ -3901,6 +4144,21 @@ class MainWindow(QMainWindow):
         display_adjustment = (
             gain_delta - custom_adjustment if custom_adjustment is not None else gain_delta
         )
+        implausible_output_gain = self._implausible_snapshot_output_gain(
+            event.device_patch,
+            snapshot_index,
+            gain_delta,
+        )
+        if implausible_output_gain is not None:
+            self._set_bad_snapshot_measurement(
+                row,
+                snapshot_index,
+                f"Implausible output gain {implausible_output_gain:g} dB",
+                adjustment=display_adjustment,
+            )
+            self._adjusted_presets.add(event.device_patch)
+            return
+
         self._set_adjustment_value(
             adjustment_item,
             _format_adjustment(display_adjustment),
@@ -3910,6 +4168,72 @@ class MainWindow(QMainWindow):
         )
         self._refresh_adjustment_cell_widget(adjustment_item)
         self._adjusted_presets.add(event.device_patch)
+
+    def _apply_snapshot_measurement_failure(self, event: ProgressEvent) -> None:
+        if event.device_patch is None or event.snapshot is None:
+            return
+
+        row = self._preset_row(event.device_patch)
+        if row is None:
+            return
+
+        selected = self.preset_table.item(row, 0)
+        if selected is None or selected.checkState() != Qt.CheckState.Checked:
+            return
+
+        snapshot_index = event.snapshot - 1
+        if snapshot_index < 0 or snapshot_index >= self.snapshot_count:
+            return
+
+        self._set_bad_snapshot_measurement(row, snapshot_index, event.message)
+        self._adjusted_presets.add(event.device_patch)
+
+    def _set_bad_snapshot_measurement(
+        self,
+        row: int,
+        snapshot_index: int,
+        detail: str | None = None,
+        *,
+        adjustment: float | None = None,
+    ) -> None:
+        adjustment_item = self.preset_table.item(
+            row,
+            self._snapshot_adjustment_column(snapshot_index),
+        )
+        if adjustment_item is None:
+            return
+
+        display_text, tooltip = _bad_lufs_adjustment_display(detail, adjustment=adjustment)
+        if detail and display_text == "Measurement failed ⚠️":
+            tooltip = f"{tooltip}\n\nMeasurement detail: {detail}"
+        adjustment_item.setText(display_text)
+        adjustment_item.setData(ADJUSTMENT_VALUE_ROLE, None)
+        adjustment_item.setToolTip(tooltip)
+        adjustment_item.setForeground(QBrush(BAD_LUFS_FOREGROUND))
+        font = adjustment_item.font()
+        font.setBold(True)
+        font.setPointSize(max(QApplication.font().pointSize(), 9))
+        adjustment_item.setFont(font)
+        self._refresh_adjustment_cell_widget(adjustment_item)
+        self._set_bad_lufs_highlight(row, snapshot_index)
+
+    def _implausible_snapshot_output_gain(
+        self,
+        patch: str,
+        snapshot_index: int,
+        gain_delta: float,
+    ) -> float | None:
+        row = self._preset_row(patch)
+        if row is None:
+            return None
+        item = self.preset_table.item(row, self._snapshot_output_column(snapshot_index))
+        if item is None:
+            return None
+        for value in _parse_output_level_display_text(item.text()):
+            output_gain = round(value + gain_delta, 2)
+            if not -120.0 <= output_gain <= 20.0:
+                return output_gain
+        return None
 
     def _normalization_policy(self) -> NormalizationPolicy:
         if self.completed_request is not None:
@@ -3949,7 +4273,7 @@ class MainWindow(QMainWindow):
         self.snapshot_count = snapshot_count
         labels = ["", "Preset", "Name"]
         for snapshot in range(1, snapshot_count + 1):
-            labels.extend([str(snapshot), "Δ (dB)"])
+            labels.extend([str(snapshot), "Out (dB)", "Δ (dB)"])
         with self._sorting_paused():
             self.preset_table.setColumnCount(len(labels))
             self.preset_table.setHorizontalHeaderLabels(labels)
@@ -3964,10 +4288,18 @@ class MainWindow(QMainWindow):
             self.preset_table.setColumnWidth(0, selection_width)
             self.preset_table.setColumnWidth(1, 52)
             self.preset_table.setColumnWidth(2, 120)
+            output_width = self._output_level_column_width()
             adjustment_width = self._adjustment_column_width()
-            for column in range(3, len(labels), 2):
-                self.preset_table.setColumnWidth(column, 100)
-                self.preset_table.setColumnWidth(column + 1, adjustment_width)
+            for snapshot_index in range(snapshot_count):
+                self.preset_table.setColumnWidth(self._snapshot_name_column(snapshot_index), 100)
+                self.preset_table.setColumnWidth(
+                    self._snapshot_output_column(snapshot_index),
+                    output_width,
+                )
+                self.preset_table.setColumnWidth(
+                    self._snapshot_adjustment_column(snapshot_index),
+                    adjustment_width,
+                )
             for column, tooltip in enumerate(
                 [
                     "Include this preset in normalization.",
@@ -3978,6 +4310,7 @@ class MainWindow(QMainWindow):
                         for snapshot in range(1, snapshot_count + 1)
                         for tooltip in (
                             f"Name of snapshot {snapshot} read from the input file.",
+                            f"Current output block level for snapshot {snapshot}.",
                             f"Calculated gain adjustment for snapshot {snapshot}.",
                         )
                     ),
@@ -3989,6 +4322,7 @@ class MainWindow(QMainWindow):
             for row in range(self.preset_table.rowCount()):
                 self._clear_preset_adjustments(row)
                 self._refresh_snapshot_names(row)
+                self._refresh_snapshot_output_levels(row)
 
     def _snapshot_count_changed(self, snapshot_count: int) -> None:
         if hasattr(self, "preset_table"):
@@ -3998,6 +4332,43 @@ class MainWindow(QMainWindow):
         sample = "+12.5 (+12.5)"
         padding = 18
         return max(92, self.preset_table.fontMetrics().horizontalAdvance(sample) + padding)
+
+    def _output_level_column_width(self) -> int:
+        sample = "Out (dB)"
+        value_sample = "-60.0, -60.0"
+        padding = 18
+        metrics = self.preset_table.fontMetrics()
+        return max(
+            64,
+            metrics.horizontalAdvance(sample) + padding,
+            metrics.horizontalAdvance(value_sample) + padding,
+        )
+
+    @staticmethod
+    def _snapshot_name_column(snapshot_index: int) -> int:
+        return SNAPSHOT_TABLE_START_COLUMN + snapshot_index * SNAPSHOT_TABLE_COLUMN_STRIDE
+
+    @staticmethod
+    def _snapshot_output_column(snapshot_index: int) -> int:
+        return MainWindow._snapshot_name_column(snapshot_index) + 1
+
+    @staticmethod
+    def _snapshot_adjustment_column(snapshot_index: int) -> int:
+        return MainWindow._snapshot_name_column(snapshot_index) + 2
+
+    @staticmethod
+    def _is_snapshot_name_column(column: int) -> bool:
+        return (
+            column >= SNAPSHOT_TABLE_START_COLUMN
+            and (column - SNAPSHOT_TABLE_START_COLUMN) % SNAPSHOT_TABLE_COLUMN_STRIDE == 0
+        )
+
+    @staticmethod
+    def _is_snapshot_adjustment_column(column: int) -> bool:
+        return (
+            column >= SNAPSHOT_TABLE_START_COLUMN
+            and (column - SNAPSHOT_TABLE_START_COLUMN) % SNAPSHOT_TABLE_COLUMN_STRIDE == 2
+        )
 
     @contextmanager
     def _sorting_paused(self) -> Iterator[None]:
@@ -4013,32 +4384,45 @@ class MainWindow(QMainWindow):
         if patch is not None:
             self._adjusted_presets.discard(patch.text())
         self._clear_bad_lufs_highlight(row)
-        for column in range(3, self.preset_table.columnCount(), 2):
-            name = self.preset_table.item(row, column)
-            adjustment = self.preset_table.item(row, column + 1)
+        for snapshot_index in range(self.snapshot_count):
+            name_column = self._snapshot_name_column(snapshot_index)
+            output_column = self._snapshot_output_column(snapshot_index)
+            adjustment_column = self._snapshot_adjustment_column(snapshot_index)
+            name = self.preset_table.item(row, name_column)
+            output = self.preset_table.item(row, output_column)
+            adjustment = self.preset_table.item(row, adjustment_column)
             if name is None:
                 name = QTableWidgetItem()
-                self.preset_table.setItem(row, column, name)
+                self.preset_table.setItem(row, name_column, name)
+            if output is None:
+                output = QTableWidgetItem()
+                self.preset_table.setItem(row, output_column, output)
             if adjustment is None:
                 adjustment = QTableWidgetItem()
-                self.preset_table.setItem(row, column + 1, adjustment)
+                self.preset_table.setItem(row, adjustment_column, adjustment)
             self._set_preset_item_editable(
                 name,
+                False,
+            )
+            self._set_preset_item_editable(
+                output,
                 False,
             )
             self._set_preset_item_editable(
                 adjustment,
                 False,
             )
+            self._set_output_level(output, "")
             adjustment.setData(RECORDED_OUTPUT_PATH_ROLE, None)
             self._set_adjustment_value(adjustment, "+0", 0)
+        self._refresh_snapshot_output_levels(row)
 
     def _mark_selected_preset_adjustments_pending(self, row: int) -> None:
         selected = self.preset_table.item(row, 0)
         if selected is None or selected.checkState() != Qt.CheckState.Checked:
             return
-        for column in range(4, self.preset_table.columnCount(), 2):
-            item = self.preset_table.item(row, column)
+        for snapshot_index in range(self.snapshot_count):
+            item = self.preset_table.item(row, self._snapshot_adjustment_column(snapshot_index))
             if item is not None:
                 self._set_adjustment_pending(item)
 
@@ -4062,14 +4446,22 @@ class MainWindow(QMainWindow):
             if table is not None:
                 table.blockSignals(signals_blocked)
 
-    def _set_bad_lufs_highlight(self, row: int) -> None:
+    def _set_bad_lufs_highlight(self, row: int, snapshot_index: int) -> None:
         signals_blocked = self.preset_table.blockSignals(True)
         try:
-            for column in range(self.preset_table.columnCount()):
+            columns = (
+                1,
+                2,
+                self._snapshot_name_column(snapshot_index),
+                self._snapshot_output_column(snapshot_index),
+                self._snapshot_adjustment_column(snapshot_index),
+            )
+            for column in columns:
                 item = self.preset_table.item(row, column)
                 if item is not None:
                     item.setData(BAD_LUFS_HIGHLIGHT_ROLE, True)
                     self._refresh_preset_item_background(item)
+                    self._refresh_preset_cell_widget_background(item)
         finally:
             self.preset_table.blockSignals(signals_blocked)
 
@@ -4081,6 +4473,7 @@ class MainWindow(QMainWindow):
                 if item is not None:
                     item.setData(BAD_LUFS_HIGHLIGHT_ROLE, None)
                     self._refresh_preset_item_background(item)
+                    self._refresh_preset_cell_widget_background(item)
         finally:
             self.preset_table.blockSignals(signals_blocked)
 
@@ -4107,16 +4500,44 @@ class MainWindow(QMainWindow):
     def _refresh_preset_item_background(item: QTableWidgetItem) -> None:
         if item.data(BAD_LUFS_HIGHLIGHT_ROLE):
             item.setBackground(BAD_LUFS_ROW_BACKGROUND)
+        elif item.data(NORMALIZATION_FOCUS_ROLE):
+            item.setBackground(NORMALIZATION_FOCUS_BACKGROUND)
         elif item.data(MANUAL_NAME_MODIFIED_ROLE):
             item.setBackground(MANUAL_NAME_MODIFIED_BACKGROUND)
         else:
             item.setBackground(QBrush())
+
+    @staticmethod
+    def _refresh_preset_cell_widget_background(item: QTableWidgetItem) -> None:
+        table = item.tableWidget()
+        if table is None:
+            return
+        widget = table.cellWidget(item.row(), item.column())
+        if widget is not None:
+            MainWindow._style_table_cell_widget(widget, item)
 
     def _set_snapshot_names(self, row: int, snapshot_names: tuple[str, ...]) -> None:
         name_item = self.preset_table.item(row, 2)
         if name_item is not None:
             name_item.setData(Qt.ItemDataRole.UserRole, snapshot_names)
         self._refresh_snapshot_names(row)
+
+    def _set_snapshot_output_levels(self, row: int, levels: object) -> None:
+        name_item = self.preset_table.item(row, 2)
+        if name_item is not None:
+            name_item.setData(
+                SNAPSHOT_OUTPUT_LEVELS_ROLE, _normalize_snapshot_output_levels(levels)
+            )
+        self._refresh_snapshot_output_levels(row)
+
+    def _refresh_snapshot_output_levels(self, row: int) -> None:
+        name_item = self.preset_table.item(row, 2)
+        levels = name_item.data(SNAPSHOT_OUTPUT_LEVELS_ROLE) if name_item is not None else ()
+        levels = levels if isinstance(levels, tuple) else ()
+        for snapshot_index in range(self.snapshot_count):
+            item = self.preset_table.item(row, self._snapshot_output_column(snapshot_index))
+            if item is not None:
+                self._set_output_level(item, _format_snapshot_output_levels(levels, snapshot_index))
 
     def _refresh_snapshot_names(self, row: int) -> None:
         name_item = self.preset_table.item(row, 2)
@@ -4126,12 +4547,12 @@ class MainWindow(QMainWindow):
             solo_pattern = re.compile(self.solo_regex.text())
         except re.error:
             solo_pattern = None
-        for column in range(3, self.preset_table.columnCount(), 2):
-            item = self.preset_table.item(row, column)
+        for snapshot_index in range(self.snapshot_count):
+            item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
             if item is not None:
                 self._set_snapshot_name(item, "", False)
         for snapshot, name in enumerate(snapshot_names[: self.snapshot_count]):
-            item = self.preset_table.item(row, 3 + snapshot * 2)
+            item = self.preset_table.item(row, self._snapshot_name_column(snapshot))
             if item is not None:
                 self._set_snapshot_name(
                     item,
@@ -4155,10 +4576,11 @@ class MainWindow(QMainWindow):
         if not is_solo:
             table.removeCellWidget(item.row(), item.column())
             return
-        label = QLabel(f"{escape(name)} <span style='color: #f59e0b;'>★</span>")
+        label = SnapshotNameCellWidget(f"{escape(name)} <span style='color: #f59e0b;'>★</span>")
         label.setContentsMargins(3, 0, 0, 0)
         label.setToolTip("Solo snapshot")
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        MainWindow._style_table_cell_widget(label, item)
         table.setCellWidget(item.row(), item.column(), label)
 
     def _preset_item_changed(self, item: QTableWidgetItem) -> None:
@@ -4193,7 +4615,7 @@ class MainWindow(QMainWindow):
                         item.setText(sanitized)
                     finally:
                         self.preset_table.blockSignals(signals_blocked)
-            elif item.column() % 2:
+            elif self._is_snapshot_name_column(item.column()):
                 sanitized = self._sanitize_helix_name(
                     item.text(),
                     self._snapshot_name_max_length(),
@@ -4207,7 +4629,9 @@ class MainWindow(QMainWindow):
                 name_item = self.preset_table.item(item.row(), 2)
                 if name_item is not None:
                     snapshot_names = list(name_item.data(Qt.ItemDataRole.UserRole) or ())
-                    snapshot_index = (item.column() - 3) // 2
+                    snapshot_index = (
+                        item.column() - SNAPSHOT_TABLE_START_COLUMN
+                    ) // SNAPSHOT_TABLE_COLUMN_STRIDE
                     snapshot_names.extend(
                         "" for _ in range(snapshot_index + 1 - len(snapshot_names))
                     )
@@ -4222,7 +4646,7 @@ class MainWindow(QMainWindow):
                     item.text(),
                     solo_pattern is not None and solo_pattern.search(item.text()) is not None,
                 )
-            else:
+            elif self._is_snapshot_adjustment_column(item.column()):
                 try:
                     value = float(item.text())
                 except ValueError:
@@ -4350,6 +4774,28 @@ class MainWindow(QMainWindow):
             if table is not None:
                 table.blockSignals(signals_blocked)
 
+    @staticmethod
+    def _set_output_level(item: QTableWidgetItem, value: str | float) -> None:
+        table = item.tableWidget()
+        signals_blocked = table.blockSignals(True) if table is not None else False
+        try:
+            if isinstance(value, str):
+                text = value
+            else:
+                text = f"{value:.1f}"
+            item.setText(text)
+            item.setToolTip(f"Current output block level: {text} dB" if text else "")
+            font = item.font()
+            font.setBold(False)
+            font.setPointSize(max(QApplication.font().pointSize(), 9))
+            item.setFont(font)
+            item.setForeground(QBrush())
+            if table is not None:
+                table.removeCellWidget(item.row(), item.column())
+        finally:
+            if table is not None:
+                table.blockSignals(signals_blocked)
+
     def _resize_to_initial_content(self) -> None:
         if self.isMaximized() or self.isFullScreen():
             return
@@ -4435,7 +4881,7 @@ class MainWindow(QMainWindow):
         row = self._preset_row(event.device_patch or "")
         if row is None or event.snapshot is None:
             return text
-        name = self.preset_table.item(row, 3 + (event.snapshot - 1) * 2)
+        name = self.preset_table.item(row, self._snapshot_name_column(event.snapshot - 1))
         return f"{text}: {name.text()}" if name and name.text() else text
 
     def _preset_table_has_unsaved_changes(self) -> bool:
@@ -4518,10 +4964,72 @@ class JsonSyntaxHighlighter(QSyntaxHighlighter):
             self.setFormat(match.start(), match.end() - match.start(), self.formats[token])
 
 
+class SnapshotNameCellWidget(QLabel):
+    """Snapshot-name cell widget that keeps table group separators visible."""
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        pen = QPen(self.palette().mid().color())
+        pen.setWidth(2)
+        painter.setPen(pen)
+        painter.drawLine(0, 0, 0, self.height())
+
+
 class ContentHeightTableWidget(QTableWidget):
     """Grow with preset rows until an internal scrollbar is more useful."""
 
     MAX_VISIBLE_ROWS = 12
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._normalizing_row: int | None = None
+        self._normalizing_snapshot: int | None = None
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        self._paint_snapshot_group_separators()
+        self._paint_normalization_focus()
+
+    def set_normalization_focus(self, row: int, snapshot_index: int | None) -> None:
+        previous_row = self._normalizing_row
+        self._normalizing_row = row
+        self._normalizing_snapshot = snapshot_index
+        self._refresh_normalization_focus_background(previous_row)
+        self._refresh_normalization_focus_background(row)
+
+    def clear_normalization_focus(self) -> None:
+        if self._normalizing_row is None and self._normalizing_snapshot is None:
+            return
+        previous_row = self._normalizing_row
+        self._normalizing_row = None
+        self._normalizing_snapshot = None
+        self._refresh_normalization_focus_background(previous_row)
+
+    def _refresh_normalization_focus_background(self, row: int | None) -> None:
+        if row is None or not 0 <= row < self.rowCount():
+            return
+        focused = row == self._normalizing_row
+        focus_columns = {1, 2}
+        if focused and self._normalizing_snapshot is not None:
+            focus_columns.update(
+                (
+                    MainWindow._snapshot_name_column(self._normalizing_snapshot),
+                    MainWindow._snapshot_output_column(self._normalizing_snapshot),
+                    MainWindow._snapshot_adjustment_column(self._normalizing_snapshot),
+                )
+            )
+        for column in range(self.columnCount()):
+            item = self.item(row, column)
+            if item is None:
+                continue
+            item.setData(
+                NORMALIZATION_FOCUS_ROLE,
+                True if focused and column in focus_columns else None,
+            )
+            MainWindow._refresh_preset_item_background(item)
+            MainWindow._refresh_preset_cell_widget_background(item)
+        self.viewport().update()
 
     def sizeHint(self) -> QSize:
         hint = super().sizeHint()
@@ -4535,6 +5043,57 @@ class ContentHeightTableWidget(QTableWidget):
             )
         )
         return hint
+
+    def _paint_snapshot_group_separators(self) -> None:
+        header = self.horizontalHeader()
+        if self.columnCount() <= SNAPSHOT_TABLE_START_COLUMN:
+            return
+
+        painter = QPainter(self.viewport())
+        pen = QPen(self.palette().mid().color())
+        pen.setWidth(2)
+        painter.setPen(pen)
+        for logical_index in range(
+            SNAPSHOT_TABLE_START_COLUMN,
+            self.columnCount(),
+            SNAPSHOT_TABLE_COLUMN_STRIDE,
+        ):
+            if self.isColumnHidden(logical_index):
+                continue
+            x = header.sectionViewportPosition(logical_index)
+            if -pen.width() <= x <= self.viewport().width():
+                painter.drawLine(x, 0, x, self.viewport().height())
+
+    def _paint_normalization_focus(self) -> None:
+        if self._normalizing_row is None:
+            return
+        if not 0 <= self._normalizing_row < self.rowCount():
+            return
+
+        if self._normalizing_snapshot is None:
+            return
+
+        snapshot_rect = None
+        for column in (
+            MainWindow._snapshot_name_column(self._normalizing_snapshot),
+            MainWindow._snapshot_output_column(self._normalizing_snapshot),
+            MainWindow._snapshot_adjustment_column(self._normalizing_snapshot),
+        ):
+            if column >= self.columnCount() or self.isColumnHidden(column):
+                continue
+            cell_rect = self.visualRect(self.model().index(self._normalizing_row, column))
+            if not cell_rect.isValid():
+                continue
+            snapshot_rect = cell_rect if snapshot_rect is None else snapshot_rect.united(cell_rect)
+        if snapshot_rect is None:
+            return
+
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        snapshot_pen = QPen(NORMALIZATION_FOCUS_BLUE)
+        snapshot_pen.setWidth(3)
+        painter.setPen(snapshot_pen)
+        painter.drawRect(snapshot_rect.adjusted(0, 0, -1, -1))
 
 
 class MeasurementOptimizationSetupDialog(QDialog):
@@ -5037,6 +5596,97 @@ def _loudness_bar_color(lufs: float, target_lufs: float) -> QColor:
 
 def _format_adjustment(value: float) -> str:
     return "0" if value == 0 else f"{value:+g}"
+
+
+def _normalize_snapshot_output_levels(levels: object) -> tuple[tuple[float, ...], ...]:
+    if not isinstance(levels, (list, tuple)):
+        return ()
+
+    normalized: list[tuple[float, ...]] = []
+    for snapshot_levels in levels:
+        if not isinstance(snapshot_levels, (list, tuple)):
+            normalized.append(())
+            continue
+        values: list[float] = []
+        for level in snapshot_levels:
+            if isinstance(level, (int, float)) and not isinstance(level, bool):
+                values.append(float(level))
+        normalized.append(tuple(values))
+    return tuple(normalized)
+
+
+def _format_snapshot_output_levels(
+    levels: tuple[tuple[float, ...], ...],
+    snapshot_index: int,
+) -> str:
+    if snapshot_index >= len(levels):
+        return ""
+    return ", ".join(f"{level:.1f}" for level in levels[snapshot_index])
+
+
+def _bad_lufs_adjustment_display(
+    detail: str | None,
+    *,
+    adjustment: float | None = None,
+) -> tuple[str, str]:
+    bad_output_gain = _bad_lufs_output_gain(detail)
+    if bad_output_gain is None:
+        return (
+            "Measurement failed ⚠️",
+            "This snapshot is missing a usable LUFS or crest-factor measurement, so "
+            "MatchPatch cannot calculate a safe Line 6 Helix output block level adjustment.",
+        )
+    if adjustment is None:
+        return (
+            "Measurement failed ⚠️",
+            f"Resulting output block level would be {bad_output_gain:g} dB, outside the "
+            "Line 6 Helix supported range of -120.0 to +20.0 dB, but the current "
+            "output block level is unavailable in the table so MatchPatch cannot "
+            "display the corresponding adjustment.",
+        )
+
+    display = f"{_format_adjustment(adjustment)} ⚠️"
+    return (
+        display,
+        f"Resulting output block level would be {bad_output_gain:g} dB, outside the "
+        "Line 6 Helix supported range of -120.0 to +20.0 dB. This usually means the "
+        "measurement recorded silence or produced an unusable LUFS value.",
+    )
+
+
+def _bad_lufs_output_gain(detail: str | None) -> float | None:
+    if not detail:
+        return None
+    match = re.search(r"Implausible output gain (?P<value>[+-]?\d+(?:\.\d+)?) dB", detail)
+    if match is None:
+        return None
+    value = float(match["value"])
+    return value if math.isfinite(value) else None
+
+
+def _bad_lufs_adjustment(detail: str | None, current_output_levels: str) -> float | None:
+    bad_output_gain = _bad_lufs_output_gain(detail)
+    if bad_output_gain is None:
+        return None
+    levels = _parse_output_level_display_text(current_output_levels)
+    if len(levels) != 1:
+        return None
+    return round(bad_output_gain - levels[0], 1)
+
+
+def _parse_output_level_display_text(text: str) -> tuple[float, ...]:
+    values = []
+    for part in text.split(","):
+        value = part.strip()
+        if not value:
+            continue
+        try:
+            parsed = float(value)
+        except ValueError:
+            continue
+        if math.isfinite(parsed):
+            values.append(parsed)
+    return tuple(values)
 
 
 def _custom_adjustment_label_text(text: str) -> str:

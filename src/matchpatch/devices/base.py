@@ -16,6 +16,7 @@ class PatchAssignment:
     device_patch: str
     name: str
     snapshot_names: tuple[str, ...] = ()
+    snapshot_output_levels: tuple[tuple[float, ...], ...] = ()
 
 
 @dataclass(frozen=True)

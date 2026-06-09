@@ -15,7 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QAbstractAnimation, QCoreApplication, QEvent, QPoint
-from PySide6.QtGui import QCloseEvent, QColor, QPalette, Qt
+from PySide6.QtGui import QCloseEvent, QColor, QPalette, QPixmap, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -77,6 +77,7 @@ def _mock_single_hlx_handler(
     *,
     name: str = "example",
     snapshot_names: tuple[str, ...] = ("Clean", "Solo"),
+    snapshot_output_levels: tuple[tuple[float, ...], ...] = ((0.0,), (-3.5, -4.0)),
     assignments: list[SimpleNamespace] | None = None,
 ) -> None:
     if assignments is None:
@@ -85,6 +86,7 @@ def _mock_single_hlx_handler(
                 device_patch="01A",
                 name=name,
                 snapshot_names=snapshot_names,
+                snapshot_output_levels=snapshot_output_levels,
             )
         ]
 
@@ -422,7 +424,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.save_measurement_action.isEnabled()
     assert not window.start_button.isEnabled()
     assert not window.record_output_button.isEnabled()
-    assert not window.record_output_button.isChecked()
+    assert window.record_output_button.isChecked()
     assert not window.play_recorded_output_button.isChecked()
     assert window.log_level.currentText() == "Info"
     assert window.metadata_text.toPlainText() == "{}"
@@ -640,7 +642,9 @@ def test_single_preset_load_displays_presets_panel_with_instruction_label(monkey
     assert window.preset_table.item(0, 1).text() == ""
     assert window.preset_table.item(0, 2).text() == "Lead"
     assert window.preset_table.item(0, 3).text() == "Clean"
-    assert window.preset_table.item(0, 5).text() == "Solo"
+    assert window.preset_table.item(0, 4).text() == "0.0"
+    assert window.preset_table.item(0, 6).text() == "Solo"
+    assert window.preset_table.item(0, 7).text() == "-3.5, -4.0"
     assert window.preset_table.item(0, 1).flags() & Qt.ItemFlag.ItemIsEditable
     assert window.preset_hint.height() == window.preset_hint.sizeHint().height()
     assert window.preset_hint.text() == (
@@ -785,6 +789,7 @@ def test_setlist_load_enables_preset_table_csv_buttons(monkeypatch, app, tmp_pat
                     device_patch="02B",
                     name="Song",
                     snapshot_names=("Clean", "Solo"),
+                    snapshot_output_levels=((1.5,), (-2.0, -2.5)),
                 )
             ]
 
@@ -803,6 +808,8 @@ def test_setlist_load_enables_preset_table_csv_buttons(monkeypatch, app, tmp_pat
 
     assert window.load_csv_button.isEnabled()
     assert window.save_csv_button.isEnabled()
+    assert window.preset_table.item(0, 4).text() == "1.5"
+    assert window.preset_table.item(0, 7).text() == "-2.0, -2.5"
 
     window.input_path.setText(str(tmp_path / "single.hlx"))
     window.load_assignments()
@@ -979,6 +986,45 @@ def test_preset_progress_shows_most_recently_measured_preset_and_snapshot_names(
     window.close()
 
 
+def test_preset_table_highlights_current_normalization_focus(app) -> None:
+    window = MainWindow()
+    for row, preset_id in enumerate(("02B", "02C")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked)
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+
+    window.update_progress(ProgressEvent("preset_started", device_patch="02B"))
+
+    assert window.preset_table._normalizing_row == 0
+    assert window.preset_table._normalizing_snapshot is None
+    assert window.preset_table.item(0, 1).background().color() == (
+        main_window.NORMALIZATION_FOCUS_BACKGROUND
+    )
+    assert window.preset_table.item(1, 1).background().style() == Qt.BrushStyle.NoBrush
+
+    window.update_progress(ProgressEvent("snapshot_started", device_patch="02B", snapshot=2))
+
+    assert window.preset_table._normalizing_row == 0
+    assert window.preset_table._normalizing_snapshot == 1
+
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
+
+    assert window.preset_table._normalizing_row == 0
+    assert window.preset_table._normalizing_snapshot is None
+
+    window.update_progress(ProgressEvent("measurement_completed"))
+
+    assert window.preset_table._normalizing_row is None
+    assert window.preset_table._normalizing_snapshot is None
+    assert window.preset_table.item(0, 1).background().style() == Qt.BrushStyle.NoBrush
+
+    window.close()
+
+
 def test_preset_progress_format_shows_duration_and_eta(app) -> None:
     window = MainWindow()
     window._measurement_progress_estimate = main_window._MeasurementProgressEstimate.from_request(
@@ -1111,7 +1157,7 @@ measured_snapshots = 6
     assert window.backend.currentText() == "hardware"
     assert window.target_lufs.text() == "-18.0"
     assert window.snapshot_count_input.value() == 6
-    assert window.preset_table.columnCount() == 15
+    assert window.preset_table.columnCount() == 21
     assert window.device_panels["helix"].audio_device.text() == "Configured Audio"
     assert window.pre_roll.text() == "0.3"
     assert window.post_roll.text() == "0.5"
@@ -1294,7 +1340,7 @@ def test_preset_bulk_selection_buttons(app) -> None:
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
         for row in range(window.preset_table.rowCount())
     )
-    assert window.preset_table.item(0, 4).text() == "0"
+    assert window.preset_table.item(0, 5).text() == "?"
     window.set_all_presets_checked(True)
     assert all(
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Checked
@@ -1399,6 +1445,7 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(monkeypa
     window.update_progress(
         ProgressEvent("log", message="[GAIN] 02B Clean | 0.0 dB -> 1.5 dB (Delta: +1.5 dB)")
     )
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
 
     adjustments = window._table_adjustments()
     assert adjustments.preset_names == {"02B": "Song 2"}
@@ -1521,11 +1568,12 @@ def test_custom_adjustment_is_shown_but_numeric_delta_is_exported(app) -> None:
     window.update_progress(
         ProgressEvent("log", message="[GAIN] 02B Clean | 0.0 dB -> 3.5 dB (Delta: +3.5 dB)")
     )
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
 
-    adjustment_item = window.preset_table.item(0, 4)
+    adjustment_item = window.preset_table.item(0, 5)
     assert adjustment_item.text() == "+1.5 (+2)"
     assert adjustment_item.toolTip() == "Custom loudness adjustment: +2"
-    custom_label = window.preset_table.cellWidget(0, 4)
+    custom_label = window.preset_table.cellWidget(0, 5)
     assert isinstance(custom_label, QLabel)
     assert custom_label.autoFillBackground()
     assert "color: #2563eb" in custom_label.text()
@@ -1548,8 +1596,8 @@ def test_preset_table_csv_save_uses_pipe_delimiter(tmp_path, monkeypatch, app) -
     window.preset_table.setItem(0, 2, QTableWidgetItem("Song, Part 1"))
     window._clear_preset_adjustments(0)
     window._set_snapshot_names(0, ("Clean, bright", "Solo"))
-    window._set_adjustment_value(window.preset_table.item(0, 4), "+1.5", 1.5)
-    window._set_adjustment_value(window.preset_table.item(0, 6), "-2.0", -2.0)
+    window._set_adjustment_value(window.preset_table.item(0, 5), "+1.5", 1.5)
+    window._set_adjustment_value(window.preset_table.item(0, 8), "-2.0", -2.0)
     csv_path = tmp_path / "preset-table"
     monkeypatch.setattr(
         QFileDialog,
@@ -1611,11 +1659,11 @@ def test_preset_table_csv_load_applies_valid_rows_and_reports_line_errors(
 
     assert window.preset_table.item(0, 2).text() == "Song 2"
     assert window.preset_table.item(0, 3).text() == "Clean!"
-    assert window.preset_table.item(0, 4).text() == "+1.5"
-    assert window.preset_table.item(0, 5).text() == "Solo"
-    assert window.preset_table.item(0, 6).text() == "-2.0"
+    assert window.preset_table.item(0, 5).text() == "+1.5"
+    assert window.preset_table.item(0, 6).text() == "Solo"
+    assert window.preset_table.item(0, 8).text() == "-2.0"
     assert window.preset_table.item(1, 2).text() == "Other 2"
-    assert window.preset_table.item(1, 6).text() == "+3.0"
+    assert window.preset_table.item(1, 8).text() == "+3.0"
     assert len(popups) == 1
     assert popups[0][1] == "Preset table CSV errors"
     assert "Line 3" in popups[0][2]
@@ -1774,25 +1822,30 @@ def test_gain_log_updates_preset_correction_columns(monkeypatch, app) -> None:
     window.update_progress(
         ProgressEvent("log", message="[GAIN] 02B Rhythm | 0.0 dB -> -2.0 dB (Delta: -2.0 dB)")
     )
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
 
     assert window.preset_table.horizontalHeaderItem(3).text() == "1"
-    assert window.preset_table.horizontalHeaderItem(4).text() == "Δ (dB)"
+    assert window.preset_table.horizontalHeaderItem(4).text() == "Out (dB)"
+    assert window.preset_table.horizontalHeaderItem(5).text() == "Δ (dB)"
     assert window.preset_table.item(0, 3).text() == "Solo"
     assert (
         window.preset_table.cellWidget(0, 3).text() == "Solo <span style='color: #f59e0b;'>★</span>"
     )
     assert window.preset_table.item(0, 3).toolTip() == "Solo snapshot"
-    assert window.preset_table.item(0, 4).text() == "+11.1"
-    assert window.preset_table.item(0, 5).text() == "Clean"
-    assert window.preset_table.item(0, 6).text() == "0"
-    assert window.preset_table.item(0, 7).text() == "Rhythm"
-    assert window.preset_table.item(0, 8).text() == "-2.0"
-    assert window.preset_table.item(0, 4).foreground().color().name() == "#15803d"
-    assert window.preset_table.item(0, 8).foreground().color().name() == "#b91c1c"
+    assert window.preset_table.item(0, 4).text() == "0.0"
+    assert window.preset_table.item(0, 5).text() == "+11.1"
+    assert window.preset_table.item(0, 6).text() == "Clean"
+    assert window.preset_table.item(0, 7).text() == "-1.0"
+    assert window.preset_table.item(0, 8).text() == "0"
+    assert window.preset_table.item(0, 9).text() == "Rhythm"
+    assert window.preset_table.item(0, 10).text() == "0.0"
+    assert window.preset_table.item(0, 11).text() == "-2.0"
+    assert window.preset_table.item(0, 5).foreground().color().name() == "#15803d"
+    assert window.preset_table.item(0, 11).foreground().color().name() == "#b91c1c"
     assert window.preset_table.columnWidth(0) == window.style().pixelMetric(
         QStyle.PixelMetric.PM_IndicatorWidth
     ) + 2 * window.style().pixelMetric(QStyle.PixelMetric.PM_CheckBoxLabelSpacing)
-    assert window.preset_table.columnWidth(4) >= (
+    assert window.preset_table.columnWidth(5) >= (
         window.preset_table.fontMetrics().horizontalAdvance("+12.5 (+12.5)") + 18
     )
     assert (
@@ -1803,6 +1856,47 @@ def test_gain_log_updates_preset_correction_columns(monkeypatch, app) -> None:
         == QHeaderView.ResizeMode.Interactive
         for column in range(1, window.preset_table.columnCount())
     )
+
+    window.close()
+
+
+def test_gain_log_with_output_prefix_keeps_bad_lufs_on_matching_snapshot(monkeypatch, app) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("04B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Sharp dressed M"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Intro", "Solo", "Solo Pitch", "Solo Pitch"))
+    window._set_snapshot_output_levels(0, ((7.4,), (7.4,), (6.9,), (6.9,)))
+
+    for message in [
+        "[GAIN] 04B Intro | dsp1.outputA 7.4 dB -> 8.1 dB (Delta: +0.7 dB)",
+        "[GAIN] 04B Solo (S) | dsp1.outputA 7.4 dB -> 8.1 dB (Delta: +0.7 dB)",
+        (
+            "[GAIN] 04B Solo Pitch (S) | measurement unavailable "
+            "(Implausible output gain 30.6 dB for 04B Solo Pitch dsp1.outputA. "
+            "This usually means the measurement recorded silence.)"
+        ),
+        (
+            "[GAIN] 04B Solo Pitch (S) | measurement unavailable "
+            "(Implausible output gain 30.6 dB for 04B Solo Pitch dsp1.outputA. "
+            "This usually means the measurement recorded silence.)"
+        ),
+    ]:
+        window.update_progress(ProgressEvent("log", message=message))
+    window.update_progress(ProgressEvent("preset_completed", device_patch="04B"))
+
+    assert window.preset_table.item(0, 5).text() == "+0.7"
+    assert window.preset_table.item(0, 8).text() == "+0.7"
+    assert window.preset_table.item(0, 11).text() == "+23.7 ⚠️"
+    assert window.preset_table.item(0, 14).text() == "+23.7 ⚠️"
+    assert "Resulting output block level would be 30.6 dB" in window.preset_table.item(
+        0, 11
+    ).toolTip()
 
     window.close()
 
@@ -1824,9 +1918,11 @@ def test_single_preset_gain_log_updates_table_when_apply_log_uses_wrapped_slot(
     window.update_progress(
         ProgressEvent("log", message="[GAIN] 01A Clean | 0.0 dB -> 2.5 dB (Delta: +2.5 dB)")
     )
+    window.update_progress(ProgressEvent("preset_completed", device_patch="01A"))
 
     assert window.preset_table.item(0, 3).text() == "Clean"
-    assert window.preset_table.item(0, 4).text() == "+2.5"
+    assert window.preset_table.item(0, 4).text() == "0.0"
+    assert window.preset_table.item(0, 5).text() == "+2.5"
     assert window._table_adjustments().gain_deltas["12A"][0] == 2.5
 
     window.close()
@@ -1849,13 +1945,13 @@ def test_selected_preset_adjustments_are_pending_until_measured(monkeypatch, app
         window._clear_preset_adjustments(row)
         window._mark_selected_preset_adjustments_pending(row)
 
-    assert [window.preset_table.item(0, column).text() for column in (4, 6, 8, 10)] == [
+    assert [window.preset_table.item(0, column).text() for column in (5, 8, 11, 14)] == [
         "?",
         "?",
         "?",
         "?",
     ]
-    assert [window.preset_table.item(1, column).text() for column in (4, 6, 8, 10)] == [
+    assert [window.preset_table.item(1, column).text() for column in (5, 8, 11, 14)] == [
         "0",
         "0",
         "0",
@@ -1865,9 +1961,11 @@ def test_selected_preset_adjustments_are_pending_until_measured(monkeypatch, app
     window.update_progress(
         ProgressEvent("log", message="[GAIN] 02B Clean | 0.0 dB -> 1.5 dB (Delta: +1.5 dB)")
     )
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
 
-    assert window.preset_table.item(0, 4).text() == "+1.5"
-    assert [window.preset_table.item(0, column).text() for column in (6, 8, 10)] == [
+    assert window.preset_table.item(0, 4).text() == "0.0"
+    assert window.preset_table.item(0, 5).text() == "+1.5"
+    assert [window.preset_table.item(0, column).text() for column in (8, 11, 14)] == [
         "?",
         "?",
         "?",
@@ -1910,13 +2008,13 @@ def test_snapshot_completed_updates_adjustment_cells_immediately(monkeypatch, ap
         )
     )
 
-    assert window.preset_table.item(0, 4).text() == "+2 (+1)"
-    assert window.preset_table.item(0, 4).data(main_window.ADJUSTMENT_VALUE_ROLE) == 3.0
-    assert window.preset_table.item(0, 4).foreground().color().name() == "#15803d"
-    assert window.preset_table.item(0, 6).text() == "+4"
-    assert window.preset_table.item(0, 6).foreground().color().name() == "#15803d"
-    assert not window.preset_table.item(0, 4).font().bold()
-    assert not window.preset_table.item(0, 6).font().bold()
+    assert window.preset_table.item(0, 5).text() == "+2 (+1)"
+    assert window.preset_table.item(0, 5).data(main_window.ADJUSTMENT_VALUE_ROLE) == 3.0
+    assert window.preset_table.item(0, 5).foreground().color().name() == "#15803d"
+    assert window.preset_table.item(0, 8).text() == "+4"
+    assert window.preset_table.item(0, 8).foreground().color().name() == "#15803d"
+    assert not window.preset_table.item(0, 5).font().bold()
+    assert not window.preset_table.item(0, 8).font().bold()
 
     window.close()
 
@@ -1944,8 +2042,8 @@ def test_recorded_pending_adjustment_widget_updates_with_gain_value(tmp_path, mo
         )
     )
 
-    assert window.preset_table.item(0, 4).text() == "?"
-    pending_widget = window.preset_table.cellWidget(0, 4)
+    assert window.preset_table.item(0, 5).text() == "?"
+    pending_widget = window.preset_table.cellWidget(0, 5)
     assert pending_widget.findChild(QLabel).text() == "?"
 
     window.target_lufs.setText("-16.0")
@@ -1959,14 +2057,60 @@ def test_recorded_pending_adjustment_widget_updates_with_gain_value(tmp_path, mo
         )
     )
 
-    item = window.preset_table.item(0, 4)
-    cell_widget = window.preset_table.cellWidget(0, 4)
+    item = window.preset_table.item(0, 5)
+    cell_widget = window.preset_table.cellWidget(0, 5)
     label = cell_widget.findChild(QLabel)
     assert item.text() == "+1.5"
     assert cell_widget.autoFillBackground()
     assert label.text() == "+1.5"
     assert not label.font().bold()
     assert label.styleSheet() == "color: #15803d;"
+
+    window.close()
+
+
+def test_recorded_snapshot_playback_is_disabled_while_normalizing(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._mark_selected_preset_adjustments_pending(0)
+
+    recording = tmp_path / "recorded.wav"
+    recording.touch()
+    window.worker = SimpleNamespace(isRunning=lambda: True)
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_recorded",
+            device_patch="02B",
+            snapshot=1,
+            path=str(recording),
+        )
+    )
+
+    speaker_button = window.preset_table.cellWidget(0, 5).findChild(main_window.QToolButton)
+    assert speaker_button is not None
+    assert not speaker_button.isEnabled()
+
+    monkeypatch.setattr(
+        main_window,
+        "AudioPlaybackWorker",
+        lambda *args, **kwargs: pytest.fail("playback should wait until normalization ends"),
+    )
+    window._play_recording(recording)
+
+    window.worker = None
+    window._refresh_recorded_output_buttons()
+
+    speaker_button = window.preset_table.cellWidget(0, 5).findChild(main_window.QToolButton)
+    assert speaker_button is not None
+    assert speaker_button.isEnabled()
 
     window.close()
 
@@ -1985,6 +2129,7 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
     window.update_progress(
         ProgressEvent("log", message="[GAIN] 02B Solo | 0.0 dB -> 1.0 dB (Delta: +1.0 dB)")
     )
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
     answers = iter([QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Discard])
     monkeypatch.setattr(
         QFileDialog,
@@ -1998,7 +2143,7 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
     window.browse_input()
 
     assert window.input_path.text() == "/tmp/original.hls"
-    assert window.preset_table.item(0, 4).text() == "+1.0"
+    assert window.preset_table.item(0, 5).text() == "+1.0"
 
     _FakeSaveChangesMessageBox.next_click = next(answers)
     window.browse_input()
@@ -2103,20 +2248,134 @@ def test_snapshot_names_are_preloaded_and_bad_lufs_is_marked(monkeypatch, app) -
 
     window.update_progress(ProgressEvent("log", message="[GAIN] 02B Clean | bad LUFS"))
 
-    assert window.preset_table.item(0, 3).text() == "Clean"
-    assert window.preset_table.item(0, 4).text() == "⚠️"
-    assert not window.preset_table.item(0, 4).font().bold()
-    assert window.preset_table.item(0, 4).font().pointSize() == max(app.font().pointSize(), 9)
-    assert "unusable LUFS" in window.preset_table.item(0, 4).toolTip()
-    assert window.preset_table.item(0, 5).text() == "Solo"
-    assert (
-        window.preset_table.cellWidget(0, 5).text() == "Solo <span style='color: #f59e0b;'>★</span>"
-    )
-    assert window.preset_table.item(0, 5).toolTip() == "Solo snapshot"
+    assert window.preset_table.item(0, 5).text() == "0"
     assert all(
-        window.preset_table.item(0, column).background().color().name() == "#fee2e2"
+        window.preset_table.item(0, column).background().style() == Qt.BrushStyle.NoBrush
         for column in range(window.preset_table.columnCount())
     )
+
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
+
+    assert window.preset_table.item(0, 3).text() == "Clean"
+    assert window.preset_table.item(0, 5).text() == "Measurement failed ⚠️"
+    assert window.preset_table.item(0, 5).font().bold()
+    assert window.preset_table.item(0, 5).font().pointSize() == max(app.font().pointSize(), 9)
+    assert window.preset_table.item(0, 5).foreground().color().name() == "#b91c1c"
+    assert (
+        "cannot calculate a safe Line 6 Helix output block level"
+        in window.preset_table.item(0, 5).toolTip()
+    )
+    assert window.preset_table.item(0, 6).text() == "Solo"
+    assert (
+        window.preset_table.cellWidget(0, 6).text() == "Solo <span style='color: #f59e0b;'>★</span>"
+    )
+    assert window.preset_table.item(0, 6).toolTip() == "Solo snapshot"
+    assert all(
+        window.preset_table.item(0, column).background().color().name() == "#fee2e2"
+        for column in (1, 2, 3, 4, 5)
+    )
+    assert all(
+        window.preset_table.item(0, column).background().style() == Qt.BrushStyle.NoBrush
+        for column in (0, 6, 7, 8, 9, 10, 11, 12, 13, 14)
+    )
+    assert (
+        window.preset_table.cellWidget(0, 6).palette().color(QPalette.ColorRole.Window).name()
+        == "#ffffff"
+    )
+
+    window.close()
+
+
+def test_snapshot_failure_replaces_pending_adjustment_immediately(monkeypatch, app) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("18D"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._mark_selected_preset_adjustments_pending(0)
+
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_failed",
+            device_patch="18D",
+            snapshot=4,
+            message="Could not collect valid short-term LUFS values",
+        )
+    )
+
+    adjustment = window.preset_table.item(0, 14)
+    assert adjustment.text() == "Measurement failed ⚠️"
+    assert adjustment.font().bold()
+    assert adjustment.foreground().color().name() == "#b91c1c"
+    assert "Could not collect valid short-term LUFS values" in adjustment.toolTip()
+    assert all(
+        window.preset_table.item(0, column).background().color().name() == "#fee2e2"
+        for column in (1, 2, 12, 13, 14)
+    )
+    assert all(
+        window.preset_table.item(0, column).background().style() == Qt.BrushStyle.NoBrush
+        for column in (0, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+    )
+
+    window.close()
+
+
+def test_live_snapshot_completion_marks_implausible_output_gain_immediately(
+    monkeypatch, app
+) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Discard)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("18D"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_output_level(window.preset_table.item(0, 4), "19.0")
+    window.target_lufs.setText("-16")
+
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_completed",
+            device_patch="18D",
+            snapshot=1,
+            lufs=-20.0,
+            crest_factor_db=12.0,
+        )
+    )
+
+    adjustment = window.preset_table.item(0, 5)
+    assert adjustment.text() == "+4 ⚠️"
+    assert adjustment.font().bold()
+    assert "Resulting output block level would be 23 dB" in adjustment.toolTip()
+    assert window.preset_table.item(0, 1).background().color().name() == "#fee2e2"
+    assert window.preset_table.item(0, 0).background().style() == Qt.BrushStyle.NoBrush
+
+    window.close()
+
+
+def test_solo_snapshot_name_cell_widget_draws_left_separator(app) -> None:
+    window = MainWindow()
+    window.preset_table.insertRow(0)
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("Solo",))
+
+    widget = window.preset_table.cellWidget(0, 3)
+    assert isinstance(widget, main_window.SnapshotNameCellWidget)
+    widget.resize(80, 24)
+    pixmap = QPixmap(widget.size())
+    pixmap.fill(widget.palette().color(QPalette.ColorRole.Window))
+    widget.render(pixmap)
+
+    separator_color = widget.palette().mid().color().name()
+    image = pixmap.toImage()
+    assert image.pixelColor(0, widget.height() // 2).name() == separator_color
 
     window.close()
 
@@ -2131,15 +2390,15 @@ def test_snapshot_count_widget_redraws_columns_and_preserves_loaded_names(app) -
     window.snapshot_count_input.setValue(6)
 
     assert window.snapshot_count == 6
-    assert window.preset_table.columnCount() == 15
-    assert window.preset_table.item(0, 13).text() == "Six"
+    assert window.preset_table.columnCount() == 21
+    assert window.preset_table.item(0, 18).text() == "Six"
     argv = window._build_argv()
     assert argv[argv.index("--snapshot-count") + 1] == "6"
 
     window.snapshot_count_input.setValue(2)
     window.snapshot_count_input.setValue(6)
 
-    assert window.preset_table.item(0, 13).text() == "Six"
+    assert window.preset_table.item(0, 18).text() == "Six"
 
     window.close()
 
@@ -2156,7 +2415,9 @@ def test_bad_lufs_row_highlight_is_reset_for_new_input_and_measurement(monkeypat
     window._clear_preset_adjustments(0)
 
     window.update_progress(ProgressEvent("log", message="[GAIN] 02B Clean | bad LUFS"))
-    assert window.preset_table.item(0, 0).background().color().name() == "#fee2e2"
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
+    assert window.preset_table.item(0, 1).background().color().name() == "#fee2e2"
+    assert window.preset_table.item(0, 0).background().style() == Qt.BrushStyle.NoBrush
 
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: None)
 
@@ -2176,6 +2437,7 @@ def test_bad_lufs_row_highlight_is_reset_for_new_input_and_measurement(monkeypat
     assert window.preset_table.item(0, 0).background().style() == Qt.BrushStyle.NoBrush
 
     window.update_progress(ProgressEvent("log", message="[GAIN] 02B Clean | bad LUFS"))
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
     monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
     monkeypatch.setattr(main_window, "apply_config", lambda args: args)
     monkeypatch.setattr(main_window, "request_from_args", lambda args: _request())
@@ -2197,6 +2459,7 @@ def test_implausible_gain_warning_is_marked_as_bad_lufs(monkeypatch, app) -> Non
     window.preset_table.setItem(0, 0, selected)
     window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
     window._clear_preset_adjustments(0)
+    window._set_output_level(window.preset_table.item(0, 4), "0.0")
 
     window.update_progress(
         ProgressEvent(
@@ -2204,12 +2467,18 @@ def test_implausible_gain_warning_is_marked_as_bad_lufs(monkeypatch, app) -> Non
             message="[GAIN] 02B Solo (S) | bad LUFS (Implausible output gain 21.9 dB)",
         )
     )
+    window.update_progress(ProgressEvent("preset_completed", device_patch="02B"))
 
     assert window.preset_table.item(0, 3).text() == "Solo"
     assert (
         window.preset_table.cellWidget(0, 3).text() == "Solo <span style='color: #f59e0b;'>★</span>"
     )
-    assert window.preset_table.item(0, 4).text() == "⚠️"
+    adjustment = window.preset_table.item(0, 5)
+    assert adjustment.text() == "+21.9 ⚠️"
+    assert adjustment.font().bold()
+    assert adjustment.foreground().color().name() == "#b91c1c"
+    assert "Resulting output block level would be 21.9 dB" in adjustment.toolTip()
+    assert "Line 6 Helix supported range of -120.0 to +20.0 dB" in adjustment.toolTip()
 
     window.close()
 
@@ -2263,6 +2532,58 @@ def test_completion_enables_save_without_redundant_popup(tmp_path, monkeypatch, 
     assert popups == []
     assert window.save_action.isEnabled()
     assert "save the active file" in window.log.toHtml()
+
+    window.close()
+
+
+def test_discarding_before_normalization_preserves_preset_selection(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hls"
+    input_path.write_text("{}", encoding="utf-8")
+
+    class Handler:
+        @staticmethod
+        def validate_input(path):
+            return None
+
+        @staticmethod
+        def list_assignments(path):
+            return [
+                SimpleNamespace(device_patch="02B", name="Song", snapshot_names=("Clean",)),
+                SimpleNamespace(device_patch="03C", name="Lead", snapshot_names=("Solo",)),
+            ]
+
+        @staticmethod
+        def metadata(path):
+            return {"file_type": "hls"}
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    monkeypatch.setattr(
+        window,
+        "_prompt_save_or_discard_preset_table_changes",
+        lambda action: "discard",
+    )
+    window.input_path.setText(str(input_path))
+    window.load_assignments()
+    window.preset_table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
+    window.preset_table.selectRow(1)
+    window._mark_preset_table_modified()
+
+    assert window._prompt_save_before_normalization()
+
+    assert window._selected_preset_set() == "03C"
+    selected_rows = {
+        index.row() for index in window.preset_table.selectionModel().selectedIndexes()
+    }
+    assert selected_rows == {1}
+    assert window.preset_table.item(1, 1).text() == "03C"
 
     window.close()
 
@@ -2584,7 +2905,7 @@ def test_single_preset_save_as_preserves_target_preset_id(tmp_path, monkeypatch,
     window.input_path.setText(str(input_path))
     window.load_assignments()
     window.preset_table.item(0, 1).setText("12a")
-    window._set_adjustment_value(window.preset_table.item(0, 4), "+1.0", 1.0)
+    window._set_adjustment_value(window.preset_table.item(0, 5), "+1.0", 1.0)
     window._mark_preset_table_modified()
     window.completed_request = _request(input_path=input_path)
     window.completed_result = NormalizationResult(None, tmp_path, csv_path)
@@ -2595,7 +2916,68 @@ def test_single_preset_save_as_preserves_target_preset_id(tmp_path, monkeypatch,
     assert window.input_path.text() == str(output_path)
     assert window.preset_table.item(0, 1).text() == "12A"
     assert window.preset_table.item(0, 2).text() == "Saved"
-    assert window.preset_table.item(0, 4).text() == "0"
+    assert window.preset_table.item(0, 5).text() == "0"
+    assert not window._preset_table_has_unsaved_changes()
+
+    window.close()
+
+
+def test_saving_table_changes_preserves_preset_selection(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hls"
+    input_path.write_text("{}", encoding="utf-8")
+    csv_path = tmp_path / "lufs_analysis.csv"
+    csv_path.touch()
+
+    class Handler:
+        @staticmethod
+        def validate_input(path):
+            return None
+
+        @staticmethod
+        def validate_output(selected_input_path, selected_output_path):
+            assert selected_input_path == input_path
+            assert selected_output_path == input_path
+
+        @staticmethod
+        def list_assignments(path):
+            return [
+                SimpleNamespace(device_patch="02B", name="Song", snapshot_names=("Clean",)),
+                SimpleNamespace(device_patch="03C", name="Lead", snapshot_names=("Solo",)),
+            ]
+
+        @staticmethod
+        def metadata(path):
+            return {"file_type": "hls"}
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+
+    def export_adjusted_file(*args, **kwargs):
+        args[2].touch()
+
+    monkeypatch.setattr(main_window, "export_adjusted_file", export_adjusted_file)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+
+    window.input_path.setText(str(input_path))
+    window.load_assignments()
+    window.preset_table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
+    window.preset_table.selectRow(1)
+    window._mark_preset_table_modified()
+    window.completed_request = _request(input_path=input_path)
+    window.completed_result = NormalizationResult(None, tmp_path, csv_path)
+
+    assert window.save_active_file()
+
+    assert window._selected_preset_set() == "03C"
+    selected_rows = {
+        index.row() for index in window.preset_table.selectionModel().selectedIndexes()
+    }
+    assert selected_rows == {1}
     assert not window._preset_table_has_unsaved_changes()
 
     window.close()

@@ -44,6 +44,54 @@ def test_configure_wslg_runtime_selects_wslg_socket(tmp_path, monkeypatch) -> No
     assert os.environ["QT_QPA_PLATFORM"] == "wayland"
 
 
+def test_configure_high_dpi_scaling_uses_pass_through(monkeypatch) -> None:
+    policies = []
+
+    class FakeGuiApplication:
+        @staticmethod
+        def setHighDpiScaleFactorRoundingPolicy(policy) -> None:
+            policies.append(policy)
+
+    monkeypatch.setattr(gui_app, "QGuiApplication", FakeGuiApplication)
+
+    gui_app.configure_high_dpi_scaling()
+
+    assert policies == [gui_app.Qt.HighDpiScaleFactorRoundingPolicy.PassThrough]
+
+
+def test_configure_gui_appearance_uses_wsl_visual_baseline(monkeypatch) -> None:
+    calls = []
+    palette = object()
+
+    class FakeStyle:
+        @staticmethod
+        def standardPalette():
+            calls.append(("standard_palette",))
+            return palette
+
+    class FakeApplication:
+        def setStyle(self, style: str) -> None:
+            calls.append(("style", style))
+
+        def setFont(self, font) -> None:
+            calls.append(("font", font.family(), font.pointSize()))
+
+        def style(self):
+            return FakeStyle()
+
+        def setPalette(self, app_palette) -> None:
+            calls.append(("palette", app_palette))
+
+    gui_app.configure_gui_appearance(FakeApplication())
+
+    assert calls == [
+        ("style", "Fusion"),
+        ("font", "Sans Serif", 9),
+        ("standard_palette",),
+        ("palette", palette),
+    ]
+
+
 def test_terminal_interrupt_queues_normal_window_close(monkeypatch) -> None:
     handlers = {}
     scheduled = []
@@ -114,6 +162,12 @@ def test_main_shows_window_maximized(monkeypatch) -> None:
             calls.append(("show",))
 
     monkeypatch.setattr(gui_app, "configure_wslg_runtime", lambda: calls.append(("wslg",)))
+    monkeypatch.setattr(gui_app, "configure_high_dpi_scaling", lambda: calls.append(("dpi",)))
+    monkeypatch.setattr(
+        gui_app,
+        "configure_gui_appearance",
+        lambda app: calls.append(("appearance", app)),
+    )
     monkeypatch.setattr(gui_app, "register_desktop_entry", lambda: calls.append(("desktop",)))
     monkeypatch.setattr(
         gui_app, "qInstallMessageHandler", lambda handler: calls.append(("qt", handler))
@@ -138,4 +192,10 @@ def test_main_shows_window_maximized(monkeypatch) -> None:
     assert ("application_name", "matchpatch-gui") in calls
     assert ("display_name", "MatchPatch") in calls
     assert ("desktop_file", "matchpatch-gui") in calls
+    assert ("dpi",) in calls
+    assert any(call[0] == "appearance" for call in calls)
+    assert calls.index(("dpi",)) < calls.index(("desktop",))
+    assert next(index for index, call in enumerate(calls) if call[0] == "appearance") < calls.index(
+        ("show_maximized",)
+    )
     assert calls.index(("show_maximized",)) < calls.index(("exec",))

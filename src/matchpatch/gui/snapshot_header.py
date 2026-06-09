@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QPainter, QPaintEvent
+from PySide6.QtGui import QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOptionHeader, QWidget
 
 
@@ -40,3 +40,9 @@ class SnapshotHeader(QHeaderView):
         option.textAlignment = Qt.AlignmentFlag.AlignCenter
         painter = QPainter(self.viewport())
         self.style().drawControl(QStyle.ControlElement.CE_Header, option, painter, self)
+        pen = QPen(self.palette().mid().color())
+        pen.setWidth(2)
+        painter.setPen(pen)
+        for logical_index in range(3, self.count(), 3):
+            x = self.sectionViewportPosition(logical_index)
+            painter.drawLine(x, self.height() // 2, x, self.height())

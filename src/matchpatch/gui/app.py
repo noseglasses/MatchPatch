@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QMessageLogContext, Qt, QTimer, QtMsgType, qInstallMessageHandler
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
 from matchpatch.gui.main_window import MainWindow
@@ -18,6 +18,9 @@ ASSETS_DIR = Path(__file__).resolve().parents[3] / "doc" / "assets"
 DESKTOP_FILE_ID = "matchpatch-gui"
 DESKTOP_ICON_SIZE = 512
 DEFAULT_XDG_DATA_DIRS = "/usr/local/share:/usr/share"
+GUI_STYLE = "Fusion"
+GUI_FONT_FAMILY = "Sans Serif"
+GUI_FONT_POINT_SIZE = 9
 
 
 def qt_message_handler(
@@ -45,6 +48,20 @@ def configure_wslg_runtime() -> None:
     if wslg_runtime.joinpath(wayland_display).exists():
         os.environ["XDG_RUNTIME_DIR"] = str(wslg_runtime)
         os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
+
+
+def configure_high_dpi_scaling() -> None:
+    """Keep Qt's per-screen scale factors stable across platforms."""
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+
+
+def configure_gui_appearance(app: QApplication) -> None:
+    """Apply the WSLg visual baseline consistently on every Qt platform."""
+    app.setStyle(GUI_STYLE)
+    app.setFont(QFont(GUI_FONT_FAMILY, GUI_FONT_POINT_SIZE))
+    app.setPalette(app.style().standardPalette())
 
 
 def _write_square_desktop_icon(source: Path, target: Path) -> None:
@@ -125,9 +142,11 @@ def install_terminal_interrupt_handler(app: QApplication, window: MainWindow) ->
 
 def main() -> None:
     configure_wslg_runtime()
+    configure_high_dpi_scaling()
     register_desktop_entry()
     qInstallMessageHandler(qt_message_handler)
     app = QApplication(sys.argv)
+    configure_gui_appearance(app)
     app.setApplicationName(DESKTOP_FILE_ID)
     app.setApplicationDisplayName("MatchPatch")
     app.setDesktopFileName(DESKTOP_FILE_ID)

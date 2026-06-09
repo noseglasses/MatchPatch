@@ -124,10 +124,40 @@ def extract_preset_assignments(data):
                         snapshot := preset.get("tone", {}).get(f"snapshot{snapshot_index}"), dict
                     )
                 ],
+                "snapshot_output_levels": extract_snapshot_output_levels(preset),
             }
         )
 
     return assignments
+
+
+def extract_snapshot_output_levels(preset):
+    output_blocks = []
+    for dsp_name, output_name, output_block in get_final_output_blocks(preset):
+        if "gain" not in output_block:
+            continue
+        try:
+            base_gain = float(output_block["gain"])
+        except (TypeError, ValueError):
+            continue
+        output_blocks.append((dsp_name, output_name, base_gain))
+
+    tone = preset.get("tone", {})
+    levels = []
+
+    for snapshot_index in range(8):
+        snapshot = tone.get(f"snapshot{snapshot_index}")
+        if not isinstance(snapshot, dict):
+            continue
+
+        levels.append(
+            [
+                get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain)
+                for dsp_name, output_name, base_gain in output_blocks
+            ]
+        )
+
+    return levels
 
 
 def extract_diff_preset_ids(current_filename, previous_filename):
@@ -152,9 +182,7 @@ def extract_diff_preset_ids(current_filename, previous_filename):
             continue
 
         previous_preset = (
-            previous_presets[preset_index]
-            if preset_index < len(previous_presets)
-            else None
+            previous_presets[preset_index] if preset_index < len(previous_presets) else None
         )
         if canonical_preset_signal_content(current_preset) != canonical_preset_signal_content(
             previous_preset
@@ -198,14 +226,10 @@ def extract_metadata(filename, json_text, original_data=None):
 
     if filetype == "hls" and isinstance(original_data, str):
         wrapper = json.loads(original_data)
-        result["wrapper"] = {
-            key: value for key, value in wrapper.items() if key != "encoded_data"
-        }
+        result["wrapper"] = {key: value for key, value in wrapper.items() if key != "encoded_data"}
     elif filetype == "hlx" and isinstance(original_data, dict):
         wrapper = {
-            key: value
-            for key, value in original_data.items()
-            if key not in {"data", "tone"}
+            key: value for key, value in original_data.items() if key not in {"data", "tone"}
         }
         if wrapper:
             result["wrapper"] = wrapper
@@ -457,7 +481,7 @@ def get_final_output_blocks(preset):
 
 
 def find_gain_output(preset):
-    final_outputs = [output for output in get_final_output_blocks(preset) if "gain" in output[2]]
+    final_outputs = get_gain_outputs(preset)
 
     if not final_outputs:
         return None
@@ -471,14 +495,14 @@ def find_gain_output(preset):
     return final_outputs[0]
 
 
-def get_missing_selected_output_gain_assignment(preset):
-    selected_output = find_gain_output(preset)
+def get_gain_outputs(preset):
+    return [output for output in get_final_output_blocks(preset) if "gain" in output[2]]
 
-    if selected_output is None:
-        return []
 
-    dsp_name, output_name, _ = selected_output
-    tone = preset.get("tone", {})
+def has_output_gain_assignment(tone, dsp_name, output_name):
+    if not isinstance(tone, dict):
+        return False
+
     controller_root = tone.get("controller", {})
     dsp_controller = {}
 
@@ -491,9 +515,26 @@ def get_missing_selected_output_gain_assignment(preset):
     output_controller = dsp_controller.get(output_name, {})
 
     if isinstance(output_controller, dict) and "gain" in output_controller:
-        return []
+        return True
 
-    return [(dsp_name, output_name, "gain")]
+    return False
+
+
+def get_missing_output_gain_assignments(preset):
+    missing = []
+    tone = preset.get("tone", {})
+
+    for dsp_name, output_name, _ in get_gain_outputs(preset):
+        if has_output_gain_assignment(tone, dsp_name, output_name):
+            continue
+
+        missing.append((dsp_name, output_name, "gain"))
+
+    return missing
+
+
+def get_missing_selected_output_gain_assignment(preset):
+    return get_missing_output_gain_assignments(preset)
 
 
 def validate_controller_assignment_capacity(data, gain_deltas=None):
@@ -510,7 +551,7 @@ def validate_controller_assignment_capacity(data, gain_deltas=None):
 
         current_count = count_controller_assignments(preset)
 
-        missing = get_missing_selected_output_gain_assignment(preset)
+        missing = get_missing_output_gain_assignments(preset)
 
         final_count = current_count + len(missing)
 
@@ -539,31 +580,35 @@ def validate_controller_assignment_capacity(data, gain_deltas=None):
 
 
 def add_selected_output_gain_assignment(preset):
-    selected_output = find_gain_output(preset)
-
-    if selected_output is None:
-        return 0
-
-    dsp_name, output_name, _ = selected_output
     tone = preset.get("tone", {})
 
-    controller_root = tone.setdefault("controller", {})
-
-    dsp_controller = controller_root.setdefault(dsp_name, {})
-
-    output_controller = dsp_controller.setdefault(output_name, {})
-
-    if "gain" in output_controller:
+    if not isinstance(tone, dict):
         return 0
 
-    output_controller["gain"] = {
-        "@controller": 19,
-        "@max": 20.0,
-        "@min": -120.0,
-        "@snapshot_disable": False,
-    }
+    changes = 0
 
-    return 1
+    for dsp_name, output_name, output_block in get_gain_outputs(preset):
+        try:
+            base_gain = float(output_block["gain"])
+        except (TypeError, ValueError):
+            continue
+
+        controller_root = tone.setdefault("controller", {})
+        dsp_controller = controller_root.setdefault(dsp_name, {})
+        output_controller = dsp_controller.setdefault(output_name, {})
+
+        if "gain" not in output_controller:
+            output_controller["gain"] = {
+                "@controller": 19,
+                "@max": 20.0,
+                "@min": -120.0,
+                "@snapshot_disable": False,
+            }
+            changes += 1
+
+        ensure_snapshot_output_gain_values(tone, dsp_name, output_name, base_gain)
+
+    return changes
 
 
 def assign_snapshot_level(data, gain_deltas=None):
@@ -645,9 +690,7 @@ def load_lufs_analysis_file(
 
                     custom_adjustment = 0.0
                     if custom_adjustments is not None:
-                        custom_adjustment = custom_adjustments.get(helix_preset, {}).get(
-                            i - 1, 0.0
-                        )
+                        custom_adjustment = custom_adjustments.get(helix_preset, {}).get(i - 1, 0.0)
                     lufs_delta = target_lufs - lufs_value
                     crest_factor_correction = get_crest_factor_correction(
                         crest_factor_db,
@@ -962,40 +1005,44 @@ def adjust_snapshot_gains(
         snapshot_gain_deltas = gain_deltas[helix_preset]
 
         # -----------------------------------------
-        # find exactly one active output block
+        # find active output blocks
         # -----------------------------------------
 
-        selected_output = find_gain_output(preset)
+        gain_outputs = get_gain_outputs(preset)
 
-        if selected_output is None:
+        if not gain_outputs:
             print(f"[GAIN] {helix_preset}: no active output block found")
             continue
 
-        dsp_name, output_name, output_block = selected_output
+        output_base_gains = []
 
-        normalize_adjusted_output_to_xlr(preset_index, preset, dsp_name, output_name, output_block)
+        for dsp_name, output_name, output_block in gain_outputs:
+            normalize_adjusted_output_to_xlr(
+                preset_index, preset, dsp_name, output_name, output_block
+            )
 
-        base_gain = float(output_block["gain"])
+            base_gain = float(output_block["gain"])
+            output_base_gains.append((dsp_name, output_name, output_block, base_gain))
 
-        ensure_snapshot_output_gain_values(tone, dsp_name, output_name, base_gain)
+            ensure_snapshot_output_gain_values(tone, dsp_name, output_name, base_gain)
 
         # -----------------------------------------
-        # ensure snapshot controller exists
+        # ensure snapshot controllers exist
         # -----------------------------------------
 
         controller_root = tone.setdefault("controller", {})
 
-        dsp_controller = controller_root.setdefault(dsp_name, {})
+        for dsp_name, output_name, _, _ in output_base_gains:
+            dsp_controller = controller_root.setdefault(dsp_name, {})
+            output_controller = dsp_controller.setdefault(output_name, {})
 
-        output_controller = dsp_controller.setdefault(output_name, {})
-
-        if "gain" not in output_controller:
-            output_controller["gain"] = {
-                "@controller": 19,
-                "@max": 20.0,
-                "@min": -120.0,
-                "@snapshot_disable": False,
-            }
+            if "gain" not in output_controller:
+                output_controller["gain"] = {
+                    "@controller": 19,
+                    "@max": 20.0,
+                    "@min": -120.0,
+                    "@snapshot_disable": False,
+                }
 
         # -----------------------------------------
         # process measured view snapshots only
@@ -1027,66 +1074,85 @@ def adjust_snapshot_gains(
                         f"{snapshot_index + 1}: {manual_delta!r}"
                     )
             elif gain_delta is None:
-                print(f"[GAIN] {helix_preset} {snapshot_name}{marker} | bad LUFS")
+                print(
+                    f"[GAIN] {helix_preset} {snapshot_name}{marker} | "
+                    "measurement unavailable (Missing LUFS or crest factor in analysis CSV)"
+                )
                 continue
 
             if is_solo and manual_delta is None:
                 gain_delta += solo_gain_bump_db
 
-            current_gain = get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain)
+            output_gain_changes = []
+
+            for dsp_name, output_name, _, base_gain in output_base_gains:
+                current_gain = get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain)
+                new_gain = round(current_gain + gain_delta, 2)
+                output_gain_changes.append((dsp_name, output_name, current_gain, new_gain))
 
             delta_text = f"Delta: {gain_delta:+g} dB"
 
             if abs(gain_delta) <= gain_deadband_db:
+                gain_text = ", ".join(
+                    f"{dsp_name}.{output_name} {current_gain:.1f} dB"
+                    for dsp_name, output_name, current_gain, _ in output_gain_changes
+                )
                 print(
                     f"[GAIN] "
                     f"{helix_preset} "
                     f"{snapshot_name}{marker} | "
-                    f"stable at {current_gain:.1f} dB "
+                    f"stable at {gain_text} "
                     f"({delta_text})"
                 )
                 continue
 
-            new_gain = round(current_gain + gain_delta, 2)
+            bad_gain_message = None
+            for dsp_name, output_name, _, new_gain in output_gain_changes:
+                if new_gain >= -120.0 and new_gain <= 20.0:
+                    continue
 
-            if new_gain < -120.0 or new_gain > 20.0:
-                message = (
+                bad_gain_message = (
                     f"Implausible output gain "
                     f"{new_gain} dB for "
-                    f"{helix_preset} {snapshot_name}. "
+                    f"{helix_preset} {snapshot_name} {dsp_name}.{output_name}. "
                     "This usually means the "
                     "measurement recorded silence."
                 )
+                break
 
+            if bad_gain_message is not None:
                 if not ignore_bad_lufs:
-                    raise ValueError(message)
+                    raise ValueError(bad_gain_message)
 
-                print(f"[GAIN] {helix_preset} {snapshot_name}{marker} | bad LUFS ({message})")
+                print(
+                    f"[GAIN] {helix_preset} {snapshot_name}{marker} | "
+                    f"measurement unavailable ({bad_gain_message})"
+                )
                 continue
 
             snapshot_controllers = snapshot.setdefault("controllers", {})
 
-            dsp_snapshot = snapshot_controllers.setdefault(dsp_name, {})
+            for dsp_name, output_name, _, new_gain in output_gain_changes:
+                dsp_snapshot = snapshot_controllers.setdefault(dsp_name, {})
+                output_snapshot = dsp_snapshot.setdefault(output_name, {})
+                output_snapshot["gain"] = {"@fs_enabled": False, "@value": new_gain}
+                changes += 1
 
-            output_snapshot = dsp_snapshot.setdefault(output_name, {})
-
-            output_snapshot["gain"] = {"@fs_enabled": False, "@value": new_gain}
-
-            changes += 1
-
-            print(
-                f"[GAIN] "
-                f"{helix_preset} "
-                f"{snapshot_name}{marker} | "
-                f"{current_gain:.1f} dB -> "
-                f"{new_gain:.1f} dB "
-                f"({delta_text})"
+            gain_text = ", ".join(
+                f"{dsp_name}.{output_name} {current_gain:.1f} dB -> {new_gain:.1f} dB"
+                for dsp_name, output_name, current_gain, new_gain in output_gain_changes
             )
 
-        if sync_output_gain_to_current_snapshot(
-            tone, dsp_name, output_name, output_block, base_gain
-        ):
-            print(f"[GAIN] {helix_preset}: synchronized output block gain to the current snapshot")
+            print(f"[GAIN] {helix_preset} {snapshot_name}{marker} | {gain_text} ({delta_text})")
+
+        for dsp_name, output_name, output_block, base_gain in output_base_gains:
+            if sync_output_gain_to_current_snapshot(
+                tone, dsp_name, output_name, output_block, base_gain
+            ):
+                print(
+                    f"[GAIN] {helix_preset}: synchronized "
+                    f"{dsp_name}.{output_name} gain to the current snapshot"
+                )
 
     return changes
 

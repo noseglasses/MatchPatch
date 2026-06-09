@@ -71,8 +71,17 @@ def test_assignment_extraction_includes_snapshot_names() -> None:
             {
                 "meta": {"name": "Lead"},
                 "tone": {
-                    "dsp0": {"block0": {}},
-                    "snapshot0": {"@name": "Rhythm"},
+                    "dsp0": {
+                        "inputA": {"@input": 1},
+                        "block0": {},
+                        "outputA": {"@output": 6, "gain": -1.5},
+                    },
+                    "snapshot0": {
+                        "@name": "Rhythm",
+                        "controllers": {
+                            "dsp0": {"outputA": {"gain": {"@value": -3.0}}},
+                        },
+                    },
                     "snapshot1": {"@name": "Solo"},
                 },
             }
@@ -82,6 +91,44 @@ def test_assignment_extraction_includes_snapshot_names() -> None:
     assignments = module.extract_preset_assignments(data)
 
     assert assignments[0]["snapshot_names"] == ["Rhythm", "Solo"]
+    assert assignments[0]["snapshot_output_levels"] == [[-3.0], [-1.5]]
+
+
+def test_snapshot_level_assignment_includes_parallel_outputs() -> None:
+    module = _load_legacy_module()
+    data = {
+        "presets": [
+            {
+                "meta": {"name": "Parallel"},
+                "tone": {
+                    "dsp0": {
+                        "inputA": {"@input": 1},
+                        "block0": {},
+                        "outputA": {"@output": 6, "gain": -1.0},
+                        "outputB": {"@output": 5, "gain": -3.0},
+                    },
+                    "snapshot0": {"@name": "Rhythm"},
+                    "snapshot1": {"@name": "Lead"},
+                },
+            }
+        ]
+    }
+
+    modified_json_text, snapshot_changes, gain_changes = module.process_json_structure(
+        json.dumps(data),
+        assign_output_gain=True,
+    )
+    modified = json.loads(modified_json_text)
+    tone = modified["presets"][0]["tone"]
+
+    assert snapshot_changes == 2
+    assert gain_changes == 0
+    assert "gain" in tone["controller"]["dsp0"]["outputA"]
+    assert "gain" in tone["controller"]["dsp0"]["outputB"]
+    assert tone["snapshot0"]["controllers"]["dsp0"]["outputA"]["gain"]["@value"] == -1.0
+    assert tone["snapshot0"]["controllers"]["dsp0"]["outputB"]["gain"]["@value"] == -3.0
+    assert tone["snapshot1"]["controllers"]["dsp0"]["outputA"]["gain"]["@value"] == -1.0
+    assert tone["snapshot1"]["controllers"]["dsp0"]["outputB"]["gain"]["@value"] == -3.0
 
 
 def test_metadata_extraction_keeps_wrapper_and_meta_nodes() -> None:
@@ -147,6 +194,47 @@ def test_manual_adjustments_rename_and_override_final_solo_delta() -> None:
     snapshot = data["presets"][0]["tone"]["snapshot0"]
     assert snapshot["@name"] == "Solo!"
     assert snapshot["controllers"]["dsp0"]["outputA"]["gain"]["@value"] == 4.5
+
+
+def test_adjust_snapshot_gains_applies_delta_to_parallel_outputs() -> None:
+    module = _load_legacy_module()
+    data = {
+        "presets": [
+            {
+                "meta": {"name": "Parallel"},
+                "tone": {
+                    "global": {"@current_snapshot": 0},
+                    "dsp0": {
+                        "inputA": {"@input": 1},
+                        "block0": {},
+                        "outputA": {"@output": 10, "gain": -1.0},
+                        "outputB": {"@output": 10, "gain": -3.0},
+                    },
+                    "snapshot0": {
+                        "@name": "Rhythm",
+                        "controllers": {
+                            "dsp0": {
+                                "outputA": {"gain": {"@value": -1.0}},
+                                "outputB": {"gain": {"@value": -3.0}},
+                            }
+                        },
+                    },
+                },
+            }
+        ]
+    }
+
+    changes = module.adjust_snapshot_gains(data, {"01A": {0: 2.0}}, snapshot_count=1)
+    tone = data["presets"][0]["tone"]
+    snapshot = tone["snapshot0"]
+
+    assert changes == 2
+    assert tone["dsp0"]["outputA"]["@output"] == module.OUTPUT_XLR
+    assert tone["dsp0"]["outputB"]["@output"] == module.OUTPUT_XLR
+    assert tone["dsp0"]["outputA"]["gain"] == 1.0
+    assert tone["dsp0"]["outputB"]["gain"] == -1.0
+    assert snapshot["controllers"]["dsp0"]["outputA"]["gain"]["@value"] == 1.0
+    assert snapshot["controllers"]["dsp0"]["outputB"]["gain"]["@value"] == -1.0
 
 
 def test_manual_adjustments_reject_invalid_helix_name() -> None:
