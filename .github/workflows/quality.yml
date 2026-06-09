@@ -53,19 +53,19 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Synchronize environment
-        run: uv sync --locked --no-default-groups --group wsl
+        run: uv sync --locked --no-default-groups --group wsl --extra gui
 
       - name: Ruff lint
-        run: uv run --frozen --no-default-groups --group wsl ruff check .
+        run: uv run --frozen --no-default-groups --group wsl --extra gui ruff check .
 
       - name: Ruff format check
-        run: uv run --frozen --no-default-groups --group wsl ruff format --check .
+        run: uv run --frozen --no-default-groups --group wsl --extra gui ruff format --check .
 
       - name: ty
-        run: uv run --frozen --no-default-groups --group wsl ty check
+        run: uv run --frozen --no-default-groups --group wsl --extra gui ty check
 
       - name: pytest
-        run: uv run --frozen --no-default-groups --group wsl pytest
+        run: uv run --frozen --no-default-groups --group wsl --extra gui pytest
 
   wsl:
     name: WSL / Python ${{ matrix.python-version }}
@@ -96,8 +96,8 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           export UV_PYTHON="${{ matrix.python-version }}"
           uv python install "$UV_PYTHON"
-          uv sync --locked --no-default-groups --group wsl
-          uv run --frozen --no-default-groups --group wsl ruff check .
-          uv run --frozen --no-default-groups --group wsl ruff format --check .
-          uv run --frozen --no-default-groups --group wsl ty check
-          uv run --frozen --no-default-groups --group wsl pytest
+          uv sync --locked --no-default-groups --group wsl --extra gui
+          uv run --frozen --no-default-groups --group wsl --extra gui ruff check .
+          uv run --frozen --no-default-groups --group wsl --extra gui ruff format --check .
+          uv run --frozen --no-default-groups --group wsl --extra gui ty check
+          uv run --frozen --no-default-groups --group wsl --extra gui pytest
