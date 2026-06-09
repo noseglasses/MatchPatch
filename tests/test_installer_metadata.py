@@ -60,6 +60,15 @@ def test_windows_installer_scripts_use_windows_environment_and_no_stale_venv() -
     assert not re.search(r"(?<![\w.-])\.venv(?!-[\w.-])", combined)
 
 
+def test_installer_dependency_group_supports_png_icon_conversion() -> None:
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomllib.load(pyproject_file)
+
+    installer_dependencies = pyproject["dependency-groups"]["installer"]
+
+    assert any(dependency.startswith("pillow") for dependency in installer_dependencies)
+
+
 def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     gui_spec = (PROJECT_ROOT / "installer" / "pyinstaller" / "matchpatch-gui.spec").read_text(
         encoding="utf-8"

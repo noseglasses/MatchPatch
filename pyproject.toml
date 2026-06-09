@@ -27,6 +27,7 @@ docs = [
     "sphinx>=8",
 ]
 installer = [
+    "pillow>=10.0",
     "pyinstaller>=6.0",
 ]
 wsl = [
