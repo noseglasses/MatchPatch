@@ -2403,10 +2403,10 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
     window.close()
 
 
-def test_embedded_startup_file_selection_loads_like_open_button(monkeypatch, app) -> None:
+def test_embedded_startup_file_selection_loads_like_open_button(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="Embedded")
-    path = str(Path("/tmp/embedded.hlx"))
+    path = str(tmp_path / "embedded.hlx")
 
     window.preset_empty_file_dialog.fileSelected.emit(path)
 
@@ -2420,26 +2420,25 @@ def test_embedded_startup_file_selection_loads_like_open_button(monkeypatch, app
     window.close()
 
 
-def test_startup_recent_files_selector_loads_selected_file(monkeypatch, app) -> None:
-    recent = [str(Path("/tmp/older.hls")), str(Path("/tmp/recent.hlx"))]
+def test_startup_recent_files_selector_loads_selected_file(tmp_path, monkeypatch, app) -> None:
+    older = str(tmp_path / "older.hls")
+    recent_path = str(tmp_path / "recent.hlx")
+    recent = [older, recent_path]
     QSettings().setValue(main_window.RECENT_FILES_SETTINGS_KEY, recent)
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="Recent")
 
     assert window.recent_files.isEnabled()
     assert window.recent_files.itemText(0) == "Open recent file..."
-    assert window.recent_files.itemData(1) == str(Path("/tmp/older.hls"))
+    assert window.recent_files.itemData(1) == older
     assert "older.hls" in window.recent_files.itemText(1)
 
     window._recent_file_activated(2)
 
-    assert window.input_path.text() == str(Path("/tmp/recent.hlx"))
+    assert window.input_path.text() == recent_path
     assert window.preset_table.rowCount() == 1
     assert window.preset_table.item(0, 2).text() == "Recent"
-    assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == [
-        str(Path("/tmp/recent.hlx")),
-        str(Path("/tmp/older.hls")),
-    ]
+    assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == [recent_path, older]
 
     window.close()
 
