@@ -39,6 +39,11 @@ def asset_datas() -> list[tuple[str, str]]:
     ]
 
 
+def prepare_pyinstaller_paths(workpath: Path, distpath: Path) -> None:
+    workpath.mkdir(parents=True, exist_ok=True)
+    distpath.mkdir(parents=True, exist_ok=True)
+
+
 def write_build_info(payload_root: Path = PAYLOAD_ROOT) -> None:
     payload_root.mkdir(parents=True, exist_ok=True)
     build_info = {

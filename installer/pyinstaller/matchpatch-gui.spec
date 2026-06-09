@@ -12,6 +12,7 @@ from build_support import (
     PROJECT_ROOT,
     PYINSTALLER_WORK_ROOT,
     asset_datas,
+    prepare_pyinstaller_paths,
     stage_docs,
     write_build_info,
 )
@@ -19,6 +20,7 @@ from build_support import (
 block_cipher = None
 CONF["distpath"] = str(PAYLOAD_ROOT.parent)
 CONF["workpath"] = str(PYINSTALLER_WORK_ROOT / "gui")
+prepare_pyinstaller_paths(Path(CONF["workpath"]), Path(CONF["distpath"]))
 
 a = Analysis(
     [str(PROJECT_ROOT / "src" / "matchpatch" / "gui" / "app.py")],

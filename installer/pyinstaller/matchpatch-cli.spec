@@ -11,12 +11,14 @@ from build_support import (
     PAYLOAD_ROOT,
     PROJECT_ROOT,
     PYINSTALLER_WORK_ROOT,
+    prepare_pyinstaller_paths,
     write_build_info,
 )
 
 block_cipher = None
 CONF["distpath"] = str(PAYLOAD_ROOT)
 CONF["workpath"] = str(PYINSTALLER_WORK_ROOT / "cli")
+prepare_pyinstaller_paths(Path(CONF["workpath"]), Path(CONF["distpath"]))
 
 a = Analysis(
     [str(PROJECT_ROOT / "src" / "matchpatch" / "cli.py")],

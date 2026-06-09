@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import re
 import tomllib
 from pathlib import Path
@@ -60,39 +61,53 @@ def test_windows_installer_scripts_use_windows_environment_and_no_stale_venv() -
 
 
 def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
-    gui_spec = (
-        PROJECT_ROOT / "installer" / "pyinstaller" / "matchpatch-gui.spec"
-    ).read_text(encoding="utf-8")
-    cli_spec = (
-        PROJECT_ROOT / "installer" / "pyinstaller" / "matchpatch-cli.spec"
-    ).read_text(encoding="utf-8")
-    build_support = (
-        PROJECT_ROOT / "installer" / "pyinstaller" / "build_support.py"
-    ).read_text(encoding="utf-8")
+    gui_spec = (PROJECT_ROOT / "installer" / "pyinstaller" / "matchpatch-gui.spec").read_text(
+        encoding="utf-8"
+    )
+    cli_spec = (PROJECT_ROOT / "installer" / "pyinstaller" / "matchpatch-cli.spec").read_text(
+        encoding="utf-8"
+    )
+    build_support = (PROJECT_ROOT / "installer" / "pyinstaller" / "build_support.py").read_text(
+        encoding="utf-8"
+    )
 
     assert 'name="MatchPatch"' in gui_spec
     assert "console=False" in gui_spec
     assert "datas=asset_datas()" in gui_spec
+    assert 'prepare_pyinstaller_paths(Path(CONF["workpath"]), Path(CONF["distpath"]))' in gui_spec
     assert "stage_docs()" in gui_spec
     assert "write_build_info()" in gui_spec
 
     assert 'name="matchpatch"' in cli_spec
     assert "console=True" in cli_spec
     assert 'excludes=["PySide6"]' in cli_spec
+    assert 'prepare_pyinstaller_paths(Path(CONF["workpath"]), Path(CONF["distpath"]))' in cli_spec
     assert "write_build_info()" in cli_spec
 
     assert '"docs_html"' in build_support
     assert '"build-info.json"' in build_support
     assert '"builder": "pyinstaller"' in build_support
+    assert "def prepare_pyinstaller_paths" in build_support
     assert "matchmatch-icon.png" in build_support
     assert "matchmatch-icon-512.png" in build_support
     assert "matchmatch-logo.png" in build_support
 
 
+def test_prepare_pyinstaller_paths_creates_missing_build_dirs(tmp_path: Path) -> None:
+    build_support = _load_build_support()
+    workpath = tmp_path / "build" / "pyinstaller" / "gui"
+    distpath = tmp_path / "build" / "windows-payload"
+
+    build_support.prepare_pyinstaller_paths(workpath, distpath)
+
+    assert workpath.is_dir()
+    assert distpath.is_dir()
+
+
 def test_release_workflow_publishes_windows_installer() -> None:
-    release_workflow = (
-        PROJECT_ROOT / ".github" / "workflows" / "release.yml"
-    ).read_text(encoding="utf-8")
+    release_workflow = (PROJECT_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert "windows-installer:" in release_workflow
     assert "runs-on: windows-latest" in release_workflow
@@ -110,3 +125,15 @@ def _project_version() -> str:
     with (PROJECT_ROOT / "pyproject.toml").open("rb") as pyproject_file:
         pyproject = tomllib.load(pyproject_file)
     return str(pyproject["project"]["version"])
+
+
+def _load_build_support():
+    support_path = PROJECT_ROOT / "installer" / "pyinstaller" / "build_support.py"
+    spec = importlib.util.spec_from_file_location(
+        "matchpatch_installer_build_support", support_path
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
