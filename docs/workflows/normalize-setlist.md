@@ -46,8 +46,14 @@ Useful background:
 17. Import the saved adjusted file into the Helix.
 18. Listen through the setlist in a real playing context.
 
-[Screenshot placeholder: loaded-setlist.png - loaded setlist with selected presets]
+![Loaded setlist with selected presets](../assets/screenshots/loaded-setlist.png)
 
+
+(help-preset-table-legend)=
+## Preset Table Legend
+
+Use the Show legend button under the preset table to display the current table
+legend.
 
 (help-select-presets)=
 ## Preset Selection Tips
@@ -84,7 +90,7 @@ Before saving, check for:
 
 If a row is red, read [Troubleshooting](../troubleshooting.md) before saving.
 
-[Screenshot placeholder: completed-results-table.png - completed result table]
+![Completed results table](../assets/screenshots/completed-results-table.png)
 
 ## What Success Looks Like
 

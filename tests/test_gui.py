@@ -321,15 +321,19 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.preset_empty_logo.pixmap().size() == main_window.QSize(360, 360)
     assert window.preset_empty_logo.size() == main_window.QSize(360, 360)
     assert window.preset_empty_state.layout().itemAt(1).alignment() & Qt.AlignmentFlag.AlignHCenter
-    assert window.preset_empty_file_dialog_title.text() == "Open setlist/preset file"
-    assert window.preset_empty_file_dialog_title.alignment() == Qt.AlignmentFlag.AlignCenter
-    assert window.preset_empty_file_dialog_title.font().pointSize() >= app.font().pointSize() + 2
-    assert isinstance(window.preset_empty_file_dialog, QFileDialog)
-    assert window.preset_empty_file_dialog.acceptMode() == QFileDialog.AcceptMode.AcceptOpen
-    assert window.preset_empty_file_dialog.fileMode() == QFileDialog.FileMode.ExistingFile
-    assert window.preset_empty_file_dialog.nameFilters() == ["Patches (*.hls *.hlx)"]
-    assert window.preset_empty_file_dialog.testOption(QFileDialog.Option.DontUseNativeDialog)
-    assert window.preset_empty_file_dialog.parent() is window.preset_empty_state
+    assert isinstance(window.preset_empty_open_button, main_window.QToolButton)
+    assert window.preset_empty_open_button.text() == "Open preset/setlist"
+    assert not window.preset_empty_open_button.icon().isNull()
+    assert window.preset_empty_open_button.iconSize() == main_window.QSize(64, 64)
+    assert (
+        window.preset_empty_open_button.toolButtonStyle()
+        == Qt.ToolButtonStyle.ToolButtonTextUnderIcon
+    )
+    assert window.preset_empty_open_button.autoRaise()
+    assert window.preset_empty_open_button.parent() is window.preset_empty_state
+    assert window.recent_files.parent() is window.preset_empty_state
+    assert window.preset_empty_state.layout().itemAt(3).alignment() & Qt.AlignmentFlag.AlignHCenter
+    assert not hasattr(window, "preset_empty_recent_label")
     assert isinstance(window.preset_advanced_splitter, QSplitter)
     assert window.preset_advanced_splitter.orientation() == Qt.Orientation.Horizontal
     assert not window.preset_advanced_splitter.isHidden()
@@ -368,11 +372,14 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert toolbar.actions().index(window.device_action) == (
         toolbar.actions().index(window.help_spacer_action) + 1
     )
+    assert toolbar.actions().index(window.recording_separator_action) == (
+        toolbar.actions().index(window.device_action) + 1
+    )
     assert toolbar.actions().index(window.advanced_action) == (
         toolbar.actions().index(window.play_recorded_output_action) + 1
     )
     assert toolbar.actions().index(window.record_output_action) == (
-        toolbar.actions().index(window.device_action) + 1
+        toolbar.actions().index(window.recording_separator_action) + 1
     )
     assert toolbar.actions().index(window.play_recorded_output_action) == (
         toolbar.actions().index(window.record_output_action) + 1
@@ -427,8 +434,12 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.play_recorded_output_button.size() == window.start_button.size()
     assert window.advanced_button.size() == window.start_button.size()
     assert window.start_cancel_stack.size() == window.start_button.size()
-    assert toolbar.minimumHeight() == window.advanced_button.height() + 4
-    assert toolbar.maximumHeight() == window.advanced_button.height() + 4
+    assert toolbar.minimumHeight() == (
+        window.advanced_button.height() + main_window.TOOLBAR_VERTICAL_PADDING
+    )
+    assert toolbar.maximumHeight() == (
+        window.advanced_button.height() + main_window.TOOLBAR_VERTICAL_PADDING
+    )
     for action in (
         window.open_action,
         window.save_action,
@@ -440,6 +451,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
         button = toolbar.widgetForAction(action)
         assert button is not None
         assert button.size() == window.start_button.size()
+        assert button.property("keep_tooltip_visible")
     assert window.open_action.isEnabled()
     assert not window.save_action.isEnabled()
     assert not window.save_as_action.isEnabled()
@@ -454,6 +466,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.device_panels["helix"].audio_group.isEnabled()
     assert window.progress_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
     assert not window.statusBar().isHidden()
+
     assert not window.statusBar().isSizeGripEnabled()
     assert window.phase.parent() is window.statusBar()
     assert window.processing_dot.parent() is window.statusBar()
@@ -468,11 +481,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.preset_table.wordWrap()
     assert window.preset_table.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
     assert window.advanced_tabs.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
-    assert (
-        window.preset_table_note.text()
-        == "Only non-empty presets are listed. Solo snapshots are marked with a "
-        "<span style='color: #f59e0b;'>★</span>."
-    )
+    assert window.preset_table_note.text() == "Only non-empty presets are listed."
     assert window.preset_table_note.textFormat() == Qt.TextFormat.RichText
     assert window.preset_csv_label.text() == "CSV: "
     assert window.preset_csv_controls.layout().indexOf(window.preset_csv_label) >= 0
@@ -488,11 +497,136 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.select_diff_button.text() == "Select changed"
     assert not window.select_diff_button.icon().isNull()
     assert window.select_diff_button.isHidden()
+    assert window.comparison_enabled.text() == "Enabled"
+    assert window.comparison_enabled.isHidden()
+    assert not window.comparison_enabled.isEnabled()
+    assert not window.comparison_enabled.isChecked()
+    assert window.show_legend_button.text() == "Show legend"
+    assert window.show_legend_button.isHidden()
     assert window.load_csv_button.width() == window.load_csv_button.height()
     assert window.save_csv_button.width() == window.save_csv_button.height()
     assert window.snapshot_count_input.value() == 4
     assert window.snapshot_count_input.maximum() == 8
 
+    window.close()
+
+
+def test_toolbar_tooltip_position_is_kept_inside_screen() -> None:
+    available = main_window.QRect(0, 0, 200, 100)
+    tooltip_size = main_window.QSize(80, 20)
+
+    position = main_window._visible_tooltip_position(
+        QPoint(195, 90),
+        tooltip_size,
+        available,
+    )
+
+    assert position.x() >= available.left() + main_window.TOOLTIP_SCREEN_MARGIN
+    assert position.y() >= available.top() + main_window.TOOLTIP_SCREEN_MARGIN
+    assert (
+        position.x() + tooltip_size.width()
+        <= available.right() - main_window.TOOLTIP_SCREEN_MARGIN
+    )
+    assert (
+        position.y() + tooltip_size.height()
+        <= available.bottom() - main_window.TOOLTIP_SCREEN_MARGIN
+    )
+
+
+def test_ignore_reason_icon_draws_no_entry_symbol(app) -> None:
+    image = main_window._ignore_reason_icon(main_window.IGNORE_REASON_COMPARISON).pixmap(
+        18,
+        18,
+    ).toImage()
+
+    green_pixels = 0
+    white_pixels = 0
+    backslash_green_pixels = 0
+    slash_green_pixels = 0
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            is_green = (
+                color.alpha()
+                and color.red() < 80
+                and color.green() > 120
+                and color.blue() < 100
+            )
+            if is_green:
+                green_pixels += 1
+                if abs(x - y) <= 1:
+                    backslash_green_pixels += 1
+                if abs((x + y) - (image.width() - 1)) <= 1:
+                    slash_green_pixels += 1
+            if color.alpha() and color.red() > 220 and color.green() > 220 and color.blue() > 220:
+                white_pixels += 1
+
+    assert green_pixels > 20
+    assert white_pixels > 20
+    assert backslash_green_pixels > slash_green_pixels
+
+
+def test_preset_table_legend_dialog_uses_table_icons(app) -> None:
+    window = MainWindow()
+
+    dialog = window._build_preset_table_legend_dialog()
+
+    assert dialog.windowTitle() == "Preset table legend"
+    labels = dialog.findChildren(QLabel)
+    label_text = "\n".join(label.text() for label in labels)
+    assert "Snapshot markers" in label_text
+    assert "★" in label_text
+    assert "Solo snapshot" in label_text
+    assert "whole preset is unchecked" in label_text
+    assert "comparison with another Helix file" in label_text
+    assert "ignored-snapshot regex" in label_text
+    assert "Snapshot cell colors" in label_text
+    assert "White: initial state." in label_text
+    assert "Grey: ignored." in label_text
+    assert "Light blue: preset in progress." in label_text
+    assert "Light green: snapshot successfully normalized." in label_text
+    assert "Light red: snapshot normalization error." in label_text
+    assert "Light blue with blue outline: snapshot in progress." in label_text
+    color_entries = [
+        "White: initial state.",
+        "Light blue: preset in progress.",
+        "Light blue with blue outline: snapshot in progress.",
+        "Light green: snapshot successfully normalized.",
+        "Light red: snapshot normalization error.",
+        "Grey: ignored.",
+    ]
+    assert [label_text.index(entry) for entry in color_entries] == sorted(
+        label_text.index(entry) for entry in color_entries
+    )
+    pixmap_labels = [
+        dialog.findChild(QLabel, f"legendIgnoreIcon{reason}")
+        for reason in (
+            main_window.IGNORE_REASON_PRESET,
+            main_window.IGNORE_REASON_COMPARISON,
+            main_window.IGNORE_REASON_REGEX,
+        )
+    ]
+    assert all(label is not None for label in pixmap_labels)
+    assert len(pixmap_labels) == 3
+    assert {
+        label.pixmap().cacheKey()
+        for label in pixmap_labels
+        if label is not None
+    } == {
+        window._ignore_reason_icons[reason].pixmap(18, 18).cacheKey()
+        for reason in (
+            main_window.IGNORE_REASON_PRESET,
+            main_window.IGNORE_REASON_COMPARISON,
+            main_window.IGNORE_REASON_REGEX,
+        )
+    }
+    color_swatches = dialog.findChildren(QLabel, "legendColorSwatch")
+    assert len(color_swatches) == 6
+    outlined_swatch = color_swatches[2].pixmap().toImage()
+    center = outlined_swatch.pixelColor(outlined_swatch.width() // 2, outlined_swatch.height() // 2)
+    assert center == main_window.NORMALIZATION_FOCUS_BACKGROUND
+
+    dialog.close()
     window.close()
 
 
@@ -668,7 +802,9 @@ def test_single_preset_load_displays_presets_panel_with_instruction_label(monkey
     assert window.preset_table.isColumnHidden(0)
     assert window.single_slot.isHidden()
     assert window.preset_table_note.isHidden()
-    assert window.select_diff_button.isHidden()
+    assert not window.select_diff_button.isHidden()
+    assert not window.comparison_enabled.isHidden()
+    assert not window.show_legend_button.isHidden()
     assert not window.preset_csv_controls.isHidden()
     assert window.load_csv_button.isEnabled()
     assert window.save_csv_button.isEnabled()
@@ -760,6 +896,63 @@ def test_ignore_snapshot_regex_marks_and_skips_default_snapshots(monkeypatch, ap
     assert adjustment.text() == "-"
     assert adjustment.data(main_window.ADJUSTMENT_VALUE_ROLE) is None
     assert 0 not in window._table_adjustments().gain_deltas["01A"]
+
+    window.close()
+
+
+def test_snapshot_ignore_reasons_stack_and_clear_independently(app) -> None:
+    window = MainWindow()
+    window.snapshot_count_input.setValue(1)
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("02B"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Song"))
+    window._clear_preset_adjustments(0)
+    window._set_snapshot_names(0, ("SNAPSHOT 1",))
+
+    selected.setCheckState(Qt.CheckState.Unchecked)
+    window._set_snapshot_ignore_reason(
+        0,
+        0,
+        main_window.IGNORE_REASON_COMPARISON,
+        True,
+    )
+
+    name = window.preset_table.item(0, window._snapshot_name_column(0))
+    assert name.data(main_window.IGNORED_SNAPSHOT_REASONS_ROLE) == (
+        main_window.IGNORE_REASON_REGEX,
+        main_window.IGNORE_REASON_PRESET,
+        main_window.IGNORE_REASON_COMPARISON,
+    )
+    assert "ignore regex" in name.toolTip()
+    assert "preset unchecked" in name.toolTip()
+    assert "unchanged compared" in name.toolTip()
+
+    selected.setCheckState(Qt.CheckState.Checked)
+
+    assert name.data(main_window.IGNORED_SNAPSHOT_REASONS_ROLE) == (
+        main_window.IGNORE_REASON_REGEX,
+        main_window.IGNORE_REASON_COMPARISON,
+    )
+
+    window.ignore_snapshot_regex.setText("^Mute$")
+
+    assert name.data(main_window.IGNORED_SNAPSHOT_REASONS_ROLE) == (
+        main_window.IGNORE_REASON_COMPARISON,
+    )
+    assert name.data(main_window.IGNORED_SNAPSHOT_ROLE) is True
+
+    window._set_snapshot_ignore_reason(
+        0,
+        0,
+        main_window.IGNORE_REASON_COMPARISON,
+        False,
+    )
+
+    assert name.data(main_window.IGNORED_SNAPSHOT_ROLE) is None
+    assert name.background().style() == Qt.BrushStyle.NoBrush
 
     window.close()
 
@@ -1589,7 +1782,7 @@ def test_preset_bulk_selection_buttons(app) -> None:
     window.close()
 
 
-def test_select_diff_presets_checks_only_changed_rows(monkeypatch, app, tmp_path) -> None:
+def test_select_diff_presets_marks_unchanged_snapshots(monkeypatch, app, tmp_path) -> None:
     window = MainWindow()
     input_path = tmp_path / "current.hls"
     previous_path = tmp_path / "previous.hls"
@@ -1597,6 +1790,7 @@ def test_select_diff_presets_checks_only_changed_rows(monkeypatch, app, tmp_path
     previous_path.touch()
     window.input_path.setText(str(input_path))
     window._show_loaded_preset_state(single_preset=False)
+    window.snapshot_count_input.setValue(2)
     for row, name in enumerate(("01A", "01B", "01C")):
         window.preset_table.insertRow(row)
         selected = QTableWidgetItem()
@@ -1607,8 +1801,8 @@ def test_select_diff_presets_checks_only_changed_rows(monkeypatch, app, tmp_path
 
     class Handler:
         @staticmethod
-        def diff_preset_ids(input_path, previous_input_path):
-            return [2]
+        def diff_snapshot_ids(input_path, previous_input_path, snapshot_count):
+            return {2: (2,)}
 
         @staticmethod
         def format_patch_id(preset_id):
@@ -1625,6 +1819,7 @@ def test_select_diff_presets_checks_only_changed_rows(monkeypatch, app, tmp_path
         "getOpenFileName",
         lambda *args, **kwargs: (str(previous_path), ""),
     )
+    window.measurement_time_estimate.setText("stale")
 
     window.select_diff_presets()
 
@@ -1632,10 +1827,36 @@ def test_select_diff_presets_checks_only_changed_rows(monkeypatch, app, tmp_path
         window.preset_table.item(row, 0).checkState()
         for row in range(window.preset_table.rowCount())
     ] == [
-        Qt.CheckState.Unchecked,
         Qt.CheckState.Checked,
-        Qt.CheckState.Unchecked,
+        Qt.CheckState.Checked,
+        Qt.CheckState.Checked,
     ]
+    assert window.preset_table.item(1, window._snapshot_name_column(0)).data(
+        main_window.IGNORED_SNAPSHOT_REASONS_ROLE
+    ) == (main_window.IGNORE_REASON_COMPARISON,)
+    assert window.preset_table.item(1, window._snapshot_name_column(1)).data(
+        main_window.IGNORED_SNAPSHOT_ROLE
+    ) is None
+    assert window._row_measured_snapshot_indexes(1) == (2,)
+    assert window._selected_preset_set() == "01B"
+    assert "1 preset, 1 snapshot" in window.measurement_time_estimate.text()
+    assert window.comparison_enabled.isEnabled()
+    assert window.comparison_enabled.isChecked()
+
+    window.comparison_enabled.setChecked(False)
+
+    assert window.preset_table.item(1, window._snapshot_name_column(0)).data(
+        main_window.IGNORED_SNAPSHOT_REASONS_ROLE
+    ) is None
+    assert window._row_measured_snapshot_indexes(1) == (1, 2)
+    assert window._selected_preset_set() == "01A,01B,01C"
+
+    window.comparison_enabled.setChecked(True)
+
+    assert window.preset_table.item(1, window._snapshot_name_column(0)).data(
+        main_window.IGNORED_SNAPSHOT_REASONS_ROLE
+    ) == (main_window.IGNORE_REASON_COMPARISON,)
+    assert window._row_measured_snapshot_indexes(1) == (2,)
 
     window.close()
 
@@ -1654,10 +1875,14 @@ def test_manual_adjustments_gate_table_editing_and_build_export_payload(monkeypa
 
     assert not window.manual_adjustments.isChecked()
     assert window.manual_adjustments.text() == "Edit manually"
+    assert window.show_legend_button.text() == "Show legend"
     assert window.preset_table.editTriggers() == window.preset_table.EditTrigger.NoEditTriggers
     assert window.presets.layout().indexOf(window.preset_measurement_time_estimate) == 4
     preset_table_note_row = window.presets.layout().itemAt(3).layout()
     assert preset_table_note_row is not None
+    assert preset_table_note_row.indexOf(window.show_legend_button) < preset_table_note_row.indexOf(
+        window.manual_adjustments
+    )
     assert preset_table_note_row.indexOf(window.manual_adjustments) < preset_table_note_row.indexOf(
         window.preset_csv_controls
     )
@@ -2434,14 +2659,19 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
     window.close()
 
 
-def test_embedded_startup_file_selection_loads_like_open_button(tmp_path, monkeypatch, app) -> None:
+def test_startup_open_button_loads_like_toolbar_open(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="Embedded")
     input_file = tmp_path / "embedded.hlx"
     input_file.touch()
     path = str(input_file)
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (path, ""),
+    )
 
-    window.preset_empty_file_dialog.fileSelected.emit(path)
+    window.preset_empty_open_button.click()
 
     assert window.input_path.text() == path
     assert window.preset_table.rowCount() == 1

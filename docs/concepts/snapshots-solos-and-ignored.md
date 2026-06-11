@@ -39,12 +39,23 @@ That snapshot gets the normal MatchPatch adjustment plus the solo boost.
 Ignored snapshots are skipped. They are shown in grey, and their adjustment cell
 shows `-`.
 
+The snapshot name cell shows one or more green no-entry ignore icons so you can
+see why a snapshot is skipped:
+
+- `P`: the whole preset is unchecked.
+- `C`: the snapshot is unchanged compared with a previous file.
+- `R`: the snapshot name matches the ignored snapshot regex.
+
+If more than one rule applies, MatchPatch shows more than one icon.
+
 A snapshot might be ignored when:
 
 - it is unused;
 - it is a placeholder;
 - it is a special effect that should not be normalized;
 - it still has a default name such as `SNAPSHOT 4`.
+
+![Preset table with selected presets and snapshot columns](../assets/screenshots/loaded-setlist.png)
 
 (help-snapshot-regex)=
 ## Changing Detection

@@ -35,7 +35,7 @@ the output-level changes.
 2. Go to the Device tab.
 3. Set Backend to `hardware`.
 
-[Screenshot placeholder: backend-selector.png - backend selector in Advanced Device]
+![Backend selector in Advanced Device](../assets/screenshots/backend-selector.png)
 
 
 (help-hardware-routing)=
@@ -56,8 +56,7 @@ For many Helix setups:
 
 Your own system may differ.
 
-[Screenshot placeholder: hardware-routing.png - hardware routing settings]
-
+![Hardware routing settings](../assets/screenshots/hardware-routing.png)
 
 (help-midi-steering)=
 ## Check MIDI Steering

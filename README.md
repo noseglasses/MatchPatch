@@ -8,6 +8,7 @@
 [![Release](https://github.com/noseglasses/MatchPatch/actions/workflows/release.yml/badge.svg)](https://github.com/noseglasses/MatchPatch/actions/workflows/release.yml)
 [![PyPI](https://img.shields.io/pypi/v/matchpatch.svg)](https://pypi.org/project/matchpatch/)
 [![Python](https://img.shields.io/pypi/pyversions/matchpatch.svg)](https://pypi.org/project/matchpatch/)
+![MatchPatch GUI showing a loaded Helix setlist](docs/assets/screenshots/normalization-ongoing.png)
 
 **No more unexpected volume jumps when switching sounds.**
 

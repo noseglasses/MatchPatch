@@ -4,8 +4,9 @@
 Use this workflow when you have edited only part of a setlist and do not want to
 remeasure everything.
 
-MatchPatch compares your current setlist to an older version and selects presets
-whose sound content changed.
+MatchPatch compares your current setlist to an older version and keeps only
+changed snapshots measurable. Unchanged snapshots are grey and marked with the
+`C` ignore icon.
 
 ## Before You Start
 
@@ -23,22 +24,27 @@ whose sound content changed.
 2. Open the current `.hls` setlist.
 3. Click Select changed.
 4. Choose the previous `.hls` setlist.
-5. Review which presets are now checked.
-6. Manually check or uncheck any presets if needed.
+5. Review which snapshots are still measurable.
+6. Manually check or uncheck presets if needed.
 7. Run normalization.
 
+![Loaded setlist with selected presets](../assets/screenshots/loaded-setlist.png)
 
 ## What Counts As Changed?
 
-The goal is to find presets whose sound changed. A renamed preset may not count
-as changed if the tone itself is the same.
+The goal is to find snapshots whose sound changed. Renamed presets and renamed
+snapshots may not count as changed if the tone itself is the same.
+
+If a preset's block layout or non-snapshot parameters changed, MatchPatch keeps
+all snapshots in that preset measurable. Otherwise it compares each snapshot's
+parameter assignments independently.
 
 This is useful after rehearsal when you changed a few tones but kept most of the
 setlist untouched.
 
-## If No Presets Are Selected
+## If No Snapshots Are Measurable
 
-If no presets are selected:
+If no snapshots are measurable:
 
 - you may have chosen the wrong previous file;
 - the setlist may not have changed in a way MatchPatch needs to measure;
@@ -48,8 +54,9 @@ You can still select presets manually.
 
 ## What Success Looks Like
 
-- Only changed presets are checked.
-- You agree with the selected presets.
+- Changed snapshots remain normal table cells.
+- Unchanged snapshots are grey and show the `C` ignore icon.
+- Preset checkboxes still let you exclude whole presets.
 - Normalization runs on the smaller selection.
 
 ## If Something Goes Wrong

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
 import pytest
 
 from matchpatch import config
+from matchpatch.devices.base import NormalizationPolicy, normalize_regex_pattern
 
 
 def test_load_config_reads_toml_and_uses_nested_values(tmp_path) -> None:
@@ -44,6 +46,24 @@ def test_export_default_config_writes_loadable_toml(tmp_path) -> None:
     assert loaded["devices"]["helix"]["audio"]["device"] == "Helix"
     assert loaded["devices"]["helix"]["audio"]["input_mapping"] == [1, 2]
     assert loaded["devices"]["helix"]["steering"]["snapshot_wait_seconds"] == 0.2
+
+
+@pytest.mark.parametrize("snapshot_name", ["solo", "Solo Pitch", "solo 1", "clean SOLO boost"])
+def test_default_solo_regex_matches_names_containing_solo(snapshot_name) -> None:
+    assert re.search(NormalizationPolicy().solo_regex, snapshot_name)
+
+
+@pytest.mark.parametrize("snapshot_name", ["asolo", "solob", "asoloc"])
+def test_default_solo_regex_does_not_match_solo_inside_words(snapshot_name) -> None:
+    assert not re.search(NormalizationPolicy().solo_regex, snapshot_name)
+
+
+def test_regex_pattern_normalization_preserves_decoded_word_boundaries() -> None:
+    pattern = normalize_regex_pattern("(?i)\bsolo\b")
+
+    assert pattern == r"(?i)\bsolo\b"
+    assert re.search(pattern, "Solo Pitch")
+    assert not re.search(pattern, "asolo")
 
 
 @pytest.mark.parametrize("value", ["1, 2", [3, 4], (5, 6)])

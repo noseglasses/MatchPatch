@@ -107,6 +107,49 @@ def test_normalize_presets_filters_to_diff_input(tmp_path) -> None:
     assert measured == [[2]]
 
 
+def test_normalize_presets_filters_diff_input_snapshot_wise(tmp_path) -> None:
+    class SnapshotDiffHandler(FakeHandler):
+        def diff_snapshot_ids(self, input_path, previous_input_path, snapshot_count):
+            return {1: (2,), 2: (1, 3)}
+
+    handler = SnapshotDiffHandler()
+    input_path = tmp_path / "input.hls"
+    previous_path = tmp_path / "previous.hls"
+    output_path = tmp_path / "output.hls"
+    reference = tmp_path / "reference.wav"
+    work_dir = tmp_path / "work"
+    input_path.touch()
+    previous_path.touch()
+    reference.touch()
+    work_dir.mkdir()
+    requests = []
+
+    def fake_analysis(request, preset_ids, csv_path, callback):
+        requests.append((request, preset_ids))
+        write_analysis_csv(request, preset_ids, csv_path)
+
+    normalize_presets(
+        NormalizationRequest(
+            device="fake",
+            input_path=input_path,
+            output_path=output_path,
+            diff_input_path=previous_path,
+            backend="loopback",
+            windows_python="python.exe",
+            reference_di=reference,
+            automation=False,
+            snapshot_plan=(("patch-1", (1, 2)), ("patch-2", (3,))),
+            policy=workflow.NormalizationPolicy(snapshot_count=3),
+        ),
+        run_analysis=fake_analysis,
+        get_profile=lambda device: FakeProfile(handler),
+        make_temp_dir=lambda: work_dir,
+    )
+
+    assert requests[0][1] == [1, 2]
+    assert requests[0][0].snapshot_plan == (("patch-1", (2,)), ("patch-2", (3,)))
+
+
 def test_normalize_presets_default_temp_dir_uses_normalization_prefix(
     tmp_path, monkeypatch
 ) -> None:
@@ -338,6 +381,17 @@ def test_apply_config_rejects_invalid_solo_regex(tmp_path) -> None:
                 ["--config", str(config_path), "--device", "helix", "-i", "input.hls"]
             )
         )
+
+
+def test_apply_config_preserves_double_quoted_word_boundary_regex(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[policy]\nsolo_regex = "(?i)\\bsolo\\b"\n', encoding="utf-8")
+
+    args = normalize.apply_config(
+        normalize.parse_args(["--config", str(config_path), "--device", "helix", "-i", "input.hls"])
+    )
+
+    assert args.policy.solo_regex == r"(?i)\bsolo\b"
 
 
 def test_apply_config_rejects_invalid_ignore_snapshot_regex(tmp_path) -> None:

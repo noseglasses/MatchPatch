@@ -145,12 +145,32 @@ def normalize_presets(
     assignments = handler.list_assignments(input_path)
     preset_ids = handler.select_preset_ids(input_path, assignments, requested_ids)
 
+    snapshot_plan = request.snapshot_plan
     if request.diff_input_path is not None:
         previous_input_path = request.diff_input_path.resolve()
         if previous_input_path.suffix.lower() != input_path.suffix.lower():
             raise ValueError("--diff-input must use the same file type as --input")
-        diff_ids = set(handler.diff_preset_ids(input_path, previous_input_path))
+        diff_snapshot_ids = getattr(handler, "diff_snapshot_ids", None)
+        if diff_snapshot_ids is None:
+            diff_snapshots = {
+                preset_id: tuple(range(1, request.policy.snapshot_count + 1))
+                for preset_id in handler.diff_preset_ids(input_path, previous_input_path)
+            }
+        else:
+            diff_snapshots = diff_snapshot_ids(
+                input_path,
+                previous_input_path,
+                request.policy.snapshot_count,
+            )
+        diff_ids = set(diff_snapshots)
         preset_ids = [preset_id for preset_id in preset_ids if preset_id in diff_ids]
+        snapshot_plan = _intersect_snapshot_plans(
+            snapshot_plan,
+            tuple(
+                (handler.format_patch_id(preset_id), diff_snapshots[preset_id])
+                for preset_id in preset_ids
+            ),
+        )
 
     if request.limit is not None:
         if request.limit < 1:
@@ -175,6 +195,8 @@ def normalize_presets(
             if not request.record_device_output or request.recorded_output_dir is not None
             else dataclass_replace(request, recorded_output_dir=temp_dir / "recordings")
         )
+        if snapshot_plan != analysis_request.snapshot_plan:
+            analysis_request = dataclass_replace(analysis_request, snapshot_plan=snapshot_plan)
         _emit(
             on_progress,
             ProgressEvent(
@@ -306,6 +328,22 @@ def _validate_custom_adjustments(request: NormalizationRequest) -> None:
             f"Custom adjustments CSV does not exist: {request.custom_adjustments_path}"
         )
     load_custom_adjustments_file(request.custom_adjustments_path, request.policy.snapshot_count)
+
+
+def _intersect_snapshot_plans(
+    first: tuple[tuple[str, tuple[int, ...]], ...],
+    second: tuple[tuple[str, tuple[int, ...]], ...],
+) -> tuple[tuple[str, tuple[int, ...]], ...]:
+    if not first:
+        return second
+    first_by_patch = {patch.upper(): tuple(snapshots) for patch, snapshots in first}
+    result = []
+    for patch, snapshots in second:
+        first_snapshots = first_by_patch.get(patch.upper(), ())
+        selected = tuple(snapshot for snapshot in snapshots if snapshot in first_snapshots)
+        if selected:
+            result.append((patch, selected))
+    return tuple(result)
 
 
 def _emit(callback: ProgressCallback | None, event: ProgressEvent) -> None:

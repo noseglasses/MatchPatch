@@ -43,6 +43,12 @@ Valid Helix slot examples:
 15. Import the saved adjusted preset back into the Helix.
 
 
+(help-single-preset-table-legend)=
+## Preset Table Legend
+
+Use the Show legend button under the preset table to display the current table
+legend.
+
 ## Temporary Slot Safety
 
 The temporary slot tells MatchPatch where to steer the Helix during measurement.

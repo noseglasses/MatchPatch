@@ -19,7 +19,11 @@ from typing import Any, cast
 from matchpatch.analysis import AnalysisOptions
 from matchpatch.config import Config, config_value, load_config, parse_channel_mapping, prefer
 from matchpatch.devices import get_device_profile
-from matchpatch.devices.base import NormalizationPolicy, validate_snapshot_count
+from matchpatch.devices.base import (
+    NormalizationPolicy,
+    normalize_regex_pattern,
+    validate_snapshot_count,
+)
 from matchpatch.measurement_optimizer import OptimizationProgress
 from matchpatch.progress import ProgressEvent
 from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_presets
@@ -52,25 +56,34 @@ def _normalization_policy(config: Config, args: argparse.Namespace) -> Normaliza
                 default=getattr(profile, "snapshot_count", 4),
             ),
         ),
-        solo_regex=cast(
-            str,
-            prefer(
-                args.solo_regex,
-                config,
-                "policy",
-                "solo_regex",
-                default=config_value(config, "policy", "solo_marker", default=r"(?i)\bsolo\b"),
-            ),
+        solo_regex=normalize_regex_pattern(
+            cast(
+                str,
+                prefer(
+                    args.solo_regex,
+                    config,
+                    "policy",
+                    "solo_regex",
+                    default=config_value(
+                        config,
+                        "policy",
+                        "solo_marker",
+                        default=NormalizationPolicy().solo_regex,
+                    ),
+                ),
+            )
         ),
-        ignore_snapshot_regex=cast(
-            str,
-            prefer(
-                args.ignore_snapshot_regex,
-                config,
-                "policy",
-                "ignore_snapshot_regex",
-                default=NormalizationPolicy().ignore_snapshot_regex,
-            ),
+        ignore_snapshot_regex=normalize_regex_pattern(
+            cast(
+                str,
+                prefer(
+                    args.ignore_snapshot_regex,
+                    config,
+                    "policy",
+                    "ignore_snapshot_regex",
+                    default=NormalizationPolicy().ignore_snapshot_regex,
+                ),
+            )
         ),
         solo_gain_bump_db=cast(
             float,

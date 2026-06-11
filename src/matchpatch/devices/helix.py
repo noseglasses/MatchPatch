@@ -120,6 +120,39 @@ class HelixPatchFileHandler(PatchFileHandler):
             raise ValueError("Helix diff output must be a JSON array of preset IDs")
         return diff_ids
 
+    def diff_snapshot_ids(
+        self,
+        input_path: Path,
+        previous_input_path: Path,
+        snapshot_count: int,
+    ) -> dict[int, tuple[int, ...]]:
+        if previous_input_path.suffix.lower() != input_path.suffix.lower():
+            raise ValueError(
+                "Helix diff input must use the same extension as the active input file"
+            )
+
+        completed = self._run(
+            "-i",
+            input_path,
+            "--diff-snapshots",
+            previous_input_path,
+            "--snapshot-count",
+            snapshot_count,
+            capture=True,
+            log_output=False,
+        )
+        raw_plan = json.loads(completed.stdout)
+        if not isinstance(raw_plan, dict):
+            raise ValueError("Helix snapshot diff output must be a JSON object")
+        result: dict[int, tuple[int, ...]] = {}
+        for preset_id, snapshots in raw_plan.items():
+            if not str(preset_id).isdigit() or not isinstance(snapshots, list):
+                raise ValueError("Helix snapshot diff output has an invalid preset entry")
+            if not all(isinstance(snapshot, int) for snapshot in snapshots):
+                raise ValueError("Helix snapshot diff output has an invalid snapshot list")
+            result[int(preset_id)] = tuple(snapshots)
+        return result
+
     def parse_patch_set(self, value: str) -> list[int]:
         preset_ids = []
 

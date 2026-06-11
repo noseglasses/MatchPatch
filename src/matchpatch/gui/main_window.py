@@ -27,6 +27,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPersistentModelIndex,
+    QPoint,
     QPropertyAnimation,
     QRect,
     QSettings,
@@ -42,6 +43,7 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QHelpEvent,
     QIcon,
     QKeyEvent,
     QPainter,
@@ -56,6 +58,7 @@ from PySide6.QtGui import (
     QTextCharFormat,
     QTextDocument,
 )
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
@@ -93,6 +96,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QToolBar,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -100,7 +104,11 @@ from PySide6.QtWidgets import (
 from matchpatch.config import Config, config_value, default_config, export_config, load_config
 from matchpatch.custom_adjustments import CustomAdjustments, load_custom_adjustments_file
 from matchpatch.devices import get_device_profile, list_device_profiles
-from matchpatch.devices.base import NormalizationPolicy, PatchFileAdjustments
+from matchpatch.devices.base import (
+    NormalizationPolicy,
+    PatchFileAdjustments,
+    normalize_regex_pattern,
+)
 from matchpatch.gui import help as gui_help
 from matchpatch.gui.device_panels import HelixSettingsPanel
 from matchpatch.gui.dialogs import ASSETS_DIR, AboutDialog
@@ -455,12 +463,21 @@ SOLO_SNAPSHOT_ROLE = Qt.ItemDataRole.UserRole + 9
 MEASURED_ADJUSTMENT_ROLE = Qt.ItemDataRole.UserRole + 10
 SNAPSHOT_OUTPUT_PATHS_ROLE = Qt.ItemDataRole.UserRole + 11
 PROCESSED_SNAPSHOT_ROLE = Qt.ItemDataRole.UserRole + 12
+IGNORED_SNAPSHOT_REASONS_ROLE = Qt.ItemDataRole.UserRole + 13
 OUTPUT_LEVEL_MIN_DB = -120.0
 OUTPUT_LEVEL_MAX_DB = 20.0
 ADJUSTMENT_MIN_DB = OUTPUT_LEVEL_MIN_DB - OUTPUT_LEVEL_MAX_DB
 ADJUSTMENT_MAX_DB = OUTPUT_LEVEL_MAX_DB - OUTPUT_LEVEL_MIN_DB
 CUSTOM_ADJUSTMENT_COLOR = "#2563eb"
 PROCESSING_DOT_GREY = "#9ca3af"
+IGNORE_REASON_PRESET = "P"
+IGNORE_REASON_COMPARISON = "C"
+IGNORE_REASON_REGEX = "R"
+IGNORE_REASON_LABELS = {
+    IGNORE_REASON_PRESET: "preset unchecked",
+    IGNORE_REASON_COMPARISON: "unchanged compared with previous file",
+    IGNORE_REASON_REGEX: "ignore regex",
+}
 PROCESSING_DOT_GREEN = "#16a34a"
 PROCESSING_DOT_RED = "#dc2626"
 LOUDNESS_MINIMUM = -60.0
@@ -485,7 +502,15 @@ PHASE_ICON = {
     "normalization_cancelled_by_user": QStyle.StandardPixmap.SP_MessageBoxWarning,
 }
 TOOLBAR_ICON_SIZE = 20
+TOOLBAR_VERTICAL_PADDING = 10
+TOOLTIP_SCREEN_MARGIN = 8
 PRESET_EMPTY_LOGO_SIZE = QSize(360, 360)
+NO_ENTRY_ICON_SVG = b"""\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36">
+  <circle cx="18" cy="18" r="15" fill="#FFFFFF" stroke="#16A34A" stroke-width="6"/>
+  <line x1="10.8" y1="10.8" x2="25.2" y2="25.2" stroke="#16A34A" stroke-width="6" stroke-linecap="round"/>
+</svg>
+"""
 
 
 def _fixed_size_pixmap(source: QPixmap, size: QSize) -> QPixmap:
@@ -625,6 +650,29 @@ def _normalization_icon() -> QIcon:
     return QIcon(pixmap)
 
 
+def _ignore_reason_icon(reason: str, size: int = 18) -> QIcon:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    QSvgRenderer(NO_ENTRY_ICON_SVG).render(painter, pixmap.rect())
+
+    badge_size = max(10, round(size * 0.62))
+    badge_rect = QRect(size - badge_size, size - badge_size, badge_size, badge_size)
+    painter.setPen(QPen(QColor("#ffffff"), 1))
+    painter.setBrush(QColor("#334155"))
+    painter.drawEllipse(badge_rect)
+    badge_font = QFont(QApplication.font())
+    badge_font.setBold(True)
+    badge_font.setPixelSize(max(7, round(size * 0.42)))
+    painter.setFont(badge_font)
+    painter.setPen(QColor("#ffffff"))
+    painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, reason)
+    painter.end()
+    return QIcon(pixmap)
+
+
 def _advanced_icon() -> QIcon:
     pixmap = QPixmap(56, 56)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -748,6 +796,83 @@ def _save_measurement_icon() -> QIcon:
     return QIcon(pixmap)
 
 
+def _about_icon_blue(size: int) -> QColor:
+    pixmap = (
+        QApplication.style()
+        .standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
+        .pixmap(size, size)
+    )
+    image = pixmap.toImage()
+    red_total = 0
+    green_total = 0
+    blue_total = 0
+    count = 0
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.alpha() <= 0:
+                continue
+            if 180 <= color.hue() <= 250 and color.saturation() >= 60 and color.value() >= 80:
+                red_total += color.red()
+                green_total += color.green()
+                blue_total += color.blue()
+                count += 1
+    if count == 0:
+        return QColor("#308cc6")
+    return QColor(red_total // count, green_total // count, blue_total // count)
+
+
+def _question_mark_icon() -> QIcon:
+    pixmap = QPixmap(TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_about_icon_blue(TOOLBAR_ICON_SIZE))
+    margin = 2
+    painter.drawEllipse(
+        margin,
+        margin,
+        TOOLBAR_ICON_SIZE - (margin * 2),
+        TOOLBAR_ICON_SIZE - (margin * 2),
+    )
+    painter.setPen(QColor("#ffffff"))
+    font = QFont()
+    font.setBold(True)
+    font.setPointSize(max(12, TOOLBAR_ICON_SIZE - 10))
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "?")
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _tooltip_size_hint(text: str) -> QSize:
+    metrics = QFontMetrics(QApplication.font())
+    lines = text.splitlines() or [text]
+    width = max((metrics.horizontalAdvance(line) for line in lines), default=0)
+    height = metrics.lineSpacing() * max(1, len(lines))
+    return QSize(width + 18, height + 12)
+
+
+def _visible_tooltip_position(anchor: QPoint, tooltip_size: QSize, available: QRect) -> QPoint:
+    left = available.left() + TOOLTIP_SCREEN_MARGIN
+    top = available.top() + TOOLTIP_SCREEN_MARGIN
+    right = available.right() - TOOLTIP_SCREEN_MARGIN
+    bottom = available.bottom() - TOOLTIP_SCREEN_MARGIN
+
+    x = anchor.x()
+    y = anchor.y()
+    if x + tooltip_size.width() > right:
+        x = anchor.x() - tooltip_size.width()
+    if y + tooltip_size.height() > bottom:
+        y = anchor.y() - tooltip_size.height()
+
+    x = max(left, min(x, right - tooltip_size.width()))
+    y = max(top, min(y, bottom - tooltip_size.height()))
+    return QPoint(x, y)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -783,6 +908,8 @@ class MainWindow(QMainWindow):
         self._pending_backend_check_action = "normalization"
         self._pending_optimization_preset_id: int | None = None
         self._pending_optimization_settings: MeasurementOptimizationSettings | None = None
+        self._comparison_input_path: Path | None = None
+        self._comparison_changed_by_patch: dict[str, tuple[int, ...]] | None = None
         self._optimization_stability_runs = 3
         self._optimization_termination_tolerance = 10.0
         self._optimization_stability_tolerance = 2.0
@@ -799,6 +926,10 @@ class MainWindow(QMainWindow):
         self._speaker_off_icon = _speaker_icon(enabled=False)
         self._record_icon = _record_icon(recording=True)
         self._record_off_icon = _record_icon(recording=False)
+        self._ignore_reason_icons = {
+            reason: _ignore_reason_icon(reason)
+            for reason in (IGNORE_REASON_PRESET, IGNORE_REASON_COMPARISON, IGNORE_REASON_REGEX)
+        }
         self.settings = QSettings()
 
         self.input_path = QLineEdit()
@@ -891,7 +1022,7 @@ class MainWindow(QMainWindow):
             "Open",
             self,
         )
-        self.open_action.setToolTip("Open a Helix setlist or preset file.")
+        self.open_action.setToolTip("Open a Helix preset or setlist file.")
         self.open_action.setProperty("help_id", HelpId.OPEN_FILES)
         self.open_action.triggered.connect(self.browse_input)
         toolbar.addAction(self.open_action)
@@ -956,6 +1087,8 @@ class MainWindow(QMainWindow):
         self.device.setProperty("help_id", HelpId.BACKENDS)
         self.device.currentIndexChanged.connect(self.device_changed)
         self.device_action = toolbar.addWidget(self.device)
+
+        self.recording_separator_action = toolbar.addSeparator()
 
         self.record_output_button = QToolButton(self)
         self.record_output_button.setIcon(self._record_icon)
@@ -1040,7 +1173,12 @@ class MainWindow(QMainWindow):
             self.device.sizeHint().height(),
             square_button_size,
         )
-        toolbar.setFixedHeight(toolbar_content_height + 4)
+        toolbar.setFixedHeight(toolbar_content_height + TOOLBAR_VERTICAL_PADDING)
+        for action in toolbar.actions():
+            widget = toolbar.widgetForAction(action)
+            if widget is not None and widget.toolTip():
+                widget.setProperty("keep_tooltip_visible", True)
+                widget.installEventFilter(self)
 
     def _build_preset_advanced_splitter(self) -> QSplitter:
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1083,10 +1221,7 @@ class MainWindow(QMainWindow):
         self.preset_table.model().rowsInserted.connect(self._refresh_measurement_time_estimate)
         self.preset_table.model().rowsRemoved.connect(self._refresh_measurement_time_estimate)
         self.preset_table.model().modelReset.connect(self._refresh_measurement_time_estimate)
-        self.preset_table_note = QLabel(
-            "Only non-empty presets are listed. Solo snapshots are marked with a "
-            "<span style='color: #f59e0b;'>★</span>."
-        )
+        self.preset_table_note = QLabel("Only non-empty presets are listed.")
         self.preset_table_note.setTextFormat(Qt.TextFormat.RichText)
         self.preset_measurement_time_estimate = QLabel()
         self.preset_measurement_time_estimate.setWordWrap(True)
@@ -1145,6 +1280,10 @@ class MainWindow(QMainWindow):
         )
         self.manual_adjustments.setProperty("help_id", HelpId.MANUAL_EDITING)
         self.manual_adjustments.toggled.connect(self._manual_adjustments_toggled)
+        self.show_legend_button = QPushButton("Show legend")
+        self.show_legend_button.setToolTip("Show the preset table symbol legend.")
+        self.show_legend_button.setProperty("help_id", HelpId.SNAPSHOTS_SOLOS_IGNORED)
+        self.show_legend_button.clicked.connect(self.show_preset_table_legend)
         self.unselect_all_button = QPushButton("Unselect all")
         self.unselect_all_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
@@ -1157,20 +1296,29 @@ class MainWindow(QMainWindow):
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
         )
         self.select_diff_button.setToolTip(
-            "Select presets whose loudness-affecting content differs from another setlist."
+            "Choose another Helix file and skip snapshots whose loudness-affecting content is unchanged."
         )
         self.select_diff_button.setProperty("help_id", HelpId.SELECT_CHANGED)
         self.select_diff_button.clicked.connect(self.select_diff_presets)
+        self.comparison_enabled = QCheckBox("Enabled")
+        self.comparison_enabled.setToolTip(
+            "Enable snapshot exclusions from the selected comparison file."
+        )
+        self.comparison_enabled.setProperty("help_id", HelpId.SELECT_CHANGED)
+        self.comparison_enabled.setEnabled(False)
+        self.comparison_enabled.toggled.connect(self._comparison_enabled_toggled)
         preset_header.addWidget(self.preset_help_button)
         preset_header.addWidget(self.select_all_button)
         preset_header.addWidget(self.unselect_all_button)
         preset_header.addWidget(self.select_diff_button)
+        preset_header.addWidget(self.comparison_enabled)
         layout.addWidget(self.preset_header)
         layout.addWidget(self.preset_empty_state)
         layout.addWidget(self.preset_table)
         preset_table_note_row = QHBoxLayout()
         preset_table_note_row.addWidget(self.preset_table_note)
         preset_table_note_row.addStretch()
+        preset_table_note_row.addWidget(self.show_legend_button)
         preset_table_note_row.addWidget(self.manual_adjustments)
         preset_table_note_row.addWidget(self.preset_csv_controls)
         layout.addLayout(preset_table_note_row)
@@ -1203,49 +1351,28 @@ class MainWindow(QMainWindow):
         self.preset_empty_logo = logo
         layout.addWidget(logo, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        file_dialog_title = QLabel("Open setlist/preset file")
-        file_dialog_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        file_dialog_title.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        title_font = file_dialog_title.font()
-        title_font.setPointSize(
-            max(title_font.pointSize() + 2, QApplication.font().pointSize() + 2)
-        )
-        file_dialog_title.setFont(title_font)
-        self.preset_empty_file_dialog_title = file_dialog_title
-
-        title_row = QWidget(pane)
-        title_layout = QHBoxLayout(title_row)
-        title_layout.setContentsMargins(0, 0, 0, 0)
-        title_layout.setSpacing(8)
-        title_layout.addStretch(1)
-        title_layout.addWidget(file_dialog_title)
-        title_layout.addStretch(1)
-        recent_label = QLabel("Recent")
-        recent_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
-        recent_files = QComboBox(title_row)
+        recent_files = QComboBox(pane)
         recent_files.setToolTip("Open a recently loaded Helix setlist or preset file.")
         recent_files.setMaximumWidth(340)
         recent_files.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         recent_files.activated.connect(self._recent_file_activated)
         self.recent_files = recent_files
-        title_layout.addWidget(recent_label)
-        title_layout.addWidget(recent_files)
-        self.preset_empty_recent_label = recent_label
-        self.preset_empty_title_row = title_row
-        layout.addWidget(title_row)
         self._refresh_recent_files_selector()
 
-        file_dialog = QFileDialog(pane, "Choose patch file")
-        file_dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
-        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
-        file_dialog.setNameFilter("Patches (*.hls *.hlx)")
-        file_dialog.setToolTip("Open a Helix setlist or preset file.")
-        file_dialog.setWindowFlags(Qt.WindowType.Widget)
-        file_dialog.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
-        file_dialog.fileSelected.connect(self._open_input_path)
-        self.preset_empty_file_dialog = file_dialog
-        layout.addWidget(file_dialog, 3)
+        open_button = QToolButton(pane)
+        open_button.setText("Open preset/setlist")
+        open_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        open_button.setIconSize(QSize(64, 64))
+        open_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        open_button.setToolTip("Open a Helix preset or setlist file.")
+        open_button.setProperty("help_id", HelpId.OPEN_FILES)
+        open_button.setMinimumSize(260, 124)
+        open_button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
+        open_button.setAutoRaise(True)
+        open_button.clicked.connect(self.browse_input)
+        self.preset_empty_open_button = open_button
+        layout.addWidget(open_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(recent_files, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addStretch(1)
         return pane
 
@@ -1263,6 +1390,7 @@ class MainWindow(QMainWindow):
             self.preset_measurement_time_estimate.sizeHint().height(),
             self.preset_csv_controls.sizeHint().height(),
             self.manual_adjustments.sizeHint().height(),
+            self.show_legend_button.sizeHint().height(),
         )
         presets_layout = self.presets.layout()
         spacing = presets_layout.spacing() if presets_layout is not None else 0
@@ -1279,6 +1407,8 @@ class MainWindow(QMainWindow):
         self.select_all_button.hide()
         self.unselect_all_button.hide()
         self.select_diff_button.hide()
+        self.comparison_enabled.hide()
+        self.show_legend_button.hide()
         self.manual_adjustments.hide()
         self.presets.show()
         self._refresh_preset_advanced_splitter_visibility()
@@ -1294,7 +1424,9 @@ class MainWindow(QMainWindow):
         self.preset_csv_controls.show()
         self.select_all_button.setVisible(not single_preset)
         self.unselect_all_button.setVisible(not single_preset)
-        self.select_diff_button.setVisible(not single_preset)
+        self.select_diff_button.show()
+        self.comparison_enabled.show()
+        self.show_legend_button.show()
         self.manual_adjustments.setVisible(not single_preset)
         self.manual_adjustments.setChecked(False)
         self.presets.show()
@@ -1855,7 +1987,7 @@ class MainWindow(QMainWindow):
             ),
             self.solo_gain_bump_db,
         )
-        self.solo_regex = QLineEdit(r"(?i)\bsolo\b")
+        self.solo_regex = QLineEdit(NormalizationPolicy().solo_regex)
         self.solo_regex.setProperty("help_id", HelpId.SNAPSHOTS_SOLOS_IGNORED)
         self.solo_regex.setMaximumWidth(220)
         self.solo_regex.setToolTip(
@@ -2308,14 +2440,14 @@ class MainWindow(QMainWindow):
 
     def _is_solo_snapshot_name(self, name: str) -> bool:
         try:
-            solo_pattern = re.compile(self.solo_regex.text())
+            solo_pattern = re.compile(normalize_regex_pattern(self.solo_regex.text()))
         except re.error:
             return False
         return solo_pattern.search(name) is not None
 
     def _is_ignored_snapshot_name(self, name: str) -> bool:
         try:
-            ignore_pattern = re.compile(self.ignore_snapshot_regex.text())
+            ignore_pattern = re.compile(normalize_regex_pattern(self.ignore_snapshot_regex.text()))
         except re.error:
             return False
         return ignore_pattern.search(name) is not None
@@ -2328,7 +2460,8 @@ class MainWindow(QMainWindow):
 
     def _help_tool_button(self, tooltip: str, callback: Callable[[], object]) -> QToolButton:
         button = QToolButton(self)
-        button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogHelpButton))
+        button.setIcon(_question_mark_icon())
+        button.setIconSize(QSize(TOOLBAR_ICON_SIZE, TOOLBAR_ICON_SIZE))
         button.setToolTip(tooltip)
         button.setAccessibleName(tooltip)
         button.setAutoRaise(True)
@@ -2663,6 +2796,7 @@ class MainWindow(QMainWindow):
         self._recording_paths.clear()
         self._clear_bad_lufs_highlights()
         self._clear_normalization_focus()
+        self._reset_comparison_file_selection()
         self._load_metadata()
         is_single_preset = path.suffix.lower() == ".hlx"
         self._show_loaded_preset_state(single_preset=is_single_preset)
@@ -4093,8 +4227,10 @@ class MainWindow(QMainWindow):
         argv.extend(["--reference-di", self.reference_di.text()])
         argv.extend(["--target-lufs", self.target_lufs.text()])
         argv.extend(["--solo-gain-bump-db", self.solo_gain_bump_db.text()])
-        argv.extend(["--solo-regex", self.solo_regex.text()])
-        argv.extend(["--ignore-snapshot-regex", self.ignore_snapshot_regex.text()])
+        argv.extend(["--solo-regex", normalize_regex_pattern(self.solo_regex.text())])
+        argv.extend(
+            ["--ignore-snapshot-regex", normalize_regex_pattern(self.ignore_snapshot_regex.text())]
+        )
         argv.extend(["--snapshot-count", str(self.snapshot_count_input.value())])
         if self.keep_temp.isChecked():
             argv.append("--keep-temp")
@@ -4262,13 +4398,14 @@ class MainWindow(QMainWindow):
     def select_diff_presets(self) -> None:
         input_path = Path(self.input_path.text())
         suffix = input_path.suffix.lower()
-        if suffix != ".hls":
+        if suffix not in {".hls", ".hlx"}:
             return
 
+        file_kind = "preset" if suffix == ".hlx" else "setlist"
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Choose previous setlist",
-            filter=f"Helix setlist (*{suffix})",
+            f"Choose previous {file_kind}",
+            filter=f"Helix {file_kind} (*{suffix})",
         )
         if not path:
             return
@@ -4281,32 +4418,214 @@ class MainWindow(QMainWindow):
         try:
             profile = get_device_profile(self.device.currentData())
             handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
-            diff_ids = {
-                handler.format_patch_id(preset_id)
-                for preset_id in handler.diff_preset_ids(input_path, previous_input_path)
+            diff_snapshot_ids = getattr(handler, "diff_snapshot_ids", None)
+            if diff_snapshot_ids is None:
+                diff_snapshots = {
+                    preset_id: tuple(range(1, self.snapshot_count + 1))
+                    for preset_id in handler.diff_preset_ids(input_path, previous_input_path)
+                }
+            else:
+                diff_snapshots = diff_snapshot_ids(
+                    input_path,
+                    previous_input_path,
+                    self.snapshot_count,
+                )
+            changed_by_patch = {
+                handler.format_patch_id(preset_id): tuple(snapshots)
+                for preset_id, snapshots in diff_snapshots.items()
             }
         except Exception as exc:  # noqa: BLE001
             self.show_error(str(exc))
             return
 
-        selected_count = 0
-        with self._sorting_paused():
-            for row in range(self.preset_table.rowCount()):
-                selected_item = self.preset_table.item(row, 0)
-                patch_item = self.preset_table.item(row, 1)
-                if selected_item is None or patch_item is None:
-                    continue
-                selected = patch_item.text() in diff_ids
-                selected_item.setCheckState(
-                    Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked
-                )
-                if selected:
-                    selected_count += 1
+        self._comparison_input_path = previous_input_path
+        self._comparison_changed_by_patch = changed_by_patch
+        signals_blocked = self.comparison_enabled.blockSignals(True)
+        try:
+            self.comparison_enabled.setEnabled(True)
+            self.comparison_enabled.setChecked(True)
+        finally:
+            self.comparison_enabled.blockSignals(signals_blocked)
+        measurable_snapshots = self._apply_comparison_ignore_plan()
 
         self._log(
-            f"Selected {selected_count} preset(s) changed since {previous_input_path}",
+            (
+                f"Marked unchanged snapshots from {previous_input_path}; "
+                f"{measurable_snapshots} changed snapshot(s) remain measurable"
+            ),
             "success",
         )
+
+    def _comparison_enabled_toggled(self, enabled: bool) -> None:
+        if enabled:
+            if self._comparison_changed_by_patch is None:
+                return
+            measurable_snapshots = self._apply_comparison_ignore_plan()
+            source = f" from {self._comparison_input_path}" if self._comparison_input_path else ""
+            self._log(
+                (
+                    f"Enabled comparison-based snapshot exclusions{source}; "
+                    f"{measurable_snapshots} changed snapshot(s) remain measurable"
+                ),
+                "success",
+            )
+            return
+
+        self._clear_comparison_ignore_plan()
+        self._log("Disabled comparison-based snapshot exclusions", "info")
+
+    def _apply_comparison_ignore_plan(self) -> int:
+        changed_by_patch = self._comparison_changed_by_patch or {}
+        with self._sorting_paused():
+            measurable_snapshots = self._set_comparison_ignore_plan(changed_by_patch)
+        self._refresh_measurement_time_estimate()
+        return measurable_snapshots
+
+    def _clear_comparison_ignore_plan(self) -> None:
+        with self._sorting_paused():
+            for row in range(self.preset_table.rowCount()):
+                for snapshot_index in range(self.snapshot_count):
+                    self._set_snapshot_ignore_reason(
+                        row,
+                        snapshot_index,
+                        IGNORE_REASON_COMPARISON,
+                        False,
+                    )
+        self._refresh_measurement_time_estimate()
+
+    def _reset_comparison_file_selection(self) -> None:
+        self._comparison_input_path = None
+        self._comparison_changed_by_patch = None
+        if not hasattr(self, "comparison_enabled"):
+            return
+        signals_blocked = self.comparison_enabled.blockSignals(True)
+        try:
+            self.comparison_enabled.setChecked(False)
+            self.comparison_enabled.setEnabled(False)
+        finally:
+            self.comparison_enabled.blockSignals(signals_blocked)
+
+    def show_preset_table_legend(self) -> None:
+        self._build_preset_table_legend_dialog().exec()
+
+    def _build_preset_table_legend_dialog(self) -> QDialog:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Preset table legend")
+        dialog.setProperty("help_id", HelpId.SNAPSHOTS_SOLOS_IGNORED)
+        layout = QVBoxLayout(dialog)
+
+        marker_heading = QLabel("Snapshot markers", dialog)
+        marker_font = marker_heading.font()
+        marker_font.setBold(True)
+        marker_heading.setFont(marker_font)
+        layout.addWidget(marker_heading)
+
+        grid = QGridLayout()
+        grid.setColumnStretch(1, 1)
+        marker_rows: tuple[tuple[QLabel, str], ...] = (
+            (
+                self._legend_star_label(dialog),
+                "Solo snapshot: solo gain bump applies; normal loudness matching is skipped.",
+            ),
+            (
+                self._legend_ignore_icon_label(IGNORE_REASON_PRESET, dialog),
+                "Ignored because the whole preset is unchecked.",
+            ),
+            (
+                self._legend_ignore_icon_label(IGNORE_REASON_COMPARISON, dialog),
+                "Ignored because comparison with another Helix file found no relevant snapshot changes.",
+            ),
+            (
+                self._legend_ignore_icon_label(IGNORE_REASON_REGEX, dialog),
+                "Ignored because the snapshot name matches the ignored-snapshot regex.",
+            ),
+        )
+        for row, (symbol, text) in enumerate(marker_rows):
+            symbol.setFixedSize(30, 24)
+            symbol.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            description = QLabel(text, dialog)
+            description.setWordWrap(True)
+            grid.addWidget(symbol, row, 0, Qt.AlignmentFlag.AlignTop)
+            grid.addWidget(description, row, 1)
+        layout.addLayout(grid)
+
+        color_heading = QLabel("Snapshot cell colors", dialog)
+        color_heading.setFont(marker_font)
+        layout.addWidget(color_heading)
+        color_grid = QGridLayout()
+        color_grid.setColumnStretch(1, 1)
+        color_rows: tuple[tuple[QLabel, str], ...] = (
+            (self._legend_color_swatch(QColor("#ffffff"), dialog), "White: initial state."),
+            (
+                self._legend_color_swatch(NORMALIZATION_FOCUS_BACKGROUND, dialog),
+                "Light blue: preset in progress.",
+            ),
+            (
+                self._legend_color_swatch(
+                    NORMALIZATION_FOCUS_BACKGROUND,
+                    dialog,
+                    outlined=True,
+                ),
+                "Light blue with blue outline: snapshot in progress.",
+            ),
+            (
+                self._legend_color_swatch(PROCESSED_SNAPSHOT_BACKGROUND, dialog),
+                "Light green: snapshot successfully normalized.",
+            ),
+            (
+                self._legend_color_swatch(BAD_LUFS_ROW_BACKGROUND, dialog),
+                "Light red: snapshot normalization error.",
+            ),
+            (self._legend_color_swatch(IGNORED_SNAPSHOT_BACKGROUND, dialog), "Grey: ignored."),
+        )
+        for row, (swatch, text) in enumerate(color_rows):
+            description = QLabel(text, dialog)
+            description.setWordWrap(True)
+            color_grid.addWidget(swatch, row, 0, Qt.AlignmentFlag.AlignTop)
+            color_grid.addWidget(description, row, 1)
+        layout.addLayout(color_grid)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dialog)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        return dialog
+
+    @staticmethod
+    def _legend_star_label(parent: QWidget) -> QLabel:
+        label = QLabel("<span style='color: #f59e0b;'>★</span>", parent)
+        label.setObjectName("legendSoloIcon")
+        label.setTextFormat(Qt.TextFormat.RichText)
+        font = label.font()
+        font.setPointSize(max(font.pointSize() + 4, QApplication.font().pointSize() + 4))
+        label.setFont(font)
+        return label
+
+    def _legend_ignore_icon_label(self, reason: str, parent: QWidget) -> QLabel:
+        label = QLabel(parent)
+        label.setObjectName(f"legendIgnoreIcon{reason}")
+        label.setPixmap(self._ignore_reason_icons[reason].pixmap(18, 18))
+        return label
+
+    @staticmethod
+    def _legend_color_swatch(
+        color: QColor,
+        parent: QWidget,
+        *,
+        outlined: bool = False,
+    ) -> QLabel:
+        label = QLabel(parent)
+        label.setObjectName("legendColorSwatch")
+        pixmap = QPixmap(30, 18)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = pixmap.rect().adjusted(1, 1, -2, -2)
+        painter.setBrush(color)
+        painter.setPen(QPen(NORMALIZATION_FOCUS_BLUE if outlined else QColor("#d1d5db"), 2))
+        painter.drawRoundedRect(rect, 2, 2)
+        painter.end()
+        label.setPixmap(pixmap)
+        return label
 
     def _manual_adjustments_toggled(self, checked: bool) -> None:
         self.preset_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -4421,6 +4740,24 @@ class MainWindow(QMainWindow):
         return None
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            event.type() == QEvent.Type.ToolTip
+            and watched.property("keep_tooltip_visible")
+            and isinstance(watched, QWidget)
+        ):
+            text = watched.toolTip()
+            if not text:
+                QToolTip.hideText()
+                return True
+            if isinstance(event, QHelpEvent):
+                anchor = event.globalPos() + QPoint(12, 20)
+            else:
+                anchor = watched.mapToGlobal(watched.rect().bottomLeft())
+            screen = QApplication.screenAt(anchor) or QApplication.primaryScreen()
+            available = screen.availableGeometry() if screen is not None else self.screen().availableGeometry()
+            position = _visible_tooltip_position(anchor, _tooltip_size_hint(text), available)
+            QToolTip.showText(position, text, watched, watched.rect())
+            return True
         if watched is self._manual_cell_editor:
             if event.type() == QEvent.Type.KeyPress:
                 key = event.key() if isinstance(event, QKeyEvent) else None
@@ -4935,6 +5272,12 @@ class MainWindow(QMainWindow):
     def _snapshot_count_changed(self, snapshot_count: int) -> None:
         if hasattr(self, "preset_table"):
             self._configure_snapshot_columns(snapshot_count)
+            if (
+                hasattr(self, "comparison_enabled")
+                and self.comparison_enabled.isChecked()
+                and self._comparison_changed_by_patch is not None
+            ):
+                self._apply_comparison_ignore_plan()
 
     def _adjustment_column_width(self) -> int:
         sample = f"{ADJUSTMENT_MIN_DB:.1f}"
@@ -5142,7 +5485,33 @@ class MainWindow(QMainWindow):
         row: int,
         snapshot_index: int,
         ignored: bool,
+        reason: str = IGNORE_REASON_REGEX,
     ) -> None:
+        self._set_snapshot_ignore_reason(row, snapshot_index, reason, ignored)
+
+    def _set_snapshot_ignore_reason(
+        self,
+        row: int,
+        snapshot_index: int,
+        reason: str,
+        active: bool,
+    ) -> None:
+        name_item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
+        reasons = _snapshot_ignore_reasons(name_item) if name_item is not None else ()
+        if active:
+            reasons = tuple(dict.fromkeys((*reasons, reason)))
+        else:
+            reasons = tuple(existing for existing in reasons if existing != reason)
+        self._set_snapshot_ignore_reasons(row, snapshot_index, reasons)
+
+    def _set_snapshot_ignore_reasons(
+        self,
+        row: int,
+        snapshot_index: int,
+        reasons: tuple[str, ...],
+    ) -> None:
+        reasons = tuple(reason for reason in reasons if reason in IGNORE_REASON_LABELS)
+        ignored = bool(reasons)
         signals_blocked = self.preset_table.blockSignals(True)
         try:
             for column in (
@@ -5153,12 +5522,19 @@ class MainWindow(QMainWindow):
                 item = self.preset_table.item(row, column)
                 if item is None:
                     continue
+                item.setData(IGNORED_SNAPSHOT_REASONS_ROLE, reasons or None)
                 item.setData(IGNORED_SNAPSHOT_ROLE, True if ignored else None)
                 if ignored:
                     item.setData(PROCESSED_SNAPSHOT_ROLE, None)
                 if column == self._snapshot_name_column(snapshot_index):
                     if ignored:
                         item.setData(RECORDED_OUTPUT_PATH_ROLE, None)
+                    item.setToolTip(
+                        _snapshot_tooltip(
+                            bool(item.data(SOLO_SNAPSHOT_ROLE)),
+                            reasons,
+                        )
+                    )
                 item.setForeground(QBrush(IGNORED_SNAPSHOT_FOREGROUND) if ignored else QBrush())
                 self._refresh_preset_item_background(item)
                 if column == self._snapshot_name_column(snapshot_index):
@@ -5178,6 +5554,37 @@ class MainWindow(QMainWindow):
                     self._set_adjustment_value(adjustment, "+0", 0)
         finally:
             self.preset_table.blockSignals(signals_blocked)
+
+    def _set_preset_ignore_reason(self, row: int, active: bool) -> None:
+        for snapshot_index in range(self.snapshot_count):
+            self._set_snapshot_ignore_reason(
+                row,
+                snapshot_index,
+                IGNORE_REASON_PRESET,
+                active,
+            )
+
+    def _set_comparison_ignore_plan(
+        self,
+        changed_by_patch: dict[str, tuple[int, ...]],
+    ) -> int:
+        measurable = 0
+        for row in range(self.preset_table.rowCount()):
+            patch_item = self.preset_table.item(row, 1)
+            if patch_item is None:
+                continue
+            changed = set(changed_by_patch.get(patch_item.text(), ()))
+            for snapshot_index in range(self.snapshot_count):
+                is_changed = snapshot_index + 1 in changed
+                if is_changed:
+                    measurable += 1
+                self._set_snapshot_ignore_reason(
+                    row,
+                    snapshot_index,
+                    IGNORE_REASON_COMPARISON,
+                    not is_changed,
+                )
+        return measurable
 
     @staticmethod
     def _set_adjustment_ignored(item: QTableWidgetItem) -> None:
@@ -5276,18 +5683,23 @@ class MainWindow(QMainWindow):
         snapshot_names = name_item.data(Qt.ItemDataRole.UserRole) if name_item is not None else ()
         snapshot_names = snapshot_names if isinstance(snapshot_names, tuple) else ()
         try:
-            solo_pattern = re.compile(self.solo_regex.text())
+            solo_pattern = re.compile(normalize_regex_pattern(self.solo_regex.text()))
         except re.error:
             solo_pattern = None
         try:
-            ignore_pattern = re.compile(self.ignore_snapshot_regex.text())
+            ignore_pattern = re.compile(normalize_regex_pattern(self.ignore_snapshot_regex.text()))
         except re.error:
             ignore_pattern = None
         for snapshot_index in range(self.snapshot_count):
             item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
             if item is not None:
                 self._set_snapshot_name(item, "", False, False)
-                self._set_ignored_snapshot_highlight(row, snapshot_index, False)
+                self._set_snapshot_ignore_reason(
+                    row,
+                    snapshot_index,
+                    IGNORE_REASON_REGEX,
+                    False,
+                )
         for snapshot, name in enumerate(snapshot_names[: self.snapshot_count]):
             item = self.preset_table.item(row, self._snapshot_name_column(snapshot))
             if item is not None:
@@ -5298,7 +5710,12 @@ class MainWindow(QMainWindow):
                     solo_pattern is not None and solo_pattern.search(name) is not None,
                     is_ignored,
                 )
-                self._set_ignored_snapshot_highlight(row, snapshot, is_ignored)
+                self._set_snapshot_ignore_reason(
+                    row,
+                    snapshot,
+                    IGNORE_REASON_REGEX,
+                    is_ignored,
+                )
 
     def _refresh_all_snapshot_names(self) -> None:
         if not hasattr(self, "preset_table"):
@@ -5319,7 +5736,13 @@ class MainWindow(QMainWindow):
             item.setText(name)
             item.setIcon(QIcon())
             item.setData(SOLO_SNAPSHOT_ROLE, True if is_solo else None)
-            item.setToolTip(_snapshot_tooltip(is_solo, is_ignored))
+            item.setToolTip(
+                _snapshot_tooltip(
+                    is_solo,
+                    _snapshot_ignore_reasons(item)
+                    or ((IGNORE_REASON_REGEX,) if is_ignored else ()),
+                )
+            )
         finally:
             if table is not None:
                 table.blockSignals(signals_blocked)
@@ -5330,9 +5753,10 @@ class MainWindow(QMainWindow):
         if table is None:
             return
         is_solo = bool(item.data(SOLO_SNAPSHOT_ROLE))
+        ignore_reasons = _snapshot_ignore_reasons(item)
         recorded_path = item.data(RECORDED_OUTPUT_PATH_ROLE)
         table.removeCellWidget(item.row(), item.column())
-        if not is_solo and not recorded_path:
+        if not is_solo and not recorded_path and not ignore_reasons:
             self._ensure_item_column_width(item)
             return
         name_text = item.text()
@@ -5347,14 +5771,16 @@ class MainWindow(QMainWindow):
             label.setToolTip(item.toolTip())
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             layout.addWidget(label, 1)
-            self._add_recorded_output_button(layout, content, Path(recorded_path))
+            self._add_ignore_reason_icons(layout, content, ignore_reasons)
+            if recorded_path:
+                self._add_recorded_output_button(layout, content, Path(recorded_path))
             content.setToolTip(item.toolTip())
             table.setCellWidget(item.row(), item.column(), content)
             self._ensure_item_column_width(item)
             return
 
         label_text = f"{escape(name_text)} <span style='color: #f59e0b;'>★</span>"
-        if not recorded_path:
+        if not recorded_path and not ignore_reasons:
             label = SnapshotNameCellWidget(label_text)
             label.setContentsMargins(3, 0, 0, 0)
             label.setToolTip(item.toolTip())
@@ -5375,10 +5801,27 @@ class MainWindow(QMainWindow):
         label.setToolTip(item.toolTip())
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(label, 1)
-        self._add_recorded_output_button(layout, content, Path(recorded_path))
+        self._add_ignore_reason_icons(layout, content, ignore_reasons)
+        if recorded_path:
+            self._add_recorded_output_button(layout, content, Path(recorded_path))
         content.setToolTip(item.toolTip())
         table.setCellWidget(item.row(), item.column(), content)
         self._ensure_item_column_width(item)
+
+    def _add_ignore_reason_icons(
+        self,
+        layout: QHBoxLayout,
+        parent: QWidget,
+        reasons: tuple[str, ...],
+    ) -> None:
+        for reason in reasons:
+            label = QLabel(parent)
+            label.setPixmap(self._ignore_reason_icons[reason].pixmap(18, 18))
+            label.setFixedSize(20, 20)
+            label.setToolTip(
+                f"Skipped during normalization: {IGNORE_REASON_LABELS.get(reason, reason)}"
+            )
+            layout.addWidget(label)
 
     def _add_recorded_output_button(
         self,
@@ -5401,6 +5844,10 @@ class MainWindow(QMainWindow):
             item.setData(PRESET_TABLE_ATTENTION_ROLE, None)
             self.preset_table.viewport().update(self.preset_table.visualItemRect(item))
         if item.column() == 0:
+            self._set_preset_ignore_reason(
+                item.row(),
+                item.checkState() != Qt.CheckState.Checked,
+            )
             self._refresh_preset_measurement_time_estimate()
         if Path(self.input_path.text()).suffix.lower() == ".hlx" and item.column() == 1:
             normalized = item.text().strip().upper()
@@ -5451,11 +5898,13 @@ class MainWindow(QMainWindow):
                     snapshot_names[snapshot_index] = item.text()
                     name_item.setData(Qt.ItemDataRole.UserRole, tuple(snapshot_names))
                 try:
-                    solo_pattern = re.compile(self.solo_regex.text())
+                    solo_pattern = re.compile(normalize_regex_pattern(self.solo_regex.text()))
                 except re.error:
                     solo_pattern = None
                 try:
-                    ignore_pattern = re.compile(self.ignore_snapshot_regex.text())
+                    ignore_pattern = re.compile(
+                        normalize_regex_pattern(self.ignore_snapshot_regex.text())
+                    )
                 except re.error:
                     ignore_pattern = None
                 is_ignored = (
@@ -5470,7 +5919,12 @@ class MainWindow(QMainWindow):
                 snapshot_index = (
                     item.column() - SNAPSHOT_TABLE_START_COLUMN
                 ) // SNAPSHOT_TABLE_COLUMN_STRIDE
-                self._set_ignored_snapshot_highlight(item.row(), snapshot_index, is_ignored)
+                self._set_snapshot_ignore_reason(
+                    item.row(),
+                    snapshot_index,
+                    IGNORE_REASON_REGEX,
+                    is_ignored,
+                )
                 self._refresh_measurement_time_estimate()
             elif self._is_snapshot_adjustment_column(item.column()):
                 try:
@@ -6570,13 +7024,32 @@ def _format_snapshot_output_levels(
     return ", ".join(f"{level:.1f}" for level in levels[snapshot_index])
 
 
-def _snapshot_tooltip(is_solo: bool, is_ignored: bool) -> str:
-    if is_solo and is_ignored:
-        return "Solo snapshot; skipped during normalization"
+def _snapshot_ignore_reasons(item: QTableWidgetItem | None) -> tuple[str, ...]:
+    if item is None:
+        return ()
+    reasons = item.data(IGNORED_SNAPSHOT_REASONS_ROLE)
+    if isinstance(reasons, tuple):
+        return tuple(reason for reason in reasons if isinstance(reason, str))
+    if item.data(IGNORED_SNAPSHOT_ROLE):
+        return (IGNORE_REASON_REGEX,)
+    return ()
+
+
+def _snapshot_tooltip(is_solo: bool, ignore_reasons: tuple[str, ...] | bool) -> str:
+    if isinstance(ignore_reasons, bool):
+        reasons = (IGNORE_REASON_REGEX,) if ignore_reasons else ()
+    else:
+        reasons = ignore_reasons
+    if is_solo and reasons:
+        return "Solo snapshot; skipped during normalization: " + ", ".join(
+            IGNORE_REASON_LABELS.get(reason, reason) for reason in reasons
+        )
     if is_solo:
         return "Solo snapshot"
-    if is_ignored:
-        return "Skipped during normalization"
+    if reasons:
+        return "Skipped during normalization: " + ", ".join(
+            IGNORE_REASON_LABELS.get(reason, reason) for reason in reasons
+        )
     return ""
 
 

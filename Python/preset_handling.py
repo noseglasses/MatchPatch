@@ -37,6 +37,11 @@ OUTPUT_NAMES = {
     13: "USB 7/8",
 }
 
+
+def normalize_regex_pattern(pattern):
+    return pattern.replace("\b", r"\b")
+
+
 TARGET_LUFS = -16.0
 SOLO_GAIN_BUMP = 3.0
 CONTROLLER_ASSIGNMENT_LIMIT = 64
@@ -202,11 +207,81 @@ def extract_diff_preset_ids(current_filename, previous_filename):
     return diff_ids
 
 
+def extract_diff_snapshot_ids(current_filename, previous_filename, snapshot_count=8):
+    current_filetype = get_filetype(current_filename)
+    previous_filetype = get_filetype(previous_filename)
+    if previous_filetype != current_filetype:
+        raise ValueError(
+            "Diff input file type must match input file type: "
+            f".{previous_filetype} != .{current_filetype}"
+        )
+
+    current_json_text, _ = load_input(current_filename)
+    previous_json_text, _ = load_input(previous_filename)
+    current_data = json.loads(current_json_text)
+    previous_data = json.loads(previous_json_text)
+    current_presets = current_data.get("presets", [])
+    previous_presets = previous_data.get("presets", [])
+    diff_snapshots = {}
+
+    for preset_index, current_preset in enumerate(current_presets):
+        if is_default_preset(current_preset):
+            continue
+
+        previous_preset = (
+            previous_presets[preset_index] if preset_index < len(previous_presets) else None
+        )
+        preset_id = preset_index + 1
+
+        if canonical_non_snapshot_signal_content(
+            current_preset
+        ) != canonical_non_snapshot_signal_content(previous_preset):
+            diff_snapshots[preset_id] = list(range(1, snapshot_count + 1))
+            continue
+
+        changed = []
+        for snapshot_index in range(snapshot_count):
+            if canonical_snapshot_signal_content(
+                current_preset, snapshot_index
+            ) != canonical_snapshot_signal_content(previous_preset, snapshot_index):
+                changed.append(snapshot_index + 1)
+        if changed:
+            diff_snapshots[preset_id] = changed
+
+    return diff_snapshots
+
+
 def canonical_preset_signal_content(preset):
     if not isinstance(preset, dict):
         return None
 
     return remove_non_signal_content(preset.get("tone", {}))
+
+
+def canonical_non_snapshot_signal_content(preset):
+    if not isinstance(preset, dict):
+        return None
+
+    tone = preset.get("tone", {})
+    if not isinstance(tone, dict):
+        return None
+    return remove_non_signal_content(
+        {key: value for key, value in tone.items() if not is_snapshot_key(key)}
+    )
+
+
+def canonical_snapshot_signal_content(preset, snapshot_index):
+    if not isinstance(preset, dict):
+        return None
+
+    tone = preset.get("tone", {})
+    if not isinstance(tone, dict):
+        return None
+    return remove_non_signal_content(tone.get(f"snapshot{snapshot_index}"))
+
+
+def is_snapshot_key(key):
+    return re.fullmatch(r"snapshot\d+", str(key)) is not None
 
 
 def remove_non_signal_content(value):
@@ -1004,8 +1079,8 @@ def adjust_snapshot_gains(
 ):
 
     changes = 0
-    solo_pattern = re.compile(solo_regex)
-    ignore_snapshot_pattern = re.compile(ignore_snapshot_regex)
+    solo_pattern = re.compile(normalize_regex_pattern(solo_regex))
+    ignore_snapshot_pattern = re.compile(normalize_regex_pattern(ignore_snapshot_regex))
 
     presets = data.get("presets", [])
 
@@ -1479,7 +1554,12 @@ def main():
 
     parser.add_argument("--snapshot-count", type=int, default=4)
 
-    parser.add_argument("--solo-regex", "--solo-marker", dest="solo_regex", default=r"(?i)\bsolo\b")
+    parser.add_argument(
+        "--solo-regex",
+        "--solo-marker",
+        dest="solo_regex",
+        default=r"(?i)\bsolo\b",
+    )
 
     parser.add_argument(
         "--ignore-snapshot-regex",
@@ -1542,6 +1622,15 @@ def main():
         help=("Print preset IDs whose loudness-affecting content differs from PREVIOUS_INPUT"),
     )
 
+    mode_group.add_argument(
+        "--diff-snapshots",
+        metavar="PREVIOUS_INPUT",
+        help=(
+            "Print changed snapshot IDs per preset whose loudness-affecting content "
+            "differs from PREVIOUS_INPUT"
+        ),
+    )
+
     args = parser.parse_args()
 
     try:
@@ -1580,10 +1669,23 @@ def main():
 
             return
 
+        if args.diff_snapshots:
+            diff_snapshots = extract_diff_snapshot_ids(
+                args.input,
+                args.diff_snapshots,
+                args.snapshot_count,
+            )
+
+            json.dump(diff_snapshots, sys.stdout, indent=2)
+
+            print()
+
+            return
+
         if not args.output:
             raise ValueError(
                 "Output file is required unless --list-presets, --metadata, "
-                "or --diff-presets is used"
+                "--diff-presets, or --diff-snapshots is used"
             )
 
         require_compatible_output_path(args.input, args.output)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -22,6 +22,51 @@ from matchpatch.gui.help import HelpId, resolve_help_url
 
 PROJECT_URL = "https://github.com/noseglasses/MatchPatch"
 ASSETS_DIR = Path(__file__).resolve().parents[3] / "docs" / "assets"
+
+
+def _about_icon_blue(size: int) -> QColor:
+    pixmap = (
+        QApplication.style()
+        .standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
+        .pixmap(size, size)
+    )
+    image = pixmap.toImage()
+    red_total = 0
+    green_total = 0
+    blue_total = 0
+    count = 0
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.alpha() <= 0:
+                continue
+            if 180 <= color.hue() <= 250 and color.saturation() >= 60 and color.value() >= 80:
+                red_total += color.red()
+                green_total += color.green()
+                blue_total += color.blue()
+                count += 1
+    if count == 0:
+        return QColor("#308cc6")
+    return QColor(red_total // count, green_total // count, blue_total // count)
+
+
+def _question_mark_icon() -> QIcon:
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_about_icon_blue(64))
+    painter.drawEllipse(4, 4, 56, 56)
+    painter.setPen(QColor("#ffffff"))
+    font = QFont()
+    font.setBold(True)
+    font.setPointSize(40)
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "?")
+    painter.end()
+    return QIcon(pixmap)
 
 
 class AboutDialog(QDialog):
@@ -70,9 +115,7 @@ class HelpDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("MatchPatch Help")
-        self.setWindowIcon(
-            QApplication.style().standardIcon(QStyle.StandardPixmap.SP_DialogHelpButton)
-        )
+        self.setWindowIcon(_question_mark_icon())
         self.resize(680, 520)
         layout = QVBoxLayout(self)
         help_text = QTextBrowser()

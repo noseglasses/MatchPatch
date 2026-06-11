@@ -56,6 +56,11 @@ class NormalizationPolicy:
     gain_deadband_db: float = 0.25
 
 
+def normalize_regex_pattern(pattern: str) -> str:
+    r"""Preserve user-visible ``\b`` word-boundary escapes decoded by config/UI paths."""
+    return pattern.replace("\b", r"\b")
+
+
 class DeviceController(ABC):
     def __enter__(self) -> Self:
         return self
@@ -101,6 +106,18 @@ class PatchFileHandler(ABC):
     def diff_preset_ids(self, input_path: Path, previous_input_path: Path) -> list[int]:
         """List presets whose loudness-affecting content differs between two patch files."""
         raise NotImplementedError("Preset diff selection is not supported for this device")
+
+    def diff_snapshot_ids(
+        self,
+        input_path: Path,
+        previous_input_path: Path,
+        snapshot_count: int,
+    ) -> dict[int, tuple[int, ...]]:
+        """List changed one-based snapshots per changed preset."""
+        return {
+            preset_id: tuple(range(1, snapshot_count + 1))
+            for preset_id in self.diff_preset_ids(input_path, previous_input_path)
+        }
 
     @abstractmethod
     def parse_patch_set(self, value: str) -> list[int]:

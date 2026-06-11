@@ -156,6 +156,39 @@ def test_diff_preset_ids_delegates_to_legacy_script(tmp_path, monkeypatch) -> No
         handler.diff_preset_ids(Path("set.hls"), Path("previous.hlx"))
 
 
+def test_diff_snapshot_ids_delegates_to_legacy_script(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    calls = []
+
+    def fake_run(*args, capture=False, log_output=True):
+        calls.append((args, capture, log_output))
+        return subprocess.CompletedProcess([], 0, stdout='{"1": [1, 3], "6": [2]}')
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+
+    assert handler.diff_snapshot_ids(Path("set.hls"), Path("previous.hls"), 4) == {
+        1: (1, 3),
+        6: (2,),
+    }
+    assert calls == [
+        (
+            (
+                "-i",
+                Path("set.hls"),
+                "--diff-snapshots",
+                Path("previous.hls"),
+                "--snapshot-count",
+                4,
+            ),
+            True,
+            False,
+        )
+    ]
+
+    with pytest.raises(ValueError, match="same extension"):
+        handler.diff_snapshot_ids(Path("set.hls"), Path("previous.hlx"), 4)
+
+
 def test_legacy_diff_signature_ignores_names_and_colors() -> None:
     legacy = load_legacy_preset_handling()
     first = {
@@ -194,6 +227,48 @@ def test_legacy_diff_signature_ignores_names_and_colors() -> None:
     )
     assert legacy.canonical_preset_signal_content(first) != legacy.canonical_preset_signal_content(
         changed_parameter
+    )
+
+
+def test_legacy_snapshot_diff_ignores_names_but_tracks_snapshot_assignments() -> None:
+    legacy = load_legacy_preset_handling()
+    current = {
+        "tone": {
+            "dsp0": {"block0": {"@model": "amp", "gain": 2.0}},
+            "snapshot0": {"@name": "Verse", "@pedalstate": {"block0": True}},
+            "snapshot1": {"@name": "Lead", "@pedalstate": {"block0": False}},
+        },
+    }
+    renamed = {
+        "tone": {
+            "dsp0": {"block0": {"@model": "amp", "gain": 2.0}},
+            "snapshot0": {"@name": "Intro", "@pedalstate": {"block0": True}},
+            "snapshot1": {"@name": "Solo", "@pedalstate": {"block0": False}},
+        },
+    }
+    snapshot_changed = {
+        "tone": {
+            "dsp0": {"block0": {"@model": "amp", "gain": 2.0}},
+            "snapshot0": {"@name": "Verse", "@pedalstate": {"block0": True}},
+            "snapshot1": {"@name": "Lead", "@pedalstate": {"block0": True}},
+        },
+    }
+    layout_changed = {
+        "tone": {
+            "dsp0": {"block0": {"@model": "amp", "gain": 3.0}},
+            "snapshot0": {"@name": "Verse", "@pedalstate": {"block0": True}},
+            "snapshot1": {"@name": "Lead", "@pedalstate": {"block0": False}},
+        },
+    }
+
+    assert legacy.canonical_snapshot_signal_content(current, 0) == (
+        legacy.canonical_snapshot_signal_content(renamed, 0)
+    )
+    assert legacy.canonical_snapshot_signal_content(current, 1) != (
+        legacy.canonical_snapshot_signal_content(snapshot_changed, 1)
+    )
+    assert legacy.canonical_non_snapshot_signal_content(current) != (
+        legacy.canonical_non_snapshot_signal_content(layout_changed)
     )
 
 
