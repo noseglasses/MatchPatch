@@ -1,13 +1,18 @@
 # MatchPatch
 
 <p align="center">
-  <img src="docs/assets/matchmatch-logo.png" alt="MatchPatch: Normalize presets. Match volume." width="520">
+  <img src="docs/assets/matchmatch-logo.png" alt="MatchPatch: Normalize presets. Match volume." width="173">
 </p>
 
 [![Quality](https://github.com/noseglasses/MatchPatch/actions/workflows/quality.yml/badge.svg)](https://github.com/noseglasses/MatchPatch/actions/workflows/quality.yml)
 [![Release](https://github.com/noseglasses/MatchPatch/actions/workflows/release.yml/badge.svg)](https://github.com/noseglasses/MatchPatch/actions/workflows/release.yml)
 [![PyPI](https://img.shields.io/pypi/v/matchpatch.svg)](https://pypi.org/project/matchpatch/)
 [![Python](https://img.shields.io/pypi/pyversions/matchpatch.svg)](https://pypi.org/project/matchpatch/)
+
+<p align="center">
+  <strong><a href="https://youtu.be/Dw1Kez0AnCk">Watch the MatchPatch demo video</a></strong>
+</p>
+
 ![MatchPatch GUI showing a loaded Helix setlist](docs/assets/screenshots/normalization-ongoing.png)
 
 **No more unexpected volume jumps when switching sounds.**
