@@ -39,7 +39,7 @@ wsl = [
     "pytest-cov>=6.0",
     "ruff>=0.15.17",
     "soundfile>=0.13.1",
-    "ty>=0.0.1a21",
+    "ty>=0.0.49",
 ]
 windows = [
     { include-group = "wsl" },
