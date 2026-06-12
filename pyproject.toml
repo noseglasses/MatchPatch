@@ -31,7 +31,7 @@ installer = [
     "pyinstaller>=6.0",
 ]
 wsl = [
-    "hypothesis>=6.0",
+    "hypothesis>=6.155.2",
     "numpy>=2.0",
     "pre-commit>=4.0",
     "pyloudnorm>=0.1.1",
