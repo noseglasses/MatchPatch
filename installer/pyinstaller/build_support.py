@@ -19,6 +19,16 @@ PYINSTALLER_ASSETS_ROOT = PYINSTALLER_WORK_ROOT / "installer-assets"
 INSTALLER_ASSETS_ROOT = PAYLOAD_ROOT / "installer-assets"
 ICON_SOURCE = PROJECT_ROOT / "docs" / "assets" / "matchmatch-icon-512.png"
 LOGO_SOURCE = PROJECT_ROOT / "docs" / "assets" / "matchmatch-logo.png"
+REFERENCE_DI_SOURCE = (
+    PROJECT_ROOT / "audio" / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
+)
+PAYLOAD_RUNTIME_FILES = [
+    (PROJECT_ROOT / "Python" / "preset_handling.py", Path("Python") / "preset_handling.py"),
+    (
+        REFERENCE_DI_SOURCE,
+        Path("audio") / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav",
+    ),
+]
 
 
 def project_version() -> str:
@@ -41,6 +51,8 @@ def git_sha() -> str:
 
 def asset_datas() -> list[tuple[str, str]]:
     return [
+        (str(PROJECT_ROOT / "Python" / "preset_handling.py"), "Python"),
+        (str(REFERENCE_DI_SOURCE), "audio/reference-di"),
         (str(PROJECT_ROOT / "docs" / "assets" / "matchmatch-icon.png"), "docs/assets"),
         (str(PROJECT_ROOT / "docs" / "assets" / "matchmatch-icon-512.png"), "docs/assets"),
         (str(PROJECT_ROOT / "docs" / "assets" / "matchmatch-logo.png"), "docs/assets"),
@@ -93,6 +105,13 @@ def stage_installer_assets(
     if target_root.exists():
         shutil.rmtree(target_root)
     shutil.copytree(source_root, target_root)
+
+
+def stage_runtime_files(payload_root: Path = PAYLOAD_ROOT) -> None:
+    for source, relative_target in PAYLOAD_RUNTIME_FILES:
+        target = payload_root / relative_target
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
 
 
 def write_build_info(payload_root: Path = PAYLOAD_ROOT) -> None:

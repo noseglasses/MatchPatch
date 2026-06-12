@@ -16,6 +16,7 @@ from build_support import (
     prepare_pyinstaller_paths,
     stage_installer_assets,
     stage_docs,
+    stage_runtime_files,
     write_build_info,
 )
 
@@ -65,5 +66,6 @@ coll = COLLECT(
 )
 
 stage_installer_assets()
+stage_runtime_files()
 stage_docs()
 write_build_info()

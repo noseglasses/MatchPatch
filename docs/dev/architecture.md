@@ -223,8 +223,17 @@ inside the GUI.
 
 ## Configuration
 
-`matchpatch.config` reads TOML using the standard library. The default path is
-`~/.config/matchpatch/config.toml`; `--config` points at another file.
+`matchpatch.config` reads TOML using the standard library. When no `--config`
+is supplied, it checks `default_config_paths()` in order and loads the first
+existing file:
+
+- Windows: `%APPDATA%\MatchPatch\config.toml`, then
+  `%USERPROFILE%\.config\matchpatch\config.toml`;
+- Linux/WSL/macOS: `$XDG_CONFIG_HOME/matchpatch/config.toml` when
+  `XDG_CONFIG_HOME` is set, otherwise `~/.config/matchpatch/config.toml`.
+
+`--config` points at one explicit file and raises an error if that file is
+missing.
 
 Configuration is layered with command-line values preferred over config file
 values. For normalize commands, selected environment variables override matching

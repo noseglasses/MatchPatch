@@ -16,6 +16,9 @@ Helix results, use hardware mode.
 - Decide which backend to use:
   - loopback for a safe no-hardware test;
   - hardware for real Helix measurement.
+- Optional: save a config file if you want the same defaults every time. On
+  installed Windows builds, the automatic config path is
+  `%APPDATA%\MatchPatch\config.toml`.
 
 > Warning:
 > Keep a backup of your original Helix file before saving changes.

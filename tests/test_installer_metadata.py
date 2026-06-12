@@ -34,6 +34,11 @@ def test_inno_setup_script_uses_build_defines_and_expected_payload_files() -> No
     assert "AppVersion={#AppVersion}" in inno_script
     assert "OutputDir={#OutputDir}" in inno_script
     assert "OutputBaseFilename=MatchPatch-Setup-{#AppVersion}" in inno_script
+    assert '#define UninstallerExeName "Uninstall-MatchPatch.exe"' in inno_script
+    assert 'Filename: "{app}\\{#UninstallerExeName}"' in inno_script
+    assert "RenameUninstallerFile('unins000.exe', UninstallerExeName)" in inno_script
+    assert "'UninstallString'" in inno_script
+    assert "'QuietUninstallString'" in inno_script
     assert r"SetupIconFile={#SourceDir}\installer-assets\matchpatch.ico" in inno_script
     assert r"WizardImageFile={#SourceDir}\installer-assets\wizard-logo.bmp" in inno_script
     assert (
@@ -65,10 +70,13 @@ def test_windows_installer_scripts_use_windows_environment_and_no_stale_venv() -
     assert "MatchPatch-Setup-%APP_VERSION%.exe" in combined
     assert "MatchPatch.exe --cli --version" in combined
     assert "Start-Process -FilePath $GuiExe" in combined
+    assert 'Join-Path $InstallDir "Uninstall-MatchPatch.exe"' in combined
+    assert "unins000.exe" not in combined
     assert "build-info.json version" in combined
     assert "installer-assets\\matchpatch.ico" in combined
     assert "installer-assets\\wizard-logo.bmp" in combined
     assert "installer-assets\\wizard-small-logo.bmp" in combined
+    assert "audio\\reference-di\\DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav" in combined
     assert "installer\\smoke\\smoke_payload.ps1" in scripts["test-windows-installer.cmd"]
     assert "installer\\smoke\\smoke_installed.ps1" in scripts["test-windows-installer.cmd"]
     assert "matchpatch.exe" not in combined
@@ -99,15 +107,21 @@ def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     assert "prepare_installer_assets()" in gui_spec
     assert 'prepare_pyinstaller_paths(Path(CONF["workpath"]), Path(CONF["distpath"]))' in gui_spec
     assert "stage_installer_assets()" in gui_spec
+    assert "stage_runtime_files()" in gui_spec
     assert "stage_docs()" in gui_spec
     assert "write_build_info()" in gui_spec
 
+    assert "PAYLOAD_RUNTIME_FILES" in build_support
+    assert '"Python" / "preset_handling.py"' in build_support
+    assert '"audio" / "reference-di"' in build_support
+    assert "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav" in build_support
     assert '"docs_html"' in build_support
     assert '"build-info.json"' in build_support
     assert '"builder": "pyinstaller"' in build_support
     assert "def prepare_pyinstaller_paths" in build_support
     assert "def prepare_installer_assets" in build_support
     assert "def stage_installer_assets" in build_support
+    assert "def stage_runtime_files" in build_support
     assert "matchpatch.ico" in build_support
     assert "wizard-logo.bmp" in build_support
     assert "wizard-small-logo.bmp" in build_support
@@ -147,6 +161,18 @@ def test_installer_assets_are_prepared_outside_payload_then_staged(tmp_path: Pat
     build_support.stage_installer_assets(scratch_assets, payload_root)
 
     assert (payload_root / "installer-assets" / "matchpatch.ico").is_file()
+
+
+def test_runtime_files_are_staged_at_payload_root(tmp_path: Path) -> None:
+    build_support = _load_build_support()
+    payload_root = tmp_path / "build" / "windows-payload" / "MatchPatch"
+
+    build_support.stage_runtime_files(payload_root)
+
+    assert (payload_root / "Python" / "preset_handling.py").is_file()
+    assert (
+        payload_root / "audio" / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
+    ).is_file()
 
 
 def test_release_workflow_publishes_windows_installer() -> None:

@@ -101,7 +101,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from matchpatch.config import Config, config_value, default_config, export_config, load_config
+from matchpatch.config import (
+    Config,
+    config_value,
+    default_config,
+    default_config_path,
+    export_config,
+    load_config,
+)
 from matchpatch.custom_adjustments import CustomAdjustments, load_custom_adjustments_file
 from matchpatch.devices import get_device_profile, list_device_profiles
 from matchpatch.devices.base import (
@@ -2646,7 +2653,7 @@ class MainWindow(QMainWindow):
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setNameFilter("TOML (*.toml)")
-        dialog.selectFile(str(Path(self.config_path.text().strip() or "matchpatch.toml")))
+        dialog.selectFile(str(Path(self.config_path.text().strip() or default_config_path())))
         dialog.setLabelText(QFileDialog.DialogLabel.Accept, "Save")
         save_default = QCheckBox("Save default configuration", dialog)
         save_default.setChecked(False)

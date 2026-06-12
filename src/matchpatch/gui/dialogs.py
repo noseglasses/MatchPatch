@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -21,7 +22,26 @@ from matchpatch import __version__
 from matchpatch.gui.help import HelpId, resolve_help_url
 
 PROJECT_URL = "https://github.com/noseglasses/MatchPatch"
-ASSETS_DIR = Path(__file__).resolve().parents[3] / "docs" / "assets"
+SOURCE_ROOT = Path(__file__).resolve().parents[3]
+
+
+def resource_path(*parts: str) -> Path:
+    relative_path = Path(*parts)
+    candidates: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if getattr(sys, "frozen", False):
+        if meipass:
+            candidates.append(Path(meipass) / relative_path)
+        candidates.append(Path(sys.executable).resolve().parent / relative_path)
+    candidates.append(SOURCE_ROOT / relative_path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+ASSETS_DIR = resource_path("docs", "assets")
 
 
 def _about_icon_blue(size: int) -> QColor:

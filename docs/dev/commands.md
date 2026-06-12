@@ -112,6 +112,18 @@ Export default config:
 matchpatch --export-default-config ~/.config/matchpatch/config.toml
 ```
 
+Installed Windows builds automatically look first in the roaming profile:
+
+```powershell
+MatchPatch.exe --cli --export-default-config "$env:APPDATA\MatchPatch\config.toml"
+```
+
+When `--config` is omitted, MatchPatch searches for config files in this order:
+`%APPDATA%\MatchPatch\config.toml`, then
+`%USERPROFILE%\.config\matchpatch\config.toml` on Windows; on Linux/WSL/macOS,
+`$XDG_CONFIG_HOME/matchpatch/config.toml` when `XDG_CONFIG_HOME` is set,
+otherwise `~/.config/matchpatch/config.toml`.
+
 Normalize without hardware:
 
 ```bash

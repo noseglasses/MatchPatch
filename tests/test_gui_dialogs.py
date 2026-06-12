@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QLabel
 
 from matchpatch import __version__
+from matchpatch.gui import dialogs as gui_dialogs
 from matchpatch.gui.app import qt_message_handler, register_desktop_entry
 from matchpatch.gui.dialogs import PROJECT_URL, AboutDialog, HelpDialog
 from matchpatch.gui.help import HelpId
@@ -38,6 +40,40 @@ def test_about_dialog_displays_project_metadata_and_logo(app) -> None:
     assert any("MIT License" in text for text in texts)
     assert any("Copyright" in text for text in texts)
     assert not dialog.windowIcon().isNull()
+
+
+def test_dialog_resource_path_prefers_pyinstaller_meipass(tmp_path, monkeypatch) -> None:
+    meipass = tmp_path / "bundle"
+    asset = meipass / "docs" / "assets" / "matchmatch-logo.png"
+    asset.parent.mkdir(parents=True)
+    asset.touch()
+    monkeypatch.setattr(gui_dialogs.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(gui_dialogs.sys, "_MEIPASS", str(meipass), raising=False)
+    monkeypatch.setattr(gui_dialogs.sys, "executable", str(tmp_path / "app" / "MatchPatch.exe"))
+
+    assert gui_dialogs.resource_path("docs", "assets", "matchmatch-logo.png") == asset
+
+
+def test_dialog_resource_path_uses_frozen_executable_dir_when_meipass_is_missing(
+    tmp_path, monkeypatch
+) -> None:
+    executable = tmp_path / "MatchPatch" / "MatchPatch.exe"
+    asset = executable.parent / "docs" / "assets" / "matchmatch-logo.png"
+    asset.parent.mkdir(parents=True)
+    asset.touch()
+    monkeypatch.setattr(gui_dialogs.sys, "frozen", True, raising=False)
+    monkeypatch.delattr(gui_dialogs.sys, "_MEIPASS", raising=False)
+    monkeypatch.setattr(gui_dialogs.sys, "executable", str(executable))
+
+    assert gui_dialogs.resource_path("docs", "assets", "matchmatch-logo.png") == asset
+
+
+def test_dialog_resource_path_falls_back_to_source_tree(monkeypatch) -> None:
+    monkeypatch.setattr(gui_dialogs.sys, "frozen", False, raising=False)
+
+    assert gui_dialogs.resource_path("docs", "assets") == (
+        Path(__file__).resolve().parents[1] / "docs" / "assets"
+    )
 
 
 def test_help_dialog_is_available(app) -> None:

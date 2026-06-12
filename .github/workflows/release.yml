@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   publish:
     name: Publish to PyPI
@@ -26,6 +29,7 @@ jobs:
       - name: Install uv and Python
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
+          enable-cache: false
           python-version: "3.14"
 
       - name: Verify tag matches package version
@@ -81,6 +85,7 @@ jobs:
       - name: Install uv and Python
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
+          enable-cache: false
           python-version: "3.12"
 
       - name: Resolve package version

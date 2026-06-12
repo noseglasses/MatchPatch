@@ -335,6 +335,51 @@ def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> N
     assert options["stderr"] is subprocess.PIPE
 
 
+def test_frozen_legacy_script_runner_executes_in_process(tmp_path, monkeypatch) -> None:
+    script = tmp_path / "Python" / "preset_handling.py"
+    script.parent.mkdir()
+    script.write_text(
+        "import sys\n"
+        "print('args=' + ','.join(sys.argv[1:]))\n"
+        "print('error stream', file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    handler = make_handler(tmp_path)
+    original_argv = sys.argv[:]
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("frozen legacy runner must not spawn a subprocess"),
+    )
+
+    completed = handler._run("--list-presets", capture=True)
+
+    assert completed.args == [str(script), "--list-presets"]
+    assert completed.returncode == 0
+    assert completed.stdout == "args=--list-presets\n"
+    assert completed.stderr == "error stream\n"
+    assert sys.argv == original_argv
+
+
+def test_frozen_legacy_script_runner_raises_called_process_error(tmp_path, monkeypatch) -> None:
+    script = tmp_path / "Python" / "preset_handling.py"
+    script.parent.mkdir()
+    script.write_text(
+        "import sys\nprint('before exit')\nprint('failed', file=sys.stderr)\nraise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    handler = make_handler(tmp_path)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    with pytest.raises(subprocess.CalledProcessError) as exc:
+        handler._run("--metadata", capture=True)
+
+    assert exc.value.returncode == 2
+    assert exc.value.stdout == "before exit\n"
+    assert exc.value.stderr == "failed\n"
+
+
 def test_legacy_script_runner_forwards_captured_output_to_logger(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
     messages = []
