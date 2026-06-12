@@ -37,7 +37,7 @@ wsl = [
     "pyloudnorm>=0.1.1",
     "pytest>=8.3",
     "pytest-cov>=6.0",
-    "ruff>=0.11",
+    "ruff>=0.15.17",
     "soundfile>=0.13.1",
     "ty>=0.0.1a21",
 ]
