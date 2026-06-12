@@ -18,6 +18,7 @@ from matchpatch.devices.helix import (
     HelixMidiController,
     HelixPatchFileHandler,
 )
+from matchpatch.midi import midi_output_names
 
 
 def load_legacy_preset_handling():
@@ -593,6 +594,21 @@ def test_midi_controller_validates_port_and_ids(monkeypatch) -> None:
         controller.activate_snapshot(9)
 
     assert controller.__exit__(None, None, None) is None
+
+
+def test_midi_output_names_reports_missing_backend(monkeypatch) -> None:
+    def fail_backend():
+        raise ModuleNotFoundError(
+            "No module named 'mido.backends.rtmidi'",
+            name="mido.backends.rtmidi",
+        )
+
+    monkeypatch.setitem(sys.modules, "mido", SimpleNamespace(get_output_names=fail_backend))
+
+    with pytest.raises(ValueError, match="MIDI output backend is unavailable") as exc:
+        midi_output_names()
+
+    assert "mido.backends.rtmidi" not in str(exc.value)
 
 
 def test_profile_creates_midi_controller() -> None:

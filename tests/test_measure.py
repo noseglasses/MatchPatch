@@ -651,6 +651,36 @@ def test_check_hardware_validates_audio_and_midi_presence(monkeypatch) -> None:
     assert calls == [("validated", "processor"), "midi_listed"]
 
 
+def test_check_hardware_reports_missing_midi_backend(monkeypatch) -> None:
+    profile = get_device_profile("helix")
+    monkeypatch.setattr("matchpatch.measure.get_device_profile", lambda device: profile)
+    monkeypatch.setitem(
+        sys.modules,
+        "matchpatch.audio",
+        SimpleNamespace(
+            AudioConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            validate_audio_device_available=lambda config: config,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "mido",
+        SimpleNamespace(
+            get_output_names=lambda: (_ for _ in ()).throw(
+                ModuleNotFoundError(
+                    "No module named 'mido.backends.rtmidi'",
+                    name="mido.backends.rtmidi",
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(ValueError, match="MIDI output backend is unavailable") as exc:
+        check_hardware(worker_args(backend="hardware", audio_device="processor"))
+
+    assert "mido.backends.rtmidi" not in str(exc.value)
+
+
 def fake_sounddevice():
     apis = [{"name": "ASIO"}]
     devices = [
@@ -744,7 +774,7 @@ def test_list_devices_reports_missing_mido(monkeypatch, capsys) -> None:
 
     list_devices()
 
-    assert "unavailable: mido is not installed" in capsys.readouterr().out
+    assert "unavailable: MIDI output backend is unavailable" in capsys.readouterr().out
 
 
 def test_worker_parse_args_supports_hardware_aliases(monkeypatch) -> None:

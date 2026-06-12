@@ -5150,6 +5150,7 @@ def test_unavailable_backend_blocks_first_normalization(monkeypatch, app) -> Non
     assert len(popups) == 1
     assert popups[0][1] == "Error"
     assert "No suitable device connected" in popups[0][2]
+    assert "no audio device" in popups[0][2]
     assert window.worker is None
     assert window.hardware_check_worker is None
     assert window.hardware_check_overlay.isHidden()

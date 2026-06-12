@@ -365,6 +365,36 @@ def test_apply_config_uses_device_timing_defaults_when_config_is_silent() -> Non
     assert args.measurement_wait == 0.1
 
 
+def test_configured_windows_python_frozen_windows_ignores_stale_worker_config(
+    tmp_path, monkeypatch
+) -> None:
+    bundled_executable = tmp_path / "MatchPatch.exe"
+    config = {"normalize": {"windows_python": "C:/source/.venv-windows/Scripts/python.exe"}}
+    args = argparse.Namespace(windows_python=None)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(normalize.os, "name", "nt")
+    monkeypatch.setattr(normalize, "DEFAULT_WINDOWS_PYTHON", bundled_executable)
+
+    assert normalize._configured_windows_python(args, config) == str(bundled_executable)
+
+
+def test_configured_windows_python_frozen_windows_keeps_explicit_worker_overrides(
+    tmp_path, monkeypatch
+) -> None:
+    bundled_executable = tmp_path / "MatchPatch.exe"
+    config = {"normalize": {"windows_python": "C:/source/.venv-windows/Scripts/python.exe"}}
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(normalize.os, "name", "nt")
+    monkeypatch.setattr(normalize, "DEFAULT_WINDOWS_PYTHON", bundled_executable)
+
+    cli_args = argparse.Namespace(windows_python="C:/custom/python.exe")
+    env_args = argparse.Namespace(windows_python=None)
+    monkeypatch.setenv("MATCHPATCH_WINDOWS_PYTHON", "C:/env/python.exe")
+
+    assert normalize._configured_windows_python(cli_args, config) == "C:/custom/python.exe"
+    assert normalize._configured_windows_python(env_args, config) == "C:/env/python.exe"
+
+
 def test_apply_config_rejects_snapshot_count_above_device_limit() -> None:
     with pytest.raises(ValueError, match="must not exceed 8"):
         normalize.apply_config(
