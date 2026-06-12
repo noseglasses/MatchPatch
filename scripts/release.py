@@ -566,7 +566,18 @@ def verify_public_release(version: str, tag: str, notes_file: str | None) -> Non
     assets = {asset["name"] for asset in release.get("assets", [])}
     if expected_asset not in assets:
         raise ReleaseError(f"GitHub Release is missing installer asset: {expected_asset}")
-    run([sys.executable, "-m", "pip", "index", "versions", "matchpatch"])
+    run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json, sys, urllib.request; "
+                "data = json.load(urllib.request.urlopen('https://pypi.org/pypi/matchpatch/json')); "
+                "sys.exit(0 if sys.argv[1] in data['releases'] else 1)"
+            ),
+            version,
+        ]
+    )
 
 
 def parse_args() -> argparse.Namespace:
