@@ -1,7 +1,7 @@
 # MatchPatch
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/noseglasses/MatchPatch/main/docs/assets/matchmatch-logo.png" alt="MatchPatch: Normalize presets. Match volume." width="520">
+  <img src="docs/assets/matchmatch-logo.png" alt="MatchPatch: Normalize presets. Match volume." width="520">
 </p>
 
 [![Quality](https://github.com/noseglasses/MatchPatch/actions/workflows/quality.yml/badge.svg)](https://github.com/noseglasses/MatchPatch/actions/workflows/quality.yml)
