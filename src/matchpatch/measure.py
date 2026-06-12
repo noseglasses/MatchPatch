@@ -1161,7 +1161,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = parse_args(argv)
+    args = parse_args() if argv is None else parse_args(argv)
 
     if args.command == "devices":
         list_devices()
