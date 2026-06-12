@@ -6014,7 +6014,7 @@ class MainWindow(QMainWindow):
                         self.preset_table.blockSignals(signals_blocked)
                 name_item = self.preset_table.item(item.row(), 2)
                 if name_item is not None:
-                    snapshot_names = list(name_item.data(Qt.ItemDataRole.UserRole) or ())
+                    snapshot_names: list[str] = list(name_item.data(Qt.ItemDataRole.UserRole) or ())
                     snapshot_index = (
                         item.column() - SNAPSHOT_TABLE_START_COLUMN
                     ) // SNAPSHOT_TABLE_COLUMN_STRIDE
