@@ -4,6 +4,13 @@ version = "0.8.0"
 description = "Audio processor preset gain normalization and measurement tools"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
 dependencies = []
 
 [project.optional-dependencies]
