@@ -45,8 +45,8 @@ Use Determine optimal parameters when:
 11. Confirm the Timing tab values have changed.
 12. Run normalization with the new timing.
 
-[Screenshot placeholder: optimization-dialog.png - optimization setup and result dialog]
-
+![Optimization setup dialog](../assets/screenshots/parameter-study-setup.png)
+![Optimization result dialog](../assets/screenshots/optimization-dialog.png)
 
 ## What Pin Means
 

@@ -3,6 +3,7 @@
 import argparse
 import base64
 import binascii
+import copy
 import csv
 import json
 import math
@@ -265,8 +266,17 @@ def canonical_non_snapshot_signal_content(preset):
     tone = preset.get("tone", {})
     if not isinstance(tone, dict):
         return None
-    return remove_non_signal_content(
+
+    non_snapshot_tone = copy.deepcopy(
         {key: value for key, value in tone.items() if not is_snapshot_key(key)}
+    )
+    for dsp_name, block_name, parameter in iter_snapshot_assigned_parameters(tone):
+        block = non_snapshot_tone.get(dsp_name, {}).get(block_name, {})
+        if isinstance(block, dict):
+            block.pop(parameter, None)
+
+    return remove_non_signal_content(
+        non_snapshot_tone,
     )
 
 
@@ -277,7 +287,58 @@ def canonical_snapshot_signal_content(preset, snapshot_index):
     tone = preset.get("tone", {})
     if not isinstance(tone, dict):
         return None
-    return remove_non_signal_content(tone.get(f"snapshot{snapshot_index}"))
+    return remove_non_signal_content(
+        {
+            "snapshot": tone.get(f"snapshot{snapshot_index}"),
+            "snapshot_assigned_parameters": snapshot_assigned_parameter_values(
+                tone,
+                snapshot_index,
+            ),
+        }
+    )
+
+
+def iter_snapshot_assigned_parameters(tone):
+    controller_root = tone.get("controller", {})
+    if not isinstance(controller_root, dict):
+        return
+
+    for dsp_name, dsp_controller in controller_root.items():
+        if not isinstance(dsp_controller, dict):
+            continue
+
+        dsp = tone.get(dsp_name, {})
+        if not isinstance(dsp, dict):
+            continue
+
+        for block_name, block_controller in dsp_controller.items():
+            if not isinstance(block_controller, dict):
+                continue
+
+            block = dsp.get(block_name, {})
+            if not isinstance(block, dict):
+                continue
+
+            for parameter, assignment in block_controller.items():
+                if not isinstance(assignment, dict):
+                    continue
+                if assignment.get("@controller") == 19 and parameter in block:
+                    yield str(dsp_name), str(block_name), str(parameter)
+
+
+def snapshot_assigned_parameter_values(tone, snapshot_index):
+    result = {}
+    snapshot = tone.get(f"snapshot{snapshot_index}", {})
+    snapshot_controllers = snapshot.get("controllers", {}) if isinstance(snapshot, dict) else {}
+
+    for dsp_name, block_name, parameter in iter_snapshot_assigned_parameters(tone):
+        block = tone.get(dsp_name, {}).get(block_name, {})
+        base_value = block.get(parameter) if isinstance(block, dict) else None
+        snapshot_value = snapshot_controllers.get(dsp_name, {}).get(block_name, {}).get(parameter)
+        value = snapshot_value if snapshot_value is not None else base_value
+        result.setdefault(dsp_name, {}).setdefault(block_name, {})[parameter] = copy.deepcopy(value)
+
+    return result
 
 
 def is_snapshot_key(key):
@@ -290,7 +351,16 @@ def remove_non_signal_content(value):
         for key, child in value.items():
             key_text = str(key)
             normalized_key = key_text.lstrip("@").casefold()
-            if normalized_key in {"name", "meta", "metadata"} or "color" in normalized_key:
+            if (
+                normalized_key
+                in {
+                    "current_snapshot",
+                    "name",
+                    "meta",
+                    "metadata",
+                }
+                or "color" in normalized_key
+            ):
                 continue
             result[key_text] = remove_non_signal_content(child)
         return result

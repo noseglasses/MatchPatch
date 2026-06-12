@@ -233,6 +233,4 @@ If user-facing content changed, also read:
 - [Architecture](dev/architecture.md)
 - [Commands](dev/commands.md)
 - [File Formats](dev/file-formats.md)
-- [Program Description](https://github.com/noseglasses/MatchPatch/blob/main/PROGRAM_DESCRIPTION.md)
-- [Feature Inventory](https://github.com/noseglasses/MatchPatch/blob/main/MATCH_PATCH_FEATURES.md)
-- [Documentation Implementation Plan](https://github.com/noseglasses/MatchPatch/blob/main/DOCUMENTATION_IMPLEMENTATOIN_PLAN.md)
+

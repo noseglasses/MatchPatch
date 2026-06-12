@@ -272,6 +272,53 @@ def test_legacy_snapshot_diff_ignores_names_but_tracks_snapshot_assignments() ->
     )
 
 
+def test_legacy_snapshot_diff_tracks_snapshot_assigned_parameter_values(tmp_path) -> None:
+    legacy = load_legacy_preset_handling()
+    previous_preset = {
+        "meta": {"name": "Clean"},
+        "tone": {
+            "global": {"@current_snapshot": 0},
+            "dsp0": {
+                "block0": {"@model": "amp", "gain": 2.0},
+            },
+            "controller": {
+                "dsp0": {
+                    "block0": {
+                        "gain": {"@controller": 19, "@snapshot_disable": False},
+                    },
+                },
+            },
+            "snapshot0": {
+                "@name": "Verse",
+                "controllers": {
+                    "dsp0": {"block0": {"gain": {"@fs_enabled": False, "@value": 2.0}}},
+                },
+            },
+            "snapshot1": {
+                "@name": "Lead",
+                "controllers": {
+                    "dsp0": {"block0": {"gain": {"@fs_enabled": False, "@value": 4.0}}},
+                },
+            },
+        },
+    }
+    current_preset = json.loads(json.dumps(previous_preset))
+    current_preset["tone"]["global"]["@current_snapshot"] = 1
+    current_preset["tone"]["dsp0"]["block0"]["gain"] = 4.5
+    current_preset["tone"]["snapshot1"]["controllers"]["dsp0"]["block0"]["gain"]["@value"] = 4.5
+    previous_path = tmp_path / "previous.hlx"
+    current_path = tmp_path / "current.hlx"
+    previous_path.write_text(json.dumps(previous_preset), encoding="utf-8")
+    current_path.write_text(json.dumps(current_preset), encoding="utf-8")
+
+    assert legacy.canonical_non_snapshot_signal_content(current_preset) == (
+        legacy.canonical_non_snapshot_signal_content(previous_preset)
+    )
+    assert legacy.extract_diff_snapshot_ids(current_path, previous_path, snapshot_count=2) == {
+        1: [2]
+    }
+
+
 def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
     calls = []

@@ -72,7 +72,7 @@ Common reasons include:
 > Warning:
 > Investigate red cells before saving or trusting the adjusted file.
 
-[Screenshot placeholder: failed-measurement-row.png - failed measurement row]
+![Failed measurement row](../assets/screenshots/failed-measurement-row.png)
 
 ## Recorded-Output Playback Buttons
 

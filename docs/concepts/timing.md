@@ -61,7 +61,7 @@ have delay, reverb, or other trails.
 MatchPatch shows an estimated time per snapshot and total time for selected
 presets. Ignored snapshots are skipped in the estimate.
 
-[Screenshot placeholder: timing-tab.png - Timing tab with measurement estimate]
+![Timing tab with measurement estimate](../assets/screenshots/timing-tab.png)
 
 ## When To Optimize Timing
 

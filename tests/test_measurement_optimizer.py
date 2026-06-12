@@ -88,8 +88,23 @@ def test_optimize_timing_parameters_bisects_to_lowest_stable_value() -> None:
     parameter_completed = next(
         event for event in reversed(progress) if event.kind == "parameter_completed"
     )
+    parameter_started = next(event for event in progress if event.kind == "parameter_started")
+    first_candidate = next(event for event in progress if event.kind == "candidate_completed")
     assert progress[-1].kind == "final_stability_completed"
+    assert parameter_started.low == 0.0
+    assert parameter_started.high == 1.0
+    assert parameter_started.best == 1.0
+    assert parameter_started.iteration == 0
+    assert first_candidate.candidate == 0.5
+    assert first_candidate.low == 0.0
+    assert first_candidate.high == 0.5
+    assert first_candidate.best == 0.5
+    assert first_candidate.iteration == 1
     restored = OptimizationProgress.from_json(parameter_completed.to_json())
+    assert restored.low == parameter_completed.low
+    assert restored.high == parameter_completed.high
+    assert restored.best == parameter_completed.best
+    assert restored.iteration == parameter_completed.iteration
     assert restored.results[0].value == results[0].value
     assert restored.results[0].statistics is not None
     assert "measurement_wait_seconds" in optimization_results_toml("helix", results)

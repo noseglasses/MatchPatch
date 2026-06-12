@@ -66,9 +66,6 @@ If the file already exists, MatchPatch asks before overwriting it.
 
 Read the path carefully before confirming.
 
-[Screenshot placeholder: save-import-dialogs.png - save, save-as, and import dialogs]
-
-
 ## Import The Adjusted File
 
 After saving:

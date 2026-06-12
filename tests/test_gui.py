@@ -5,6 +5,7 @@ import threading
 import time
 import tomllib
 import wave
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -302,6 +303,20 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.measurement_wait.text() == "0.6"
     assert window.preset_wait.text() == "1.3"
     assert window.round_trip_latency.text() == "0.001"
+    timing_form = window.advanced_tabs.widget(2).layout().itemAt(1).layout()
+    assert [
+        timing_form.itemAt(row, main_window.QFormLayout.ItemRole.FieldRole).widget()
+        for row in range(timing_form.rowCount())
+    ] == [
+        window.analysis_window,
+        window.analysis_interval,
+        window.pre_roll,
+        window.post_roll,
+        window.snapshot_wait,
+        window.measurement_wait,
+        window.preset_wait,
+        window.round_trip_latency,
+    ]
     expected_seconds = 1.0 + 0.6 + 0.3 + 0.5 + 0.001 + 1.3 / 4
     expected_seconds += main_window._reference_audio_seconds(DEFAULT_REFERENCE_DI)
     assert window.measurement_time_estimate.text() == (
@@ -457,6 +472,9 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.save_as_action.isEnabled()
     assert not window.save_measurement_action.isEnabled()
     assert not window.start_button.isEnabled()
+    assert not window.determine_parameters_button.isEnabled()
+    assert not window.determine_parameters_hint.isHidden()
+    assert "Open a Helix file" in window.determine_parameters_hint.text()
     assert not window.record_output_button.isEnabled()
     assert window.record_output_button.isChecked()
     assert not window.play_recorded_output_button.isChecked()
@@ -524,8 +542,7 @@ def test_toolbar_tooltip_position_is_kept_inside_screen() -> None:
     assert position.x() >= available.left() + main_window.TOOLTIP_SCREEN_MARGIN
     assert position.y() >= available.top() + main_window.TOOLTIP_SCREEN_MARGIN
     assert (
-        position.x() + tooltip_size.width()
-        <= available.right() - main_window.TOOLTIP_SCREEN_MARGIN
+        position.x() + tooltip_size.width() <= available.right() - main_window.TOOLTIP_SCREEN_MARGIN
     )
     assert (
         position.y() + tooltip_size.height()
@@ -534,10 +551,14 @@ def test_toolbar_tooltip_position_is_kept_inside_screen() -> None:
 
 
 def test_ignore_reason_icon_draws_no_entry_symbol(app) -> None:
-    image = main_window._ignore_reason_icon(main_window.IGNORE_REASON_COMPARISON).pixmap(
-        18,
-        18,
-    ).toImage()
+    image = (
+        main_window._ignore_reason_icon(main_window.IGNORE_REASON_COMPARISON)
+        .pixmap(
+            18,
+            18,
+        )
+        .toImage()
+    )
 
     green_pixels = 0
     white_pixels = 0
@@ -547,10 +568,7 @@ def test_ignore_reason_icon_draws_no_entry_symbol(app) -> None:
         for x in range(image.width()):
             color = image.pixelColor(x, y)
             is_green = (
-                color.alpha()
-                and color.red() < 80
-                and color.green() > 120
-                and color.blue() < 100
+                color.alpha() and color.red() < 80 and color.green() > 120 and color.blue() < 100
             )
             if is_green:
                 green_pixels += 1
@@ -608,11 +626,7 @@ def test_preset_table_legend_dialog_uses_table_icons(app) -> None:
     ]
     assert all(label is not None for label in pixmap_labels)
     assert len(pixmap_labels) == 3
-    assert {
-        label.pixmap().cacheKey()
-        for label in pixmap_labels
-        if label is not None
-    } == {
+    assert {label.pixmap().cacheKey() for label in pixmap_labels if label is not None} == {
         window._ignore_reason_icons[reason].pixmap(18, 18).cacheKey()
         for reason in (
             main_window.IGNORE_REASON_PRESET,
@@ -644,16 +658,8 @@ def test_initial_window_size_avoids_scrollbar_for_collapsed_layout(app) -> None:
     window.close()
 
 
-def test_initial_empty_state_reserves_loaded_preset_table_size(monkeypatch, app, tmp_path) -> None:
-    initial_window = MainWindow()
-    initial_window.show()
-    app.processEvents()
-    initial_window._resize_to_initial_content()
-    app.processEvents()
-    initial_size = initial_window.size()
-    initial_window.close()
-
-    loaded_window = MainWindow()
+def test_loading_preset_table_does_not_resize_window(monkeypatch, app, tmp_path) -> None:
+    window = MainWindow()
     path = tmp_path / "example.hls"
     path.write_text("{}", encoding="utf-8")
 
@@ -683,33 +689,34 @@ def test_initial_empty_state_reserves_loaded_preset_table_size(monkeypatch, app,
             return Handler()
 
     monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
-    loaded_window.show()
-    loaded_window.input_path.setText(str(path))
-    loaded_window.load_assignments()
+    window.show()
     app.processEvents()
-    loaded_window._resize_to_initial_content()
+    initial_size = window.size()
+
+    window.input_path.setText(str(path))
+    window.load_assignments()
     app.processEvents()
 
-    assert loaded_window.preset_empty_state.isHidden()
-    assert not loaded_window.preset_table.isHidden()
-    assert not loaded_window.select_diff_button.isHidden()
-    assert initial_size.width() == loaded_window.width()
-    assert abs(initial_size.height() - loaded_window.height()) <= 2
+    assert window.preset_empty_state.isHidden()
+    assert not window.preset_table.isHidden()
+    assert not window.select_diff_button.isHidden()
+    assert window.size() == initial_size
 
-    loaded_window.close()
+    window.close()
 
 
-def test_window_shrinks_when_advanced_side_pane_is_hidden(app) -> None:
+def test_window_size_stays_fixed_when_advanced_side_pane_is_hidden(app) -> None:
     window = MainWindow()
     window._show_loaded_preset_state(single_preset=True)
     window.show()
     app.processEvents()
 
-    expanded_height = window.height()
+    expanded_size = window.size()
     window.advanced_button.setChecked(False)
     app.processEvents()
 
-    assert window.height() < expanded_height
+    assert window.size() == expanded_size
+    assert window.advanced.isHidden()
 
     window.close()
 
@@ -739,21 +746,55 @@ def test_maximized_window_does_not_resize_when_advanced_side_pane_toggles(monkey
     window.close()
 
 
-def test_window_shrinks_when_progress_is_hidden(app) -> None:
+def test_window_size_stays_fixed_when_progress_visibility_changes(app) -> None:
     window = MainWindow()
     window.show()
     app.processEvents()
     window._resize_to_initial_content()
     app.processEvents()
-    initial_height = window.height()
+    initial_size = window.size()
 
     window._show_indeterminate_progress("Preparing measurement...")
     app.processEvents()
-    assert window.height() > initial_height
+    assert window.size() == initial_size
 
     window._stop_busy_phase()
     app.processEvents()
-    assert window.height() == initial_height
+    assert window.size() == initial_size
+
+    window.close()
+
+
+def test_window_size_stays_fixed_when_advanced_tab_changes(app) -> None:
+    window = MainWindow()
+    window.show()
+    app.processEvents()
+    initial_size = window.size()
+
+    for index in range(window.advanced_tabs.count()):
+        window.advanced_tabs.setCurrentIndex(index)
+        app.processEvents()
+        assert window.size() == initial_size
+
+    window.close()
+
+
+def test_window_size_stays_fixed_when_preset_table_rows_change(app) -> None:
+    window = MainWindow()
+    window._show_loaded_preset_state(single_preset=False)
+    window.show()
+    app.processEvents()
+    initial_size = window.size()
+
+    for row in range(20):
+        window.preset_table.insertRow(row)
+        app.processEvents()
+        assert window.size() == initial_size
+
+    window.preset_table.setRowCount(1)
+    app.processEvents()
+
+    assert window.size() == initial_size
 
     window.close()
 
@@ -1834,9 +1875,12 @@ def test_select_diff_presets_marks_unchanged_snapshots(monkeypatch, app, tmp_pat
     assert window.preset_table.item(1, window._snapshot_name_column(0)).data(
         main_window.IGNORED_SNAPSHOT_REASONS_ROLE
     ) == (main_window.IGNORE_REASON_COMPARISON,)
-    assert window.preset_table.item(1, window._snapshot_name_column(1)).data(
-        main_window.IGNORED_SNAPSHOT_ROLE
-    ) is None
+    assert (
+        window.preset_table.item(1, window._snapshot_name_column(1)).data(
+            main_window.IGNORED_SNAPSHOT_ROLE
+        )
+        is None
+    )
     assert window._row_measured_snapshot_indexes(1) == (2,)
     assert window._selected_preset_set() == "01B"
     assert "1 preset, 1 snapshot" in window.measurement_time_estimate.text()
@@ -1845,9 +1889,12 @@ def test_select_diff_presets_marks_unchanged_snapshots(monkeypatch, app, tmp_pat
 
     window.comparison_enabled.setChecked(False)
 
-    assert window.preset_table.item(1, window._snapshot_name_column(0)).data(
-        main_window.IGNORED_SNAPSHOT_REASONS_ROLE
-    ) is None
+    assert (
+        window.preset_table.item(1, window._snapshot_name_column(0)).data(
+            main_window.IGNORED_SNAPSHOT_REASONS_ROLE
+        )
+        is None
+    )
     assert window._row_measured_snapshot_indexes(1) == (1, 2)
     assert window._selected_preset_set() == "01A,01B,01C"
 
@@ -3386,6 +3433,7 @@ def test_loaded_file_updates_window_title_and_save_as_state(monkeypatch, app) ->
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch)
     assert not window.start_button.isEnabled()
+    assert not window.determine_parameters_button.isEnabled()
     window.input_path.setText("/tmp/input.hlx")
 
     window.load_assignments()
@@ -3393,6 +3441,57 @@ def test_loaded_file_updates_window_title_and_save_as_state(monkeypatch, app) ->
     assert window.windowTitle() == "input.hlx"
     assert window.save_as_action.isEnabled()
     assert window.start_button.isEnabled()
+    assert window.determine_parameters_button.isEnabled()
+    assert window.determine_parameters_hint.isHidden()
+    window.close()
+
+
+def test_determine_optimal_parameters_button_tracks_loaded_file_and_workers(app) -> None:
+    window = MainWindow()
+    window.input_path.setText("/tmp/input.hls")
+    window._loaded_input_path = window.input_path.text()
+    window.preset_table.insertRow(0)
+    selected = QTableWidgetItem()
+    selected.setCheckState(Qt.CheckState.Checked)
+    window.preset_table.setItem(0, 0, selected)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("01A"))
+    window.preset_table.setItem(0, 2, QTableWidgetItem("Example"))
+    window._set_snapshot_names(0, ("Clean",))
+
+    window._refresh_file_actions()
+
+    assert window.determine_parameters_button.isEnabled()
+    assert window.determine_parameters_hint.isHidden()
+
+    selected.setCheckState(Qt.CheckState.Unchecked)
+    window._refresh_file_actions()
+
+    assert not window.determine_parameters_button.isEnabled()
+    assert "Select at least one preset" in window.determine_parameters_hint.text()
+
+    selected.setCheckState(Qt.CheckState.Checked)
+    window._refresh_file_actions()
+
+    window.optimization_worker = object()
+    window._refresh_file_actions()
+
+    assert not window.determine_parameters_button.isEnabled()
+    assert "current operation" in window.determine_parameters_hint.text()
+
+    window.optimization_worker = None
+    window.hardware_check_worker = object()
+    window._refresh_file_actions()
+
+    assert not window.determine_parameters_button.isEnabled()
+    assert "current operation" in window.determine_parameters_hint.text()
+
+    window.hardware_check_worker = None
+    window._loaded_input_path = ""
+    window._refresh_file_actions()
+
+    assert not window.determine_parameters_button.isEnabled()
+    assert "Open a Helix file" in window.determine_parameters_hint.text()
+
     window.close()
 
 
@@ -3879,7 +3978,9 @@ def test_automation_overwrite_confirmation_only_prompts_for_existing_files(
     window = MainWindow()
     input_path = tmp_path / "input.hls"
     measurement_path = tmp_path / "input_measurement.hls"
+    adjusted_path = tmp_path / "input_adjusted.hls"
     measurement_path.touch()
+    adjusted_path.touch()
     prompts = []
 
     class Handler:
@@ -3898,6 +3999,7 @@ def test_automation_overwrite_confirmation_only_prompts_for_existing_files(
         backend="loopback",
         windows_python=str(DEFAULT_WINDOWS_PYTHON),
         reference_di=DEFAULT_REFERENCE_DI,
+        automation=True,
     )
     monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
     monkeypatch.setattr(
@@ -3910,6 +4012,7 @@ def test_automation_overwrite_confirmation_only_prompts_for_existing_files(
     assert len(prompts) == 1
     assert "measurement" in prompts[0][2]
     assert str(measurement_path) in prompts[0][2]
+    assert str(adjusted_path) not in prompts[0][2]
 
     window.close()
 
@@ -4050,6 +4153,181 @@ def test_measurement_optimization_dialog_shows_runtime_estimate(app) -> None:
     assert "can be shorter" in notice
     assert "background: #eff6ff" in dialog.runtime_notice.styleSheet()
     assert "color: #1d4ed8" in dialog.runtime_notice.styleSheet()
+
+    dialog.set_finished()
+    dialog.accept()
+    dialog.deleteLater()
+
+
+def test_measurement_optimization_dialog_shows_success_duration_summary(app) -> None:
+    dialog = main_window.MeasurementOptimizationDialog(
+        main_window.MeasurementOptimizationSettings(
+            pre_roll=0.2,
+            post_roll=0.1,
+            round_trip_latency=0.02,
+            preset_wait=0.5,
+            snapshot_wait=0.2,
+            measurement_wait=0.1,
+            stability_runs=3,
+            termination_tolerance=10.0,
+            stability_tolerance=2.0,
+        )
+    )
+    dialog._started_at = main_window.datetime.now() - timedelta(seconds=65)
+
+    dialog.set_result("[analysis]\npre_roll_seconds = 0.1")
+    notice = dialog.runtime_notice.text()
+
+    assert "Parameter optimization successfully finished" in notice
+    assert "Actual duration:" in notice
+    assert "Predicted duration: 14 min 32 s" in notice
+    assert "background: #f0fdf4" in dialog.runtime_notice.styleSheet()
+    assert "color: #166534" in dialog.runtime_notice.styleSheet()
+
+    dialog.accept()
+    dialog.deleteLater()
+
+
+def test_measurement_optimization_dialog_shows_failure_duration_summary(app) -> None:
+    dialog = main_window.MeasurementOptimizationDialog(
+        main_window.MeasurementOptimizationSettings(
+            pre_roll=0.2,
+            post_roll=0.1,
+            round_trip_latency=0.02,
+            preset_wait=0.5,
+            snapshot_wait=0.2,
+            measurement_wait=0.1,
+            stability_runs=3,
+            termination_tolerance=10.0,
+            stability_tolerance=2.0,
+        )
+    )
+    dialog._started_at = main_window.datetime.now() - timedelta(seconds=125)
+
+    dialog.set_failed()
+    notice = dialog.runtime_notice.text()
+
+    assert "Parameter optimization failed" in notice
+    assert "Actual duration:" in notice
+    assert "Predicted duration: 14 min 32 s" in notice
+    assert "background: #fef2f2" in dialog.runtime_notice.styleSheet()
+    assert "color: #991b1b" in dialog.runtime_notice.styleSheet()
+
+    dialog.accept()
+    dialog.deleteLater()
+
+
+def test_measurement_optimization_dialog_updates_progress_bar_below_table(app) -> None:
+    settings = main_window.MeasurementOptimizationSettings(
+        pre_roll=0.2,
+        post_roll=0.1,
+        round_trip_latency=0.02,
+        preset_wait=0.5,
+        snapshot_wait=0.2,
+        measurement_wait=0.1,
+        stability_runs=3,
+        termination_tolerance=10.0,
+        stability_tolerance=2.0,
+    )
+    dialog = main_window.MeasurementOptimizationDialog(settings)
+    main_layout = dialog.main_panel.layout()
+    side_layout = dialog.side_panel.layout()
+
+    assert dialog.layout().indexOf(dialog.content_splitter) >= 0
+    assert dialog.content_splitter.count() == 2
+    assert dialog.content_splitter.widget(0) is dialog.main_panel
+    assert dialog.content_splitter.widget(1) is dialog.side_panel
+    assert main_layout.indexOf(dialog.status) < main_layout.indexOf(dialog.table)
+    assert main_layout.indexOf(dialog.progress_bar) > main_layout.indexOf(dialog.table)
+    assert main_layout.indexOf(dialog.convergence_plot) > main_layout.indexOf(dialog.progress_bar)
+    assert side_layout.indexOf(dialog.runtime_notice) == 0
+    assert side_layout.indexOf(dialog.runtime_notice) < side_layout.indexOf(
+        dialog.fixed_settings_panel
+    )
+    assert side_layout.indexOf(dialog.fixed_settings_panel) < side_layout.indexOf(dialog.info)
+    assert side_layout.indexOf(dialog.info) < side_layout.indexOf(dialog.result_text)
+    assert dialog.progress_bar.maximum() == main_window._optimization_progress_event_total(settings)
+    assert dialog.progress_bar.value() == 0
+    assert [row.parameter for row in dialog.convergence_plot._ordered_rows()] == [
+        "pre_roll",
+        "post_roll",
+        "snapshot_wait",
+        "measurement_wait",
+        "preset_wait",
+        "round_trip_latency",
+    ]
+
+    dialog.update_progress(
+        OptimizationProgress(
+            "parameter_started",
+            "Investigating Pre-roll",
+            parameter="pre_roll",
+            low=0.0,
+            high=0.2,
+            best=0.2,
+            iteration=0,
+        )
+    )
+    assert dialog.progress_bar.value() == 1
+    assert dialog.progress_bar.format() == "%p%"
+    row = dialog.convergence_plot._rows["pre_roll"]
+    assert row.low == 0.0
+    assert row.high == 0.2
+    assert row.best == 0.2
+
+    dialog.update_progress(
+        OptimizationProgress(
+            "candidate_completed",
+            "Pre-roll: 0.1 s stable",
+            parameter="pre_roll",
+            candidate=0.1,
+            stable=True,
+            low=0.0,
+            high=0.1,
+            best=0.1,
+            iteration=1,
+        )
+    )
+    assert dialog.progress_bar.value() == 2
+    assert row.low == 0.0
+    assert row.high == 0.1
+    assert row.best == 0.1
+    assert row.iteration == 1
+    assert row.candidates is not None
+    assert [(candidate.value, candidate.stable) for candidate in row.candidates] == [(0.1, True)]
+
+    dialog.set_result("[analysis]\npre_roll_seconds = 0.1")
+    assert dialog.progress_bar.value() == dialog.progress_bar.maximum()
+    assert dialog.progress_bar.format() == "Completed"
+
+    dialog.accept()
+    dialog.deleteLater()
+
+
+def test_measurement_optimization_dialog_lists_fixed_settings_at_top(app) -> None:
+    settings = main_window.MeasurementOptimizationSettings(
+        pre_roll=0.2,
+        post_roll=0.1,
+        round_trip_latency=0.02,
+        preset_wait=0.5,
+        snapshot_wait=0.2,
+        measurement_wait=0.1,
+        stability_runs=5,
+        termination_tolerance=7.5,
+        stability_tolerance=0.5,
+        pinned_parameters=("pre_roll", "measurement_wait"),
+    )
+    dialog = main_window.MeasurementOptimizationDialog(settings)
+
+    assert dialog.fixed_settings_panel.title() == "Fixed study settings"
+    assert dialog.fixed_settings_values["Stability runs"].text() == "5"
+    assert dialog.fixed_settings_values["Termination tolerance"].text() == "7.5%"
+    assert dialog.fixed_settings_values["Stability tolerance"].text() == "0.5%"
+    assert (
+        dialog.fixed_settings_values["Pinned timing parameters"].text()
+        == "Pre-roll, Measurement wait"
+    )
+    assert "not optimized or bisected" in dialog.fixed_settings_panel.toolTip()
 
     dialog.set_finished()
     dialog.accept()
@@ -4584,6 +4862,46 @@ def test_measurement_optimization_setup_dialog_returns_adjusted_values(app) -> N
     assert settings.stability_runs == 5
     assert settings.termination_tolerance == 7.5
     assert settings.stability_tolerance == 0.5
+
+    dialog.deleteLater()
+
+
+def test_measurement_optimization_setup_dialog_explains_configurable_widgets(app) -> None:
+    dialog = main_window.MeasurementOptimizationSetupDialog(
+        main_window.MeasurementOptimizationSettings(
+            pre_roll=0.2,
+            post_roll=0.1,
+            round_trip_latency=0.02,
+            preset_wait=0.5,
+            snapshot_wait=0.2,
+            measurement_wait=0.1,
+            stability_runs=3,
+            termination_tolerance=10.0,
+            stability_tolerance=2.0,
+        ),
+        "02C",
+        7,
+    )
+
+    for parameter in main_window.TIMING_PARAMETERS:
+        label = dialog._parameter_labels[parameter.name]
+        input_widget = dialog._parameter_inputs[parameter.name]
+        pin_widget = dialog._parameter_pins[parameter.name]
+
+        assert label.toolTip()
+        assert input_widget.toolTip() == label.toolTip()
+        assert input_widget.lineEdit().toolTip() == label.toolTip()
+        assert "not optimized or bisected" in pin_widget.toolTip()
+
+    assert "repeat measurements" in dialog.stability_runs.toolTip()
+    assert dialog.stability_runs_label.toolTip() == dialog.stability_runs.toolTip()
+    assert "bisection search" in dialog.termination_tolerance.toolTip()
+    assert dialog.termination_tolerance_label.toolTip() == dialog.termination_tolerance.toolTip()
+    assert "measurement variation" in dialog.stability_tolerance.toolTip()
+    assert dialog.stability_tolerance_label.toolTip() == dialog.stability_tolerance.toolTip()
+    assert "connected device" in dialog.optimization_preset_hint.toolTip()
+    assert "Start the parameter study" in dialog.run_button.toolTip()
+    assert "without starting" in dialog.cancel_button.toolTip()
 
     dialog.deleteLater()
 

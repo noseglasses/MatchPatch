@@ -112,6 +112,10 @@ class OptimizationProgress:
     parameter: str | None = None
     candidate: float | None = None
     stable: bool | None = None
+    low: float | None = None
+    high: float | None = None
+    best: float | None = None
+    iteration: int | None = None
     statistics: StabilityStatistics | None = None
     result_toml: str | None = None
     results: tuple[ParameterOptimizationResult, ...] = ()
@@ -123,6 +127,10 @@ class OptimizationProgress:
             "parameter": self.parameter,
             "candidate": self.candidate,
             "stable": self.stable,
+            "low": self.low,
+            "high": self.high,
+            "best": self.best,
+            "iteration": self.iteration,
             "statistics": (self.statistics.to_dict() if self.statistics is not None else None),
             "result_toml": self.result_toml,
             "results": [
@@ -326,6 +334,10 @@ def optimize_timing_parameters(
                     f"({stability_runs} stability runs)"
                 ),
                 parameter=parameter.name,
+                low=low,
+                high=high,
+                best=best,
+                iteration=iterations,
                 results=tuple(results),
             ),
         )
@@ -351,6 +363,10 @@ def optimize_timing_parameters(
                     parameter=parameter.name,
                     candidate=high,
                     stable=False,
+                    low=low,
+                    high=high,
+                    best=best,
+                    iteration=iterations,
                     statistics=latest_statistics,
                     results=tuple(results),
                 ),
@@ -394,6 +410,10 @@ def optimize_timing_parameters(
                     parameter=parameter.name,
                     candidate=candidate,
                     stable=stable,
+                    low=low,
+                    high=high,
+                    best=best,
+                    iteration=iterations,
                     statistics=latest_statistics,
                     results=tuple(results),
                 ),
@@ -414,6 +434,10 @@ def optimize_timing_parameters(
                 parameter=parameter.name,
                 candidate=best,
                 stable=True,
+                low=low,
+                high=high,
+                best=best,
+                iteration=iterations,
                 statistics=latest_statistics,
                 results=tuple(results),
             ),
