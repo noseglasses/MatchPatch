@@ -11,7 +11,6 @@ htmlcov
 /docs_html/
 /dist/
 /build/
-/plans/
 /installer-payload/
 *.spec.bak
 *.json
