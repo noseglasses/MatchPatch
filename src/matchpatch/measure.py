@@ -875,9 +875,9 @@ def check_hardware(args: argparse.Namespace) -> None:
 
 
 def _validate_steering_output_available(steering_options: SteeringOptions) -> None:
-    import mido
+    from matchpatch.midi import midi_output_names
 
-    names = mido.get_output_names()
+    names = midi_output_names()
     query = steering_options.output
     matches = (
         names if query is None else [name for name in names if query.casefold() in name.casefold()]
@@ -916,12 +916,12 @@ def list_devices() -> None:
     print("\nMIDI outputs:")
 
     try:
-        import mido
+        from matchpatch.midi import midi_output_names
 
-        for name in mido.get_output_names():
+        for name in midi_output_names():
             print(f"  {name}")
-    except ImportError:
-        print("  unavailable: mido is not installed")
+    except ValueError as exc:
+        print(f"  unavailable: {exc}")
 
 
 def add_hardware_arguments(parser: argparse.ArgumentParser) -> None:

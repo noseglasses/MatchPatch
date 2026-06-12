@@ -51,6 +51,27 @@ def _mapping_argument(value: object | None) -> str | None:
     return ",".join(str(channel) for channel in parse_channel_mapping(value))
 
 
+def _configured_windows_python(args: argparse.Namespace, config: Config) -> str:
+    if args.windows_python:
+        return str(args.windows_python)
+
+    env_value = os.getenv("MATCHPATCH_WINDOWS_PYTHON")
+    if env_value:
+        return env_value
+
+    if getattr(sys, "frozen", False) and os.name == "nt":
+        return str(DEFAULT_WINDOWS_PYTHON)
+
+    return str(
+        config_value(
+            config,
+            "normalize",
+            "windows_python",
+            default=str(DEFAULT_WINDOWS_PYTHON),
+        )
+    )
+
+
 def _normalization_policy(config: Config, args: argparse.Namespace) -> NormalizationPolicy:
     profile = get_device_profile(args.device)
     policy = NormalizationPolicy(
@@ -182,16 +203,7 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
         or os.getenv("MATCHPATCH_BACKEND")
         or config_value(config, "normalize", "backend", default="hardware")
     )
-    args.windows_python = (
-        args.windows_python
-        or os.getenv("MATCHPATCH_WINDOWS_PYTHON")
-        or config_value(
-            config,
-            "normalize",
-            "windows_python",
-            default=str(DEFAULT_WINDOWS_PYTHON),
-        )
-    )
+    args.windows_python = _configured_windows_python(args, config)
     args.reference_di = (
         args.reference_di
         or os.getenv("MATCHPATCH_REFERENCE_DI")

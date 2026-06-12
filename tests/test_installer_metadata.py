@@ -103,6 +103,7 @@ def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     assert 'name="MatchPatch"' in gui_spec
     assert "console=False" in gui_spec
     assert "datas=asset_datas()" in gui_spec
+    assert 'hiddenimports=["mido.backends.rtmidi", "rtmidi"]' in gui_spec
     assert '"src" / "matchpatch" / "app.py"' in gui_spec
     assert "prepare_installer_assets()" in gui_spec
     assert 'prepare_pyinstaller_paths(Path(CONF["workpath"]), Path(CONF["distpath"]))' in gui_spec

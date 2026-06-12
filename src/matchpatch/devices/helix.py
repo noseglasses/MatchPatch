@@ -25,6 +25,7 @@ from matchpatch.devices.base import (
     PatchFileHandler,
     SteeringOptions,
 )
+from matchpatch.midi import midi_output_names
 
 
 class HelixPatchFileHandler(PatchFileHandler):
@@ -400,7 +401,7 @@ class HelixMidiController(DeviceController):
     def __enter__(self) -> "HelixMidiController":
         import mido
 
-        names = mido.get_output_names()
+        names = midi_output_names()
         query = self.options.output
         matches = (
             names

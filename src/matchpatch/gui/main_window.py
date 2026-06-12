@@ -3477,10 +3477,13 @@ class MainWindow(QMainWindow):
         message = "No suitable device connected."
         detail = detail.strip()
         self._log(f"{message} {detail}".strip(), "error")
+        popup_message = f"{message}\n\nConnect a compatible audio processor and try again."
+        if detail:
+            popup_message = f"{popup_message}\n\nDetails:\n{detail}"
         QMessageBox.critical(
             self,
             "Error",
-            f"{message}\n\nConnect a compatible audio processor and try again.",
+            popup_message,
         )
         if (
             request is not None
