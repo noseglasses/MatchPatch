@@ -64,6 +64,13 @@ def venv_bin(name: str) -> str:
     return str(path)
 
 
+def wsl_uv_env() -> dict[str, str]:
+    env = os.environ.copy()
+    data_home = Path(env.get("XDG_DATA_HOME", Path.home() / ".local/share"))
+    env.setdefault("UV_PROJECT_ENVIRONMENT", str(data_home / "matchpatch" / ".venv-wsl"))
+    return env
+
+
 def require_executable(path: str) -> None:
     if not Path(path).is_file():
         raise ReleaseError(f"Required executable not found: {path}")
@@ -299,6 +306,11 @@ def sync_wsl(skip_sync: bool) -> None:
     run(["scripts/sync-wsl.sh"])
 
 
+def update_lockfile() -> None:
+    info("Updating dependency lockfile")
+    run(["uv", "lock"], env=wsl_uv_env())
+
+
 def run_quality_checks(skip_pre_push: bool, gui_tests: bool) -> None:
     info("Running local quality checks")
     for executable in ("ruff", "ty", "pytest"):
@@ -400,7 +412,7 @@ def commit_and_tag(version: str, tag: str) -> None:
     info("Committing version bump and creating the release tag")
     message = release_commit_message(tag)
     validate_commit_message(message)
-    run(["git", "add", "pyproject.toml"])
+    run(["git", "add", "pyproject.toml", "uv.lock"])
     run(["git", "commit", "-m", message])
     run(["git", "tag", "-a", tag, "-m", f"MatchPatch {tag}"])
     run(["git", "show", "--stat", tag])
@@ -543,6 +555,7 @@ def main() -> int:
             if read_pyproject_version() != version:
                 raise ReleaseError("Version update did not stick.")
 
+            update_lockfile()
             sync_wsl(args.skip_sync)
             run_quality_checks(args.skip_pre_push, args.gui_tests)
             build_docs()
