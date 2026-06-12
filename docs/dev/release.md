@@ -54,7 +54,7 @@ The script will:
 - build the strict Sphinx docs;
 - build and smoke-test the wheel and source distribution;
 - run `git diff --check`;
-- commit the version bump as `Release v0.2.0`;
+- commit the version bump as `chore(release): v0.2.0`;
 - create the annotated tag `v0.2.0`;
 - ask for confirmation before publishing;
 - push the release commit and tag;

@@ -384,7 +384,7 @@ def git_diff_check() -> None:
 def commit_and_tag(version: str, tag: str) -> None:
     info("Committing version bump and creating the release tag")
     run(["git", "add", "pyproject.toml"])
-    run(["git", "commit", "-m", f"Release {tag}"])
+    run(["git", "commit", "-m", f"chore(release): {tag}"])
     run(["git", "tag", "-a", tag, "-m", f"MatchPatch {tag}"])
     run(["git", "show", "--stat", tag])
 

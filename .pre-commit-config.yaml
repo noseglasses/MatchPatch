@@ -1,5 +1,6 @@
 default_install_hook_types:
   - pre-commit
+  - commit-msg
   - pre-push
 
 repos:
@@ -15,6 +16,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: conventional-commit
+        name: Conventional commit message
+        entry: python scripts/check_commit_msg.py
+        language: python
+        stages:
+          - commit-msg
+
       - id: ruff-lint
         name: Ruff lint
         entry: >-
