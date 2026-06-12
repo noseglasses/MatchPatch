@@ -1,6 +1,6 @@
 [project]
 name = "matchpatch"
-version = "0.1.0"
+version = "0.2.0"
 description = "Audio processor preset gain normalization and measurement tools"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"

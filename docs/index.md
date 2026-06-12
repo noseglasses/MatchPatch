@@ -66,6 +66,7 @@ Normal users should not need this section.
 
 - [Developer Notes](developer-notes.md)
 - [Existing technical docs](dev/architecture.md)
+- [Release Checklist](dev/release.md)
 
 ```{toctree}
 :hidden:
@@ -106,4 +107,5 @@ developer-notes
 dev/architecture
 dev/commands
 dev/file-formats
+dev/release
 ```
