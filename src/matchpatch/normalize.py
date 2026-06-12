@@ -37,7 +37,7 @@ DEFAULT_REFERENCE_DI = (
 
 def _default_windows_python() -> Path:
     if getattr(sys, "frozen", False) and os.name == "nt":
-        return Path(sys.executable)
+        return type(PROJECT_DIR)(sys.executable)
     return PROJECT_DIR / ".venv-windows" / "Scripts" / "python.exe"
 
 
@@ -886,9 +886,7 @@ def main(argv: list[str] | None = None) -> None:
         on_progress=_cli_progress,
         confirm_import=_cli_confirm_import if request.automation else None,
         get_profile=get_device_profile,
-        make_temp_dir=lambda: Path(
-            tempfile.mkdtemp(prefix="matchpatch_normalization_", dir=PROJECT_DIR)
-        ),
+        make_temp_dir=lambda: Path(tempfile.mkdtemp(prefix="matchpatch_normalization_")),
     )
     print()
     print("[OK] Gain-adjusted patch file written")

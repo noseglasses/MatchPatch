@@ -188,6 +188,7 @@ def test_normalize_presets_default_temp_dir_uses_normalization_prefix(
     )
 
     assert mkdtemp_kwargs["prefix"] == "matchpatch_normalization_"
+    assert "dir" not in mkdtemp_kwargs
 
 
 def test_request_from_args_includes_diff_input() -> None:

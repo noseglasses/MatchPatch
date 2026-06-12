@@ -184,7 +184,7 @@ def normalize_presets(
     temp_dir = (
         make_temp_dir()
         if make_temp_dir is not None
-        else Path(tempfile.mkdtemp(prefix="matchpatch_normalization_", dir=PROJECT_DIR))
+        else Path(tempfile.mkdtemp(prefix="matchpatch_normalization_"))
     )
     success = False
 
