@@ -66,11 +66,27 @@ ty check
 $HOME/.local/share/matchpatch/.venv-wsl/bin/pytest
 ```
 
-Run the same local hooks used for pre-push:
+Install the local Git hooks, including the Conventional Commit `commit-msg`
+hook and the pre-push quality suite:
 
 ```bash
 pre-commit install --install-hooks
 pre-commit run --all-files --hook-stage pre-push
+```
+
+If hooks were already installed before `commit-msg` was added, reinstall all
+configured hook types:
+
+```bash
+pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push --install-hooks
+```
+
+Commit messages must use Conventional Commits:
+
+```text
+feat(gui): add snapshot diff selector
+fix: preserve adjusted setlist output path
+chore(release): v0.2.0
 ```
 
 CI runs equivalent `uv run --frozen --no-default-groups --group wsl` commands on
