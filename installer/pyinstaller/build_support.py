@@ -19,6 +19,9 @@ PYINSTALLER_ASSETS_ROOT = PYINSTALLER_WORK_ROOT / "installer-assets"
 INSTALLER_ASSETS_ROOT = PAYLOAD_ROOT / "installer-assets"
 ICON_SOURCE = PROJECT_ROOT / "docs" / "assets" / "matchmatch-icon-512.png"
 LOGO_SOURCE = PROJECT_ROOT / "docs" / "assets" / "matchmatch-logo.png"
+REFERENCE_DI_SOURCE = (
+    PROJECT_ROOT / "audio" / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
+)
 
 
 def project_version() -> str:
@@ -41,6 +44,8 @@ def git_sha() -> str:
 
 def asset_datas() -> list[tuple[str, str]]:
     return [
+        (str(PROJECT_ROOT / "Python" / "preset_handling.py"), "Python"),
+        (str(REFERENCE_DI_SOURCE), "audio/reference-di"),
         (str(PROJECT_ROOT / "docs" / "assets" / "matchmatch-icon.png"), "docs/assets"),
         (str(PROJECT_ROOT / "docs" / "assets" / "matchmatch-icon-512.png"), "docs/assets"),
         (str(PROJECT_ROOT / "docs" / "assets" / "matchmatch-logo.png"), "docs/assets"),

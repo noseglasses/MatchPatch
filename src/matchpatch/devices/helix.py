@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import csv
+import io
 import json
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -38,6 +41,9 @@ class HelixPatchFileHandler(PatchFileHandler):
         capture: bool = False,
         log_output: bool = True,
     ) -> subprocess.CompletedProcess[str]:
+        if getattr(sys, "frozen", False):
+            return self._run_in_process(*args, capture=capture, log_output=log_output)
+
         should_capture = capture or self.log_callback is not None
 
         try:
@@ -53,6 +59,54 @@ class HelixPatchFileHandler(PatchFileHandler):
                 self._log_output(exc.stdout)
                 self._log_output(exc.stderr)
             raise
+
+        if log_output:
+            self._log_output(completed.stdout)
+            self._log_output(completed.stderr)
+        return completed
+
+    def _run_in_process(
+        self,
+        *args: object,
+        capture: bool = False,
+        log_output: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        should_capture = capture or self.log_callback is not None
+        command = [str(self.script), *(str(arg) for arg in args)]
+        original_argv = sys.argv
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        sys.argv = command
+        try:
+            stdout_context = (
+                contextlib.redirect_stdout(stdout) if should_capture else contextlib.nullcontext()
+            )
+            stderr_context = (
+                contextlib.redirect_stderr(stderr) if should_capture else contextlib.nullcontext()
+            )
+            with stdout_context, stderr_context:
+                try:
+                    runpy.run_path(str(self.script), run_name="__main__")
+                    returncode = 0
+                except SystemExit as exc:
+                    returncode = exc.code if isinstance(exc.code, int) else 1
+        finally:
+            sys.argv = original_argv
+
+        output = stdout.getvalue() if should_capture else None
+        error = stderr.getvalue() if should_capture else None
+        completed = subprocess.CompletedProcess(command, returncode, stdout=output, stderr=error)
+        if completed.returncode:
+            exc = subprocess.CalledProcessError(
+                completed.returncode,
+                command,
+                output=completed.stdout,
+                stderr=completed.stderr,
+            )
+            if log_output:
+                self._log_output(exc.stdout)
+                self._log_output(exc.stderr)
+            raise exc
 
         if log_output:
             self._log_output(completed.stdout)

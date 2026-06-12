@@ -78,10 +78,11 @@ Invoke-SetupProcess -Path $installer -Arguments $installArgs -FailureMessage "In
 $guiExe = Join-Path $InstallDir "MatchPatch.exe"
 $docsIndex = Join-Path $InstallDir "docs_html\index.html"
 $buildInfoPath = Join-Path $InstallDir "build-info.json"
-$uninstaller = Join-Path $InstallDir "unins000.exe"
+$uninstaller = Join-Path $InstallDir "Uninstall-MatchPatch.exe"
 $installerIcon = Join-Path $InstallDir "installer-assets\matchpatch.ico"
 $wizardLogo = Join-Path $InstallDir "installer-assets\wizard-logo.bmp"
 $wizardSmallLogo = Join-Path $InstallDir "installer-assets\wizard-small-logo.bmp"
+$referenceDi = Join-Path $InstallDir "audio\reference-di\DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
 
 Assert-FileExists $guiExe
 Assert-FileExists $docsIndex
@@ -90,6 +91,7 @@ Assert-FileExists $uninstaller
 Assert-FileExists $installerIcon
 Assert-FileExists $wizardLogo
 Assert-FileExists $wizardSmallLogo
+Assert-FileExists $referenceDi
 
 $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
 if ($buildInfo.version -ne $ExpectedVersion) {
@@ -112,7 +114,7 @@ Invoke-SetupProcess -Path $uninstaller -Arguments $uninstallArgs -FailureMessage
 Start-Sleep -Seconds 2
 if (Test-Path -LiteralPath $InstallDir) {
     $leftovers = @(Get-ChildItem -LiteralPath $InstallDir -Force)
-    $unexpected = @($leftovers | Where-Object { $_.Name -notmatch "^unins\d+\.dat$|^unins\d+\.msg$|^unins\d+\.log$" })
+    $unexpected = @($leftovers | Where-Object { $_.Name -notmatch "^Uninstall-MatchPatch\.(dat|msg|log)$" })
     if ($unexpected.Count -gt 0) {
         throw "Install directory contains unexpected leftovers after uninstall: $($unexpected.FullName -join ', ')"
     }

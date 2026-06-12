@@ -49,6 +49,7 @@ $buildInfoPath = Join-Path $payload "build-info.json"
 $installerIcon = Join-Path $payload "installer-assets\matchpatch.ico"
 $wizardLogo = Join-Path $payload "installer-assets\wizard-logo.bmp"
 $wizardSmallLogo = Join-Path $payload "installer-assets\wizard-small-logo.bmp"
+$referenceDi = Join-Path $payload "audio\reference-di\DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
 
 Assert-FileExists $guiExe
 Assert-FileExists $docsIndex
@@ -56,6 +57,7 @@ Assert-FileExists $buildInfoPath
 Assert-FileExists $installerIcon
 Assert-FileExists $wizardLogo
 Assert-FileExists $wizardSmallLogo
+Assert-FileExists $referenceDi
 
 $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
 if ($buildInfo.version -ne $ExpectedVersion) {
