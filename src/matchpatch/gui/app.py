@@ -166,12 +166,12 @@ def gui_smoke_enabled() -> bool:
     return os.getenv(GUI_SMOKE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     configure_wslg_runtime()
     configure_high_dpi_scaling()
     register_desktop_entry()
     qInstallMessageHandler(qt_message_handler)
-    app = QApplication(sys.argv)
+    app = QApplication([sys.argv[0], *(argv or [])])
     configure_gui_appearance(app)
     app.setApplicationName(DESKTOP_FILE_ID)
     app.setApplicationDisplayName("MatchPatch")

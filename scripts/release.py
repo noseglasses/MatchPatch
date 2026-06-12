@@ -25,9 +25,21 @@ VERSION_RE = re.compile(r"^\d+(?:\.\d+)+(?:[a-zA-Z0-9_.!+-]+)?$")
 class ReleaseError(RuntimeError):
     """A release precondition failed."""
 
+    def __init__(self, message: str, *, next_steps: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.next_steps = next_steps or []
+
 
 def info(message: str) -> None:
     print(f"\n==> {message}", flush=True)
+
+
+def print_next_steps(steps: list[str], *, file: object = sys.stderr) -> None:
+    if not steps:
+        return
+    print("\nNext steps:", file=file)
+    for index, step in enumerate(steps, start=1):
+        print(f"  {index}. {step}", file=file)
 
 
 def run(
@@ -64,6 +76,13 @@ def venv_bin(name: str) -> str:
     return str(path)
 
 
+def wsl_uv_env() -> dict[str, str]:
+    env = os.environ.copy()
+    data_home = Path(env.get("XDG_DATA_HOME", Path.home() / ".local/share"))
+    env.setdefault("UV_PROJECT_ENVIRONMENT", str(data_home / "matchpatch" / ".venv-wsl"))
+    return env
+
+
 def require_executable(path: str) -> None:
     if not Path(path).is_file():
         raise ReleaseError(f"Required executable not found: {path}")
@@ -97,7 +116,12 @@ def require_clean_tree() -> None:
     if status:
         raise ReleaseError(
             "Working tree is not clean. Commit, stash, or remove unrelated changes before releasing.\n"
-            + status
+            + status,
+            next_steps=[
+                "Review the modified files with `git status --short` and `git diff`.",
+                "Commit, stash, or remove those changes.",
+                "Re-run the release command once the working tree is clean.",
+            ],
         )
 
 
@@ -108,7 +132,14 @@ def current_branch() -> str:
 def ensure_branch(branch: str, allow_other_branch: bool) -> None:
     actual = current_branch()
     if actual != branch and not allow_other_branch:
-        raise ReleaseError(f"Expected branch '{branch}', but current branch is '{actual}'.")
+        raise ReleaseError(
+            f"Expected branch '{branch}', but current branch is '{actual}'.",
+            next_steps=[
+                f"Switch to `{branch}` with `git switch {branch}`.",
+                "Re-run the release command.",
+                "Use `--allow-current-branch` only if you intentionally release from this branch.",
+            ],
+        )
 
 
 def preflight_local_tools(
@@ -244,11 +275,24 @@ def write_pyproject_version(version: str) -> None:
     PYPROJECT.write_text("".join(lines), encoding="utf-8")
 
 
-def ensure_tag_available(tag: str) -> None:
+def ensure_tag_available(version: str, tag: str) -> None:
     if local_tag_exists(tag):
-        raise ReleaseError(f"Local tag already exists: {tag}")
+        raise ReleaseError(
+            f"Local tag already exists: {tag}",
+            next_steps=[
+                f"If this tag is the prepared release, run `scripts/release.py {version} --publish`.",
+                f"If you need to rebuild the release, delete the local tag with `git tag -d {tag}` and re-run the release command.",
+            ],
+        )
     if remote_tag_exists(tag):
-        raise ReleaseError(f"Remote tag already exists on origin: {tag}")
+        raise ReleaseError(
+            f"Remote tag already exists on origin: {tag}",
+            next_steps=[
+                f"Check the published release with `gh release view {tag}`.",
+                f"If the release is complete, no further local release step is required for {tag}.",
+                "Only delete or replace a remote release tag if you are intentionally correcting a bad release.",
+            ],
+        )
 
 
 def local_tag_exists(tag: str) -> bool:
@@ -275,14 +319,34 @@ def require_local_tag_ready(version: str, tag: str) -> None:
     if not local_tag_exists(tag):
         raise ReleaseError(f"Local release tag does not exist: {tag}")
     if remote_tag_exists(tag):
-        raise ReleaseError(f"Remote tag already exists on origin: {tag}")
+        raise ReleaseError(
+            f"Remote tag already exists on origin: {tag}",
+            next_steps=[
+                f"Check the published release with `gh release view {tag}`.",
+                f"If the release is complete, no further release step is required for {tag}.",
+            ],
+        )
     if read_pyproject_version() != version:
-        raise ReleaseError(f"pyproject.toml does not contain release version {version}")
+        raise ReleaseError(
+            f"pyproject.toml does not contain release version {version}",
+            next_steps=[
+                "Check the current version with `rg -n '^version =' pyproject.toml`.",
+                f"Delete the local tag with `git tag -d {tag}` if it was created for the wrong commit.",
+                f"Re-run `scripts/release.py {version}` after the version and tag state agree.",
+            ],
+        )
 
     head_sha = run(["git", "rev-parse", "HEAD"], capture=True)
     tag_sha = run(["git", "rev-list", "-n", "1", tag], capture=True)
     if head_sha != tag_sha:
-        raise ReleaseError(f"Local tag {tag} does not point at HEAD.")
+        raise ReleaseError(
+            f"Local tag {tag} does not point at HEAD.",
+            next_steps=[
+                f"Inspect the tagged commit with `git show --stat {tag}`.",
+                "Inspect HEAD with `git show --stat HEAD`.",
+                f"If the tag is wrong, delete it with `git tag -d {tag}` and re-run the release command.",
+            ],
+        )
 
 
 def local_release_is_prepared(version: str, tag: str) -> bool:
@@ -292,11 +356,30 @@ def local_release_is_prepared(version: str, tag: str) -> bool:
     return True
 
 
+def require_version_needs_bump(current_version: str, version: str, tag: str) -> None:
+    if current_version != version:
+        return
+    raise ReleaseError(
+        f"pyproject.toml already contains version {version}, but local tag {tag} is missing.",
+        next_steps=[
+            "Check whether HEAD is the intended release commit with `git log --oneline -1`.",
+            f'If HEAD is the finished release commit, create the missing tag with `git tag -a {tag} -m "MatchPatch {tag}"`.',
+            f"Then publish with `scripts/release.py {version} --publish`.",
+            f"If HEAD is not a finished release commit, restore the previous version or choose a new release version before re-running `scripts/release.py {version}`.",
+        ],
+    )
+
+
 def sync_wsl(skip_sync: bool) -> None:
     if skip_sync:
         return
     info("Synchronizing the WSL development environment")
     run(["scripts/sync-wsl.sh"])
+
+
+def update_lockfile() -> None:
+    info("Updating dependency lockfile")
+    run(["uv", "lock"], env=wsl_uv_env())
 
 
 def run_quality_checks(skip_pre_push: bool, gui_tests: bool) -> None:
@@ -400,7 +483,7 @@ def commit_and_tag(version: str, tag: str) -> None:
     info("Committing version bump and creating the release tag")
     message = release_commit_message(tag)
     validate_commit_message(message)
-    run(["git", "add", "pyproject.toml"])
+    run(["git", "add", "pyproject.toml", "uv.lock"])
     run(["git", "commit", "-m", message])
     run(["git", "tag", "-a", tag, "-m", f"MatchPatch {tag}"])
     run(["git", "show", "--stat", tag])
@@ -532,17 +615,19 @@ def main() -> int:
         sync_branch(args.branch, args.skip_pull)
         require_clean_tree()
 
-        prepared_already = args.publish and local_release_is_prepared(version, tag)
+        prepared_already = local_release_is_prepared(version, tag)
         if prepared_already:
             info(f"Found prepared local release {tag}")
         else:
-            ensure_tag_available(tag)
+            ensure_tag_available(version, tag)
             current_version = read_pyproject_version()
+            require_version_needs_bump(current_version, version, tag)
             info(f"Updating project version: {current_version} -> {version}")
             write_pyproject_version(version)
             if read_pyproject_version() != version:
                 raise ReleaseError("Version update did not stick.")
 
+            update_lockfile()
             sync_wsl(args.skip_sync)
             run_quality_checks(args.skip_pre_push, args.gui_tests)
             build_docs()
@@ -559,13 +644,21 @@ def main() -> int:
             watch_release_workflow(tag)
             verify_public_release(version, tag, args.notes_file)
             info(f"Release {tag} published.")
+            print(f"Release {tag} is complete.")
         else:
             info(f"Release {tag} is prepared locally.")
-            print(f"Next step: {Path('scripts/release.py')} {version} --publish")
+            print_next_steps(
+                [
+                    f"Review the release commit and tag with `git show --stat {tag}`.",
+                    f"Publish it with `{Path('scripts/release.py')} {version} --publish`.",
+                ],
+                file=sys.stdout,
+            )
 
         return 0
     except ReleaseError as error:
         print(f"\nrelease.py: {error}", file=sys.stderr)
+        print_next_steps(error.next_steps)
         return 1
 
 

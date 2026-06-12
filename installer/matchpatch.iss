@@ -26,6 +26,9 @@ DefaultDirName={autopf}\MatchPatch
 DefaultGroupName=MatchPatch
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\MatchPatch.exe
+SetupIconFile={#SourceDir}\installer-assets\matchpatch.ico
+WizardImageFile={#SourceDir}\installer-assets\wizard-logo.bmp
+WizardSmallImageFile={#SourceDir}\installer-assets\wizard-small-logo.bmp
 OutputDir={#OutputDir}
 OutputBaseFilename=MatchPatch-Setup-{#AppVersion}
 Compression=lzma2
@@ -41,10 +44,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\MatchPatch"; Filename: "{app}\MatchPatch.exe"; WorkingDir: "{app}"
+Name: "{group}\MatchPatch"; Filename: "{app}\MatchPatch.exe"; WorkingDir: "{app}"; IconFilename: "{app}\installer-assets\matchpatch.ico"
 Name: "{group}\MatchPatch Documentation"; Filename: "{app}\docs_html\index.html"; WorkingDir: "{app}\docs_html"
 Name: "{group}\Uninstall MatchPatch"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\MatchPatch"; Filename: "{app}\MatchPatch.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\MatchPatch"; Filename: "{app}\MatchPatch.exe"; WorkingDir: "{app}"; IconFilename: "{app}\installer-assets\matchpatch.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\MatchPatch.exe"; Description: "{cm:LaunchProgram,MatchPatch}"; Flags: nowait postinstall skipifsilent unchecked

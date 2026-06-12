@@ -281,10 +281,11 @@ scripts\test-windows-installer.cmd --installer C:\path\to\MatchPatch-Setup-0.1.0
 Add `--gui-smoke` to initialize the GUI in non-interactive smoke mode as part
 of the payload and installed-app checks.
 
-The smoke tests verify that `MatchPatch.exe`, `matchpatch.exe`, bundled
-`docs_html/index.html`, and `build-info.json` exist; that
-`matchpatch.exe --version` reports the expected version; and that the installer
-can install and uninstall silently.
+The smoke tests verify that `MatchPatch.exe`, bundled `docs_html/index.html`,
+installer artwork, and `build-info.json` exist; that
+`build-info.json` reports the expected version; that
+`MatchPatch.exe --cli --version` starts cleanly; and that the
+installer can install and uninstall silently.
 
 Troubleshooting:
 

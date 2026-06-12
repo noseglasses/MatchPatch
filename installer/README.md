@@ -6,8 +6,8 @@ payload, then packages that payload with Inno Setup 6.
 ## Layout
 
 - `matchpatch.iss`: Inno Setup script for the final installer.
-- `pyinstaller/matchpatch-gui.spec`: frozen `MatchPatch.exe` GUI build.
-- `pyinstaller/matchpatch-cli.spec`: frozen `matchpatch.exe` CLI build.
+- `pyinstaller/matchpatch-gui.spec`: frozen `MatchPatch.exe` GUI build. Use
+  `MatchPatch.exe --cli ...` for command-line mode.
 - `pyinstaller/build_support.py`: shared PyInstaller build metadata and data
   staging helpers.
 - `smoke/smoke_payload.ps1`: checks the frozen payload before installation.
