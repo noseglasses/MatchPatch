@@ -27,7 +27,9 @@ repos:
         name: Ruff lint
         entry: >-
           bash -c 'export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl";
-          uv run --frozen --no-default-groups --group wsl ruff check .'
+          python3 scripts/run_hook_with_hint.py
+          --hint "UV_PROJECT_ENVIRONMENT=\"\${XDG_DATA_HOME:-\$HOME/.local/share}/matchpatch/.venv-wsl\" uv run --frozen --no-default-groups --group wsl ruff check --fix ."
+          -- uv run --frozen --no-default-groups --group wsl ruff check .'
         language: system
         pass_filenames: false
 
@@ -35,7 +37,9 @@ repos:
         name: Ruff format check
         entry: >-
           bash -c 'export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl";
-          uv run --frozen --no-default-groups --group wsl ruff format --check .'
+          python3 scripts/run_hook_with_hint.py
+          --hint "UV_PROJECT_ENVIRONMENT=\"\${XDG_DATA_HOME:-\$HOME/.local/share}/matchpatch/.venv-wsl\" uv run --frozen --no-default-groups --group wsl ruff format ."
+          -- uv run --frozen --no-default-groups --group wsl ruff format --check .'
         language: system
         pass_filenames: false
 
@@ -43,7 +47,9 @@ repos:
         name: ty
         entry: >-
           bash -c 'export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl";
-          uv run --frozen --no-default-groups --group wsl ty check'
+          python3 scripts/run_hook_with_hint.py
+          --hint "UV_PROJECT_ENVIRONMENT=\"\${XDG_DATA_HOME:-\$HOME/.local/share}/matchpatch/.venv-wsl\" uv run --frozen --no-default-groups --group wsl ty check"
+          -- uv run --frozen --no-default-groups --group wsl ty check'
         language: system
         pass_filenames: false
 
@@ -51,7 +57,9 @@ repos:
         name: pytest
         entry: >-
           bash -c 'export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl";
-          uv run --frozen --no-default-groups --group wsl pytest'
+          python3 scripts/run_hook_with_hint.py
+          --hint "UV_PROJECT_ENVIRONMENT=\"\${XDG_DATA_HOME:-\$HOME/.local/share}/matchpatch/.venv-wsl\" uv run --frozen --no-default-groups --group wsl pytest"
+          -- uv run --frozen --no-default-groups --group wsl pytest'
         language: system
         pass_filenames: false
         stages:

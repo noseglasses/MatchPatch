@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -381,10 +382,26 @@ def git_diff_check() -> None:
     run(["git", "diff", "--check"])
 
 
+def release_commit_message(tag: str) -> str:
+    return f"chore(release): {tag}"
+
+
+def validate_commit_message(message: str) -> None:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as message_file:
+        message_file.write(message)
+        message_path = message_file.name
+    try:
+        run([sys.executable, "scripts/check_commit_msg.py", message_path])
+    finally:
+        Path(message_path).unlink(missing_ok=True)
+
+
 def commit_and_tag(version: str, tag: str) -> None:
     info("Committing version bump and creating the release tag")
+    message = release_commit_message(tag)
+    validate_commit_message(message)
     run(["git", "add", "pyproject.toml"])
-    run(["git", "commit", "-m", f"chore(release): {tag}"])
+    run(["git", "commit", "-m", message])
     run(["git", "tag", "-a", tag, "-m", f"MatchPatch {tag}"])
     run(["git", "show", "--stat", tag])
 
