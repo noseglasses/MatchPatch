@@ -64,7 +64,7 @@ Run smoke tests against an existing artifact:
 
 ```bat
 scripts\test-windows-installer.cmd --reuse-artifact
-scripts\test-windows-installer.cmd --installer C:\path\to\MatchPatch-Setup-0.1.0.exe
+scripts\test-windows-installer.cmd --installer C:\path\to\MatchPatch-Setup-0.8.1.exe
 ```
 
 Add `--gui-smoke` to run the non-interactive GUI startup check in both smoke

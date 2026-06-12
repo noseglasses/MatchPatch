@@ -36,7 +36,7 @@ From the repository root, run the release script with the package version
 without the leading `v`:
 
 ```bash
-scripts/release.py 0.2.0 --publish
+scripts/release.py 0.8.1 --publish
 ```
 
 The script will:
@@ -45,7 +45,7 @@ The script will:
 - require a clean working tree;
 - require the release branch, normally `main`;
 - fetch tags and fast-forward the branch;
-- check that `v0.2.0` does not already exist locally or on `origin`;
+- check that `v0.8.1` does not already exist locally or on `origin`;
 - update `project.version` in `pyproject.toml`;
 - run `scripts/sync-wsl.sh`;
 - run `ruff check .`, `ruff format --check .`, `ty check`, and `pytest` from
@@ -54,31 +54,31 @@ The script will:
 - build the strict Sphinx docs;
 - build and smoke-test the wheel and source distribution;
 - run `git diff --check`;
-- commit the version bump as `chore(release): v0.2.0`;
-- create the annotated tag `v0.2.0`;
+- commit the version bump as `chore(release): v0.8.1`;
+- create the annotated tag `v0.8.1`;
 - ask for confirmation before publishing;
 - push the release commit and tag;
 - watch the GitHub Actions release workflow;
-- check that the GitHub Release has `MatchPatch-Setup-0.2.0.exe`;
+- check that the GitHub Release has `MatchPatch-Setup-0.8.1.exe`;
 - check PyPI package versions.
 
 Use `--yes` when running in a trusted terminal and you do not want the final
 publish confirmation prompt:
 
 ```bash
-scripts/release.py 0.2.0 --publish --yes
+scripts/release.py 0.8.1 --publish --yes
 ```
 
 For a cautious two-step release, prepare everything locally first:
 
 ```bash
-scripts/release.py 0.2.0
+scripts/release.py 0.8.1
 ```
 
 If that succeeds, publish the prepared local tag later:
 
 ```bash
-scripts/release.py 0.2.0 --publish
+scripts/release.py 0.8.1 --publish
 ```
 
 ## Release Notes
@@ -87,7 +87,7 @@ Write release notes in a temporary Markdown file before publishing if you do not
 want the placeholder GitHub Release notes created by the workflow.
 
 ```bash
-scripts/release.py 0.2.0 --publish --notes-file /tmp/matchpatch-0.2.0-notes.md
+scripts/release.py 0.8.1 --publish --notes-file /tmp/matchpatch-0.8.1-notes.md
 ```
 
 The script applies that file to the GitHub Release after the release workflow
@@ -107,13 +107,13 @@ Suggested sections:
 Run the GUI test wrapper as part of the release:
 
 ```bash
-scripts/release.py 0.2.0 --gui-tests
+scripts/release.py 0.8.1 --gui-tests
 ```
 
 Build and smoke-test the Windows installer locally before tagging:
 
 ```bash
-scripts/release.py 0.2.0 --installer
+scripts/release.py 0.8.1 --installer
 ```
 
 The installer check uses `scripts/test-windows-installer-from-wsl.sh`, which
@@ -138,7 +138,7 @@ elsewhere.
 
 ## Version Rules
 
-- Pass a PEP 440 package version, for example `0.2.0`.
+- Pass a PEP 440 package version, for example `0.8.1`.
 - Do not include the leading `v` when calling the script.
 - The Git tag is always `v<version>`.
 - Do not reuse a version after PyPI publishing succeeds.
@@ -150,7 +150,7 @@ elsewhere.
 Open the GitHub Release and check the notes:
 
 ```bash
-gh release view v0.2.0 --web
+gh release view v0.8.1 --web
 ```
 
 Open PyPI and verify the new version:
@@ -174,13 +174,13 @@ the state:
 
 ```bash
 git status --short
-git show --stat v0.2.0
+git show --stat v0.8.1
 ```
 
 Delete an unpublished local tag if you need to redo the local release:
 
 ```bash
-git tag -d v0.2.0
+git tag -d v0.8.1
 ```
 
 If the tag was pushed and PyPI publishing succeeded, do not reuse the same
@@ -198,5 +198,5 @@ with `--clobber` only when the tag still represents the exact source used to
 build that asset:
 
 ```bash
-gh release upload v0.2.0 dist/installer/MatchPatch-Setup-0.2.0.exe --clobber
+gh release upload v0.8.1 dist/installer/MatchPatch-Setup-0.8.1.exe --clobber
 ```
