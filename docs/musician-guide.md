@@ -84,6 +84,23 @@ Use hardware for final rehearsal or gig-ready results.
 
 See [Backends](concepts/backends.md).
 
+## Saved Configuration
+
+Most users can set options directly in the GUI. If you want MatchPatch to load
+the same machine defaults every time, save a TOML configuration file.
+
+When no config file is selected in Advanced > Files, MatchPatch automatically
+uses the first config file it finds in this search path:
+
+- Windows installed app: `%APPDATA%\MatchPatch\config.toml`
+- Windows compatibility fallback: `%USERPROFILE%\.config\matchpatch\config.toml`
+- Linux/WSL/macOS with `XDG_CONFIG_HOME`: `$XDG_CONFIG_HOME/matchpatch/config.toml`
+- Linux/WSL/macOS fallback: `~/.config/matchpatch/config.toml`
+
+To use a different file for one session, open Advanced > Files and choose it in
+the Config field. A selected Config path takes priority over the automatic
+search path.
+
 (help-opening-files)=
 ## Opening Files
 

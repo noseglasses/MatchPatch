@@ -107,9 +107,11 @@ def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     assert "prepare_installer_assets()" in gui_spec
     assert 'prepare_pyinstaller_paths(Path(CONF["workpath"]), Path(CONF["distpath"]))' in gui_spec
     assert "stage_installer_assets()" in gui_spec
+    assert "stage_runtime_files()" in gui_spec
     assert "stage_docs()" in gui_spec
     assert "write_build_info()" in gui_spec
 
+    assert "PAYLOAD_RUNTIME_FILES" in build_support
     assert '"Python" / "preset_handling.py"' in build_support
     assert '"audio" / "reference-di"' in build_support
     assert "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav" in build_support
@@ -119,6 +121,7 @@ def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     assert "def prepare_pyinstaller_paths" in build_support
     assert "def prepare_installer_assets" in build_support
     assert "def stage_installer_assets" in build_support
+    assert "def stage_runtime_files" in build_support
     assert "matchpatch.ico" in build_support
     assert "wizard-logo.bmp" in build_support
     assert "wizard-small-logo.bmp" in build_support
@@ -158,6 +161,18 @@ def test_installer_assets_are_prepared_outside_payload_then_staged(tmp_path: Pat
     build_support.stage_installer_assets(scratch_assets, payload_root)
 
     assert (payload_root / "installer-assets" / "matchpatch.ico").is_file()
+
+
+def test_runtime_files_are_staged_at_payload_root(tmp_path: Path) -> None:
+    build_support = _load_build_support()
+    payload_root = tmp_path / "build" / "windows-payload" / "MatchPatch"
+
+    build_support.stage_runtime_files(payload_root)
+
+    assert (payload_root / "Python" / "preset_handling.py").is_file()
+    assert (
+        payload_root / "audio" / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
+    ).is_file()
 
 
 def test_release_workflow_publishes_windows_installer() -> None:

@@ -114,6 +114,33 @@ The file path in Advanced > Files points to a missing or moved WAV.
 
 See [Reference DI](concepts/reference-di.md).
 
+## Config File Not Applied
+
+### What You See
+
+MatchPatch starts with different backend, routing, Reference DI, or timing
+settings than you expected.
+
+### Likely Cause
+
+The config file is not in the automatic search path, or another config file is
+selected in Advanced > Files.
+
+### What To Try
+
+1. Open Advanced > Files.
+2. If the Config field points to a file, confirm it is the file you meant to
+   use.
+3. If the Config field is empty, put your default config in the automatic
+   location for your system.
+
+Automatic config search path:
+
+- Windows installed app: `%APPDATA%\MatchPatch\config.toml`
+- Windows compatibility fallback: `%USERPROFILE%\.config\matchpatch\config.toml`
+- Linux/WSL/macOS with `XDG_CONFIG_HOME`: `$XDG_CONFIG_HOME/matchpatch/config.toml`
+- Linux/WSL/macOS fallback: `~/.config/matchpatch/config.toml`
+
 ## Reference DI Sample Rate Mismatch
 
 ### What You See

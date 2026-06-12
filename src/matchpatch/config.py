@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -12,17 +14,39 @@ from matchpatch.devices.base import NormalizationPolicy
 Config = dict[str, Any]
 
 
+def default_config_paths() -> list[Path]:
+    home = Path.home()
+    legacy_path = home / ".config" / "matchpatch" / "config.toml"
+
+    if sys.platform == "win32":
+        appdata = os.getenv("APPDATA")
+        if appdata:
+            primary_path = Path(appdata) / "MatchPatch" / "config.toml"
+        else:
+            primary_path = home / "AppData" / "Roaming" / "MatchPatch" / "config.toml"
+        return [primary_path, legacy_path]
+
+    xdg_config_home = os.getenv("XDG_CONFIG_HOME")
+    if xdg_config_home:
+        return [Path(xdg_config_home) / "matchpatch" / "config.toml", legacy_path]
+    return [legacy_path]
+
+
 def default_config_path() -> Path:
-    return Path.home() / ".config" / "matchpatch" / "config.toml"
+    return default_config_paths()[0]
 
 
 def load_config(path: str | Path | None) -> Config:
-    config_path = Path(path).expanduser() if path is not None else default_config_path()
+    if path is None:
+        for config_path in default_config_paths():
+            if config_path.is_file():
+                with config_path.open("rb") as config_file:
+                    return tomllib.load(config_file)
+        return {}
+
+    config_path = Path(path).expanduser()
 
     if not config_path.is_file():
-        if path is None:
-            return {}
-
         raise ValueError(f"MatchPatch config file does not exist: {config_path}")
 
     with config_path.open("rb") as config_file:

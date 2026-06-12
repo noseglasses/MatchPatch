@@ -136,10 +136,18 @@ When adding a new term, update [Glossary](glossary.md).
 Most musicians should configure MatchPatch from the GUI. Use TOML only for
 durable machine defaults, repeated CLI runs, or advanced setup notes.
 
-MatchPatch loads `~/.config/matchpatch/config.toml` automatically when it
-exists. Use `--config PATH` to load another file. Command-line options override
-the file. The `MATCHPATCH_BACKEND`, `MATCHPATCH_WINDOWS_PYTHON`, and
-`MATCHPATCH_REFERENCE_DI` environment variables override matching file values.
+MatchPatch automatically loads the first existing default config file from this
+search path:
+
+- Windows: `%APPDATA%\MatchPatch\config.toml`
+- Windows fallback: `%USERPROFILE%\.config\matchpatch\config.toml`
+- Linux/WSL/macOS with `XDG_CONFIG_HOME`: `$XDG_CONFIG_HOME/matchpatch/config.toml`
+- Linux/WSL/macOS fallback: `~/.config/matchpatch/config.toml`
+
+Use `--config PATH` or the GUI Files tab to load another file. Command-line
+options override the file. The `MATCHPATCH_BACKEND`,
+`MATCHPATCH_WINDOWS_PYTHON`, and `MATCHPATCH_REFERENCE_DI` environment
+variables override matching file values.
 
 Use `--snapshot-count N` to override `policy.measured_snapshots` for one run.
 Line 6 Helix supports between `1` and `8` measured snapshots; the default is
@@ -149,6 +157,12 @@ Export the default config:
 
 ```bash
 matchpatch --export-default-config ~/.config/matchpatch/config.toml
+```
+
+On installed Windows builds, the matching default export target is:
+
+```powershell
+MatchPatch.exe --cli --export-default-config "$env:APPDATA\MatchPatch\config.toml"
 ```
 
 Example config:
