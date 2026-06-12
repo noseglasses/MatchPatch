@@ -53,6 +53,15 @@ function Invoke-SetupProcess {
     }
 }
 
+function Invoke-MatchPatchCliVersionSmoke {
+    param([Parameter(Mandatory = $true)][string]$GuiExe)
+
+    $process = Start-Process -FilePath $GuiExe -ArgumentList @("--cli", "--version") -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "Installed MatchPatch.exe --cli --version failed with exit code $($process.ExitCode)"
+    }
+}
+
 $installer = (Resolve-Path -LiteralPath $InstallerPath).Path
 $installLog = Join-Path $env:TEMP ("MatchPatch-install-" + [guid]::NewGuid().ToString("N") + ".log")
 $uninstallLog = Join-Path $env:TEMP ("MatchPatch-uninstall-" + [guid]::NewGuid().ToString("N") + ".log")
@@ -67,22 +76,26 @@ $installArgs = @(
 Invoke-SetupProcess -Path $installer -Arguments $installArgs -FailureMessage "Installer failed" -LogPath $installLog
 
 $guiExe = Join-Path $InstallDir "MatchPatch.exe"
-$cliExe = Join-Path $InstallDir "matchpatch.exe"
 $docsIndex = Join-Path $InstallDir "docs_html\index.html"
+$buildInfoPath = Join-Path $InstallDir "build-info.json"
 $uninstaller = Join-Path $InstallDir "unins000.exe"
+$installerIcon = Join-Path $InstallDir "installer-assets\matchpatch.ico"
+$wizardLogo = Join-Path $InstallDir "installer-assets\wizard-logo.bmp"
+$wizardSmallLogo = Join-Path $InstallDir "installer-assets\wizard-small-logo.bmp"
 
 Assert-FileExists $guiExe
-Assert-FileExists $cliExe
 Assert-FileExists $docsIndex
+Assert-FileExists $buildInfoPath
 Assert-FileExists $uninstaller
+Assert-FileExists $installerIcon
+Assert-FileExists $wizardLogo
+Assert-FileExists $wizardSmallLogo
 
-$versionOutput = & $cliExe --version
-if ($LASTEXITCODE -ne 0) {
-    throw "Installed matchpatch.exe --version failed with exit code $LASTEXITCODE"
+$buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
+if ($buildInfo.version -ne $ExpectedVersion) {
+    throw "Installed build-info.json version '$($buildInfo.version)' did not match expected '$ExpectedVersion'"
 }
-if (($versionOutput -join "`n") -notmatch [regex]::Escape($ExpectedVersion)) {
-    throw "Installed matchpatch.exe --version output did not contain expected version '$ExpectedVersion': $versionOutput"
-}
+Invoke-MatchPatchCliVersionSmoke $guiExe
 
 if ($GuiSmoke) {
     Invoke-MatchPatchGuiSmoke $guiExe

@@ -7,10 +7,18 @@ import subprocess
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PIL import Image as ImageModule
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PAYLOAD_ROOT = PROJECT_ROOT / "build" / "windows-payload" / "MatchPatch"
 PYINSTALLER_WORK_ROOT = PROJECT_ROOT / "build" / "pyinstaller"
+PYINSTALLER_ASSETS_ROOT = PYINSTALLER_WORK_ROOT / "installer-assets"
+INSTALLER_ASSETS_ROOT = PAYLOAD_ROOT / "installer-assets"
+ICON_SOURCE = PROJECT_ROOT / "docs" / "assets" / "matchmatch-icon-512.png"
+LOGO_SOURCE = PROJECT_ROOT / "docs" / "assets" / "matchmatch-logo.png"
 
 
 def project_version() -> str:
@@ -42,6 +50,49 @@ def asset_datas() -> list[tuple[str, str]]:
 def prepare_pyinstaller_paths(workpath: Path, distpath: Path) -> None:
     workpath.mkdir(parents=True, exist_ok=True)
     distpath.mkdir(parents=True, exist_ok=True)
+
+
+def _contained_rgba(
+    image_module: ImageModule,
+    source: Path,
+    size: tuple[int, int],
+    background: tuple[int, int, int, int],
+) -> ImageModule.Image:
+    image = image_module.open(source).convert("RGBA")
+    image.thumbnail(size, image_module.Resampling.LANCZOS)
+    canvas = image_module.new("RGBA", size, background)
+    canvas.alpha_composite(image, ((size[0] - image.width) // 2, (size[1] - image.height) // 2))
+    return canvas
+
+
+def prepare_installer_assets(target_root: Path = PYINSTALLER_ASSETS_ROOT) -> Path:
+    from PIL import Image
+
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    icon = _contained_rgba(Image, ICON_SOURCE, (256, 256), (0, 0, 0, 0))
+    icon.save(
+        target_root / "matchpatch.ico",
+        sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+    )
+
+    large = _contained_rgba(Image, LOGO_SOURCE, (164, 314), (255, 255, 255, 255)).convert("RGB")
+    large.save(target_root / "wizard-logo.bmp")
+
+    small = _contained_rgba(Image, ICON_SOURCE, (55, 55), (255, 255, 255, 255)).convert("RGB")
+    small.save(target_root / "wizard-small-logo.bmp")
+
+    return target_root
+
+
+def stage_installer_assets(
+    source_root: Path = PYINSTALLER_ASSETS_ROOT,
+    payload_root: Path = PAYLOAD_ROOT,
+) -> None:
+    target_root = payload_root / "installer-assets"
+    if target_root.exists():
+        shutil.rmtree(target_root)
+    shutil.copytree(source_root, target_root)
 
 
 def write_build_info(payload_root: Path = PAYLOAD_ROOT) -> None:

@@ -33,29 +33,36 @@ function Invoke-MatchPatchGuiSmoke {
     }
 }
 
+function Invoke-MatchPatchCliVersionSmoke {
+    param([Parameter(Mandatory = $true)][string]$GuiExe)
+
+    $process = Start-Process -FilePath $GuiExe -ArgumentList @("--cli", "--version") -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "MatchPatch.exe --cli --version failed with exit code $($process.ExitCode)"
+    }
+}
+
 $payload = (Resolve-Path -LiteralPath $PayloadDir).Path
 $guiExe = Join-Path $payload "MatchPatch.exe"
-$cliExe = Join-Path $payload "matchpatch.exe"
 $docsIndex = Join-Path $payload "docs_html\index.html"
 $buildInfoPath = Join-Path $payload "build-info.json"
+$installerIcon = Join-Path $payload "installer-assets\matchpatch.ico"
+$wizardLogo = Join-Path $payload "installer-assets\wizard-logo.bmp"
+$wizardSmallLogo = Join-Path $payload "installer-assets\wizard-small-logo.bmp"
 
 Assert-FileExists $guiExe
-Assert-FileExists $cliExe
 Assert-FileExists $docsIndex
 Assert-FileExists $buildInfoPath
+Assert-FileExists $installerIcon
+Assert-FileExists $wizardLogo
+Assert-FileExists $wizardSmallLogo
 
 $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
 if ($buildInfo.version -ne $ExpectedVersion) {
     throw "Payload build-info.json version '$($buildInfo.version)' did not match expected '$ExpectedVersion'"
 }
 
-$versionOutput = & $cliExe --version
-if ($LASTEXITCODE -ne 0) {
-    throw "matchpatch.exe --version failed with exit code $LASTEXITCODE"
-}
-if (($versionOutput -join "`n") -notmatch [regex]::Escape($ExpectedVersion)) {
-    throw "matchpatch.exe --version output did not contain expected version '$ExpectedVersion': $versionOutput"
-}
+Invoke-MatchPatchCliVersionSmoke $guiExe
 
 if ($GuiSmoke) {
     Invoke-MatchPatchGuiSmoke $guiExe

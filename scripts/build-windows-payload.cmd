@@ -27,15 +27,20 @@ if errorlevel 1 goto :fail
 uv run --frozen --no-default-groups --group windows --group installer --extra gui pyinstaller installer\pyinstaller\matchpatch-gui.spec
 if errorlevel 1 goto :fail
 
-uv run --frozen --no-default-groups --group windows --group installer --extra gui pyinstaller installer\pyinstaller\matchpatch-cli.spec
-if errorlevel 1 goto :fail
-
 if not exist "%PAYLOAD_DIR%\MatchPatch.exe" (
   echo Missing payload executable: %PAYLOAD_DIR%\MatchPatch.exe >&2
   goto :fail
 )
-if not exist "%PAYLOAD_DIR%\matchpatch.exe" (
-  echo Missing payload executable: %PAYLOAD_DIR%\matchpatch.exe >&2
+if not exist "%PAYLOAD_DIR%\installer-assets\matchpatch.ico" (
+  echo Missing payload installer icon: %PAYLOAD_DIR%\installer-assets\matchpatch.ico >&2
+  goto :fail
+)
+if not exist "%PAYLOAD_DIR%\installer-assets\wizard-logo.bmp" (
+  echo Missing payload installer wizard image: %PAYLOAD_DIR%\installer-assets\wizard-logo.bmp >&2
+  goto :fail
+)
+if not exist "%PAYLOAD_DIR%\installer-assets\wizard-small-logo.bmp" (
+  echo Missing payload installer wizard small image: %PAYLOAD_DIR%\installer-assets\wizard-small-logo.bmp >&2
   goto :fail
 )
 if not exist "%PAYLOAD_DIR%\docs_html\index.html" (

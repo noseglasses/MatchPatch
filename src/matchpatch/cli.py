@@ -22,11 +22,12 @@ def print_devices() -> None:
         print(f"{profile.name}\t{profile.display_name}")
 
 
-def main() -> None:
-    if len(sys.argv) > 1 and sys.argv[1] == "normalize":
+def main(argv: list[str] | None = None) -> None:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "normalize":
         from matchpatch.normalize import main as normalize_main
 
-        normalize_main(sys.argv[2:])
+        normalize_main(args[1:])
         return
 
     parser = argparse.ArgumentParser(description="Normalize gain across audio processor presets")
@@ -50,7 +51,7 @@ def main() -> None:
         metavar="PATH",
         help="Write a TOML configuration file populated with MatchPatch defaults",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(args)
 
     if args.export_default_config:
         path = export_default_config(args.export_default_config)

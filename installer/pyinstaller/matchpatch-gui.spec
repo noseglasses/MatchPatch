@@ -12,7 +12,9 @@ from build_support import (
     PROJECT_ROOT,
     PYINSTALLER_WORK_ROOT,
     asset_datas,
+    prepare_installer_assets,
     prepare_pyinstaller_paths,
+    stage_installer_assets,
     stage_docs,
     write_build_info,
 )
@@ -23,7 +25,7 @@ CONF["workpath"] = str(PYINSTALLER_WORK_ROOT / "gui")
 prepare_pyinstaller_paths(Path(CONF["workpath"]), Path(CONF["distpath"]))
 
 a = Analysis(
-    [str(PROJECT_ROOT / "src" / "matchpatch" / "gui" / "app.py")],
+    [str(PROJECT_ROOT / "src" / "matchpatch" / "app.py")],
     pathex=[str(PROJECT_ROOT / "src")],
     binaries=[],
     datas=asset_datas(),
@@ -49,7 +51,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
-    icon=str(PROJECT_ROOT / "docs" / "assets" / "matchmatch-icon.png"),
+    icon=str(prepare_installer_assets() / "matchpatch.ico"),
 )
 coll = COLLECT(
     exe,
@@ -62,5 +64,6 @@ coll = COLLECT(
     name="MatchPatch",
 )
 
+stage_installer_assets()
 stage_docs()
 write_build_info()
