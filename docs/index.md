@@ -26,7 +26,6 @@ save an adjusted Helix file.
 | Balance one preset | [Normalize A Single Preset](workflows/normalize-single-preset.md) |
 | Test without connecting a Helix | [Test Without Hardware](workflows/test-without-hardware.md) |
 | Fix a problem | [Troubleshooting](troubleshooting.md) |
-| Plan or record the teaser video | [Video](video.md) |
 | Look up a short answer | [FAQ](faq.md) |
 | Look up a term | [Glossary](glossary.md) |
 
@@ -41,7 +40,6 @@ save an adjusted Helix file.
 - [Custom Adjustments](workflows/custom-adjustments.md)
 - [Optimize Timing](workflows/optimize-timing.md)
 - [Save And Import Files](workflows/save-and-import.md)
-- [Video](video.md)
 
 ## Learn The Ideas
 
@@ -85,7 +83,6 @@ workflows/manual-editing-and-csv
 workflows/custom-adjustments
 workflows/optimize-timing
 workflows/save-and-import
-video
 concepts/backends
 concepts/reference-di
 concepts/lufs-and-loudness

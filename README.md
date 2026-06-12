@@ -1,7 +1,7 @@
 # MatchPatch
 
 <p align="center">
-  <img src="docs/assets/matchmatch-logo.png" alt="MatchPatch: Normalize presets. Match volume." width="173">
+  <img src="docs/assets/matchmatch-logo.png" alt="MatchPatch: Normalize presets. Match volume." width="260">
 </p>
 
 [![Quality](https://github.com/noseglasses/MatchPatch/actions/workflows/quality.yml/badge.svg)](https://github.com/noseglasses/MatchPatch/actions/workflows/quality.yml)
@@ -10,7 +10,11 @@
 [![Python](https://img.shields.io/pypi/pyversions/matchpatch.svg)](https://pypi.org/project/matchpatch/)
 
 <p align="center">
-  <strong><a href="https://youtu.be/Dw1Kez0AnCk">Watch the MatchPatch demo video</a></strong>
+  <strong><a href="https://youtu.be/Dw1Kez0AnCk">Watch the demo video</a></strong>
+  ·
+  <strong><a href="https://noseglasses.github.io/MatchPatch/">Read the documentation</a></strong>
+  ·
+  <strong><a href="https://github.com/noseglasses/MatchPatch/releases/latest">Download MatchPatch</a></strong>
 </p>
 
 ![MatchPatch GUI showing a loaded Helix setlist](docs/assets/screenshots/normalization-ongoing.png)
@@ -54,6 +58,7 @@ is for real Helix measurement.
 
 ## Documentation
 
+- Online manual: [noseglasses.github.io/MatchPatch](https://noseglasses.github.io/MatchPatch/)
 - Start here: [docs/index.md](docs/index.md)
 - 10-minute guide: [docs/quick-start.md](docs/quick-start.md)
 - Main manual: [docs/musician-guide.md](docs/musician-guide.md)
@@ -74,10 +79,10 @@ is for real Helix measurement.
 
 ## Install And Launch
 
-On Windows, download `MatchPatch-Setup-<version>.exe` from
-[GitHub Releases](https://github.com/noseglasses/MatchPatch/releases), run the
-installer, then launch MatchPatch from the Start Menu. The installed app bundles
-offline Help, available from the GUI.
+On Windows, download the latest installer from
+[GitHub Releases](https://github.com/noseglasses/MatchPatch/releases/latest),
+run `MatchPatch-Setup-<version>.exe`, then launch MatchPatch from the Start
+Menu. The installed app bundles offline Help, available from the GUI.
 
 For source checkouts, use the verified local setup commands below and see
 [Developer Notes](docs/developer-notes.md) and

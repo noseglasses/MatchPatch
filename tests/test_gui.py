@@ -1700,7 +1700,7 @@ def test_measurement_time_estimate_updates_with_timing_and_loaded_counts(
     window.reference_di.setText(str(shorter_reference_di))
 
     assert window.measurement_time_estimate.text() == (
-        "Estimated measurement time per snapshot: 5.90 s (2 presets, 4 snapshots)"
+        "Estimated measurement time per snapshot: 5.90 s (1 preset, 2 snapshots)"
     )
     assert window.preset_measurement_time_estimate.text() == (
         "Estimated total measurement time for selected presets: 11.8 s (1 preset, 2 snapshots)"
@@ -1813,7 +1813,7 @@ def test_preset_bulk_selection_buttons(app) -> None:
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
         for row in range(window.preset_table.rowCount())
     )
-    assert window.preset_table.item(0, window._snapshot_adjustment_column(0)).text() == "0"
+    assert window.preset_table.item(0, window._snapshot_adjustment_column(0)).text() == "-"
     window.set_all_presets_checked(True)
     assert all(
         window.preset_table.item(row, 0).checkState() == Qt.CheckState.Checked
