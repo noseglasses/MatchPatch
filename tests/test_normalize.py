@@ -640,7 +640,9 @@ def test_frozen_windows_default_worker_is_current_executable(monkeypatch, tmp_pa
     monkeypatch.setattr(sys, "executable", str(matchpatch_exe))
     monkeypatch.setattr(normalize.os, "name", "nt")
 
-    assert str(normalize._default_windows_python()).replace("\\", "/") == str(matchpatch_exe)
+    assert str(normalize._default_windows_python()).replace("\\", "/") == str(
+        matchpatch_exe
+    ).replace("\\", "/")
 
 
 def test_run_windows_analysis_reports_missing_environment(tmp_path) -> None:
