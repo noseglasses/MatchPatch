@@ -254,6 +254,10 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     ]
     assert window.advanced_tabs.widget(0).isAncestorOf(window.backend)
     assert not window.advanced_tabs.widget(1).isAncestorOf(window.backend)
+    device_labels = {label.text() for label in window.advanced_tabs.widget(0).findChildren(QLabel)}
+    assert "Preset wait (s)" not in device_labels
+    assert "Snapshot wait (s)" not in device_labels
+    assert "Measurement wait (s)" not in device_labels
     assert window.advanced_tabs.widget(1).isAncestorOf(window.config_path)
     assert window.advanced_tabs.widget(1).isAncestorOf(window.custom_adjustments_path)
     assert window.advanced_tabs.widget(1).isAncestorOf(window.reference_di)
@@ -1604,9 +1608,6 @@ measured_snapshots = 6
     assert window.snapshot_wait.text() == "1.0"
     assert window.measurement_wait.text() == "0.6"
     assert window._optimization_stability_tolerance == 0.25
-    assert window.device_panels["helix"].preset_wait.text() == "1.3"
-    assert window.device_panels["helix"].snapshot_wait.text() == "1.0"
-    assert window.device_panels["helix"].measurement_wait.text() == "0.6"
     argv = window._build_argv()
     assert "None" not in argv
     assert argv[argv.index("--preset-wait") + 1] == "1.3"
@@ -1639,9 +1640,6 @@ def test_main_window_applies_measurement_parameter_presets(monkeypatch, app) -> 
     assert window.measurement_wait.text() == "0.47"
     assert window.preset_wait.text() == "0.21"
     assert window.round_trip_latency.text() == "0.001"
-    assert window.device_panels["helix"].preset_wait.text() == "0.21"
-    assert window.device_panels["helix"].snapshot_wait.text() == "0.01"
-    assert window.device_panels["helix"].measurement_wait.text() == "0.47"
 
     window.measurement_parameter_preset.setCurrentText("Default")
     window.apply_measurement_parameters_button.click()
@@ -4454,9 +4452,6 @@ def test_main_window_applies_optimized_timing_parameters(monkeypatch, app) -> No
     assert window.preset_wait.text() == "1.1"
     assert window.snapshot_wait.text() == "1.2"
     assert window.measurement_wait.text() == "1.3"
-    assert window.device_panels["helix"].preset_wait.text() == "1.1"
-    assert window.device_panels["helix"].snapshot_wait.text() == "1.2"
-    assert window.device_panels["helix"].measurement_wait.text() == "1.3"
     assert messages
 
     window.close()

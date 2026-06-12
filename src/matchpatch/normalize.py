@@ -29,11 +29,19 @@ from matchpatch.progress import ProgressEvent
 from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_presets
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
-DEFAULT_WINDOWS_PYTHON = PROJECT_DIR / ".venv-windows" / "Scripts" / "python.exe"
 PROCESS_REAP_TIMEOUT_SECONDS = 1.0
 DEFAULT_REFERENCE_DI = (
     PROJECT_DIR / "audio" / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
 )
+
+
+def _default_windows_python() -> Path:
+    if getattr(sys, "frozen", False) and os.name == "nt":
+        return Path(sys.executable)
+    return PROJECT_DIR / ".venv-windows" / "Scripts" / "python.exe"
+
+
+DEFAULT_WINDOWS_PYTHON = _default_windows_python()
 
 
 def _mapping_argument(value: object | None) -> str | None:
@@ -294,6 +302,16 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
+def _is_matchpatch_executable(path: Path) -> bool:
+    return path.name.casefold() in {"matchpatch", "matchpatch.exe"}
+
+
+def _windows_measure_command(executable: Path, command: str) -> list[object]:
+    if _is_matchpatch_executable(executable):
+        return [executable, "--cli", "measure", command]
+    return [executable, "-m", "matchpatch.measure", command]
+
+
 def wsl_path_to_windows(path: Path) -> str:
     text = str(path)
     if _is_windows() or re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith("\\\\"):
@@ -343,10 +361,7 @@ def run_windows_analysis(
         raise RuntimeError(_missing_windows_environment_message())
 
     command: list[object] = [
-        windows_python,
-        "-m",
-        "matchpatch.measure",
-        "measure",
+        *_windows_measure_command(windows_python, "measure"),
         "--device",
         args.device,
         "--backend",
@@ -436,10 +451,7 @@ def run_windows_optimization(
         raise RuntimeError(_missing_windows_environment_message())
 
     command: list[object] = [
-        windows_python,
-        "-m",
-        "matchpatch.measure",
-        "optimize",
+        *_windows_measure_command(windows_python, "optimize"),
         "--device",
         args.device,
         "--backend",
@@ -517,10 +529,7 @@ def check_windows_hardware(args: argparse.Namespace | NormalizationRequest) -> N
         raise RuntimeError(_missing_windows_environment_message())
 
     command: list[object] = [
-        windows_python,
-        "-m",
-        "matchpatch.measure",
-        "check-hardware",
+        *_windows_measure_command(windows_python, "check-hardware"),
         "--device",
         args.device,
     ]

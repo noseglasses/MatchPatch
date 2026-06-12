@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import subprocess
+import sys
 import threading
 from pathlib import Path, PureWindowsPath
 
@@ -485,6 +486,46 @@ def test_run_windows_analysis_builds_worker_command(tmp_path, monkeypatch) -> No
     assert timeout == 12.0
 
 
+def test_run_windows_analysis_uses_installed_app_worker_command(tmp_path, monkeypatch) -> None:
+    matchpatch_exe = tmp_path / "MatchPatch.exe"
+    matchpatch_exe.touch()
+    csv_path = tmp_path / "results.csv"
+    reference = tmp_path / "reference.wav"
+    args = argparse.Namespace(
+        windows_python=str(matchpatch_exe),
+        device="helix",
+        backend="loopback",
+        reference_di=str(reference),
+        audio_device=None,
+        steering_output=None,
+        steering_channel=None,
+        sample_rate=None,
+        input_mapping=None,
+        output_mapping=None,
+        simulate_fail_presets=None,
+        pre_roll=None,
+        post_roll=None,
+        round_trip_latency=None,
+        timeout=None,
+    )
+    calls = []
+    monkeypatch.setattr(normalize, "wsl_path_to_windows", lambda path: f"WIN:{path.name}")
+    monkeypatch.setattr(
+        normalize, "run_command", lambda command, timeout=None: calls.append((command, timeout))
+    )
+
+    normalize.run_windows_analysis(args, [1], csv_path)
+
+    command, _timeout = calls[0]
+    assert command[:5] == [
+        matchpatch_exe.resolve(),
+        "--cli",
+        "measure",
+        "measure",
+        "--device",
+    ]
+
+
 def test_run_windows_optimization_builds_pinned_parameter_command(tmp_path, monkeypatch) -> None:
     windows_python = tmp_path / "python.exe"
     windows_python.touch()
@@ -550,6 +591,58 @@ def test_run_windows_optimization_builds_pinned_parameter_command(tmp_path, monk
         command.index("--pinned-parameter") : command.index("--pinned-parameter") + 4
     ] == ["--pinned-parameter", "pre_roll", "--pinned-parameter", "measurement_wait"]
     assert kwargs["timeout"] == 12.0
+
+
+def test_check_windows_hardware_uses_installed_app_worker_command(tmp_path, monkeypatch) -> None:
+    matchpatch_exe = tmp_path / "MatchPatch.exe"
+    matchpatch_exe.touch()
+    args = argparse.Namespace(
+        windows_python=str(matchpatch_exe),
+        device="helix",
+        audio_device=None,
+        steering_output=None,
+        steering_channel=None,
+        sample_rate=None,
+        input_mapping=None,
+        output_mapping=None,
+        blocksize=None,
+        preset_wait=None,
+        snapshot_wait=None,
+        measurement_wait=None,
+        timeout=5,
+    )
+    calls = []
+    monkeypatch.setattr(
+        normalize.subprocess,
+        "run",
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
+    )
+
+    normalize.check_windows_hardware(args)
+
+    command, kwargs = calls[0]
+    assert command[:5] == [
+        str(matchpatch_exe.resolve()),
+        "--cli",
+        "measure",
+        "check-hardware",
+        "--device",
+    ]
+    assert kwargs["timeout"] == 5
+
+
+def test_frozen_windows_default_worker_is_current_executable(monkeypatch, tmp_path) -> None:
+    matchpatch_exe = tmp_path / "MatchPatch.exe"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(matchpatch_exe))
+    monkeypatch.setattr(normalize.os, "name", "nt")
+
+    assert str(normalize._default_windows_python()).replace("\\", "/") == str(
+        matchpatch_exe
+    ).replace("\\", "/")
 
 
 def test_run_windows_analysis_reports_missing_environment(tmp_path) -> None:

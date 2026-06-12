@@ -1070,7 +1070,7 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("devices", help="List profiles, audio devices, and MIDI outputs")
@@ -1156,12 +1156,12 @@ def parse_args() -> argparse.Namespace:
     optimize_parser.add_argument("--progress-jsonl", action="store_true")
     add_hardware_arguments(optimize_parser)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     return apply_config(args) if args.command in {"check-hardware", "measure", "optimize"} else args
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args() if argv is None else parse_args(argv)
 
     if args.command == "devices":
         list_devices()

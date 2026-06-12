@@ -26,6 +26,20 @@ def test_normalize_command_is_dispatched(monkeypatch) -> None:
     assert calls == [["--device", "helix"]]
 
 
+def test_measure_command_is_dispatched(monkeypatch) -> None:
+    import matchpatch.measure
+
+    calls = []
+    monkeypatch.setattr(matchpatch.measure, "main", calls.append)
+    monkeypatch.setattr(
+        sys, "argv", ["matchpatch", "measure", "check-hardware", "--device", "helix"]
+    )
+
+    cli.main()
+
+    assert calls == [["check-hardware", "--device", "helix"]]
+
+
 def test_environment_command_prints_runtime(monkeypatch, capsys) -> None:
     monkeypatch.setattr(sys, "argv", ["matchpatch", "--environment"])
 

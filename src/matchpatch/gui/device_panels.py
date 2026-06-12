@@ -72,9 +72,6 @@ class HelixSettingsPanel(QWidget):
         self.steering_output = QLineEdit()
         self.steering_channel = QSpinBox()
         self.steering_channel.setRange(0, 15)
-        self.preset_wait = QLineEdit()
-        self.snapshot_wait = QLineEdit()
-        self.measurement_wait = QLineEdit()
         steering.addRow(
             _label("MIDI output", "MIDI port substring used to find the connected Helix."),
             self.steering_output,
@@ -82,20 +79,6 @@ class HelixSettingsPanel(QWidget):
         steering.addRow(
             _label("MIDI channel", "Zero-based MIDI channel used for preset and snapshot changes."),
             self.steering_channel,
-        )
-        steering.addRow(
-            _label("Preset wait (s)", "Pause after switching presets before continuing."),
-            self.preset_wait,
-        )
-        steering.addRow(
-            _label("Snapshot wait (s)", "Pause after switching snapshots before continuing."),
-            self.snapshot_wait,
-        )
-        steering.addRow(
-            _label(
-                "Measurement wait (s)", "Pause before capturing loudness after a snapshot change."
-            ),
-            self.measurement_wait,
         )
 
     def populate(self, args: argparse.Namespace) -> None:
@@ -106,13 +89,6 @@ class HelixSettingsPanel(QWidget):
         self.blocksize.setValue(args.blocksize or 0)
         self.steering_output.setText(_text(args.steering_output or "Helix"))
         self.steering_channel.setValue(args.steering_channel or 0)
-        self.preset_wait.setText(_text(args.preset_wait if args.preset_wait is not None else 0.5))
-        self.snapshot_wait.setText(
-            _text(args.snapshot_wait if args.snapshot_wait is not None else 0.2)
-        )
-        self.measurement_wait.setText(
-            _text(args.measurement_wait if args.measurement_wait is not None else 0.1)
-        )
 
     def append_arguments(self, argv: list[str]) -> None:
         _append(argv, "--audio-device", self.audio_device.text())
@@ -122,9 +98,6 @@ class HelixSettingsPanel(QWidget):
         _append(argv, "--blocksize", self.blocksize.value())
         _append(argv, "--steering-output", self.steering_output.text())
         _append(argv, "--steering-channel", self.steering_channel.value())
-        _append(argv, "--preset-wait", self.preset_wait.text())
-        _append(argv, "--snapshot-wait", self.snapshot_wait.text())
-        _append(argv, "--measurement-wait", self.measurement_wait.text())
 
 
 def _append(argv: list[str], name: str, value: object) -> None:

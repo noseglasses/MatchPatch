@@ -29,6 +29,11 @@ def main(argv: list[str] | None = None) -> None:
 
         normalize_main(args[1:])
         return
+    if args and args[0] == "measure":
+        from matchpatch.measure import main as measure_main
+
+        measure_main(args[1:])
+        return
 
     parser = argparse.ArgumentParser(description="Normalize gain across audio processor presets")
     parser.add_argument(
