@@ -161,6 +161,43 @@ def test_terminal_interrupt_queues_normal_window_close(monkeypatch) -> None:
     assert scheduled == [(0, window.close)]
 
 
+def test_main_help_prints_usage_without_starting_gui(monkeypatch, capsys) -> None:
+    calls = []
+
+    monkeypatch.setattr(gui_app, "configure_wslg_runtime", lambda: calls.append("wslg"))
+    monkeypatch.setattr(gui_app, "configure_high_dpi_scaling", lambda: calls.append("dpi"))
+    monkeypatch.setattr(gui_app, "register_desktop_entry", lambda: calls.append("desktop"))
+
+    try:
+        gui_app.main(["--help"])
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    captured = capsys.readouterr()
+
+    assert "usage: matchpatch-gui" in captured.out
+    assert "Launch the MatchPatch desktop interface" in captured.out
+    assert not calls
+
+
+def test_main_version_prints_version_without_starting_gui(monkeypatch, capsys) -> None:
+    calls = []
+
+    monkeypatch.setattr(gui_app, "configure_wslg_runtime", lambda: calls.append("wslg"))
+    monkeypatch.setattr(gui_app, "configure_high_dpi_scaling", lambda: calls.append("dpi"))
+    monkeypatch.setattr(gui_app, "register_desktop_entry", lambda: calls.append("desktop"))
+
+    try:
+        gui_app.main(["--version"])
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    captured = capsys.readouterr()
+
+    assert f"matchpatch-gui {gui_app.__version__}" in captured.out
+    assert not calls
+
+
 def test_main_shows_window_maximized(monkeypatch) -> None:
     calls = []
 

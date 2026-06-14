@@ -92,6 +92,23 @@ def test_installer_dependency_group_supports_png_icon_conversion() -> None:
     assert any(dependency.startswith("pillow") for dependency in installer_dependencies)
 
 
+def test_pypi_metadata_declares_runtime_dependencies() -> None:
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomllib.load(pyproject_file)
+
+    project_dependencies = pyproject["project"]["dependencies"]
+    optional_dependencies = pyproject["project"]["optional-dependencies"]
+
+    assert any(dependency.startswith("numpy") for dependency in project_dependencies)
+    assert any(dependency.startswith("pyloudnorm") for dependency in project_dependencies)
+    assert any(dependency.startswith("soundfile") for dependency in project_dependencies)
+    assert any(dependency.startswith("PySide6") for dependency in optional_dependencies["gui"])
+    assert any(dependency.startswith("mido") for dependency in optional_dependencies["hardware"])
+    assert any(
+        dependency.startswith("sounddevice") for dependency in optional_dependencies["hardware"]
+    )
+
+
 def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     gui_spec = (PROJECT_ROOT / "installer" / "pyinstaller" / "matchpatch-gui.spec").read_text(
         encoding="utf-8"

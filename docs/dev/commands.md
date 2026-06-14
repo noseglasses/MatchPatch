@@ -231,6 +231,69 @@ uv run --isolated --no-project --with dist/*.whl python -c "import matchpatch"
 uv run --isolated --no-project --with dist/*.tar.gz python -c "import matchpatch"
 ```
 
+(test-pypi-package)=
+
+## Test The Published PyPI Package
+
+Use fresh virtual environments when checking a published PyPI release. Do not
+reuse the repository WSL environment, `.venv-windows`, or a project-local
+`.venv`; those environments can hide missing package metadata.
+
+MatchPatch supports Python `>=3.12,<3.15`. Replace `0.8.2` with the version you
+just published.
+
+From WSL:
+
+```bash
+python3.12 -m venv /tmp/matchpatch-pypi-test
+source /tmp/matchpatch-pypi-test/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install --no-cache-dir "matchpatch[gui]==0.8.2"
+
+python -m pip show matchpatch
+matchpatch --version
+matchpatch --environment
+matchpatch --devices
+matchpatch-gui --help
+matchpatch-gui --version
+python -c "import matchpatch; import matchpatch.analysis; import matchpatch.normalize; print('import OK')"
+
+deactivate
+```
+
+From native Windows PowerShell:
+
+```powershell
+py -3.12 -m venv $env:TEMP\matchpatch-pypi-test
+& $env:TEMP\matchpatch-pypi-test\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+python -m pip install --no-cache-dir "matchpatch[gui]==0.8.2"
+
+python -m pip show matchpatch
+matchpatch --version
+matchpatch --environment
+matchpatch --devices
+matchpatch-gui --help
+matchpatch-gui --version
+python -c "import matchpatch; import matchpatch.analysis; import matchpatch.normalize; print('import OK')"
+
+deactivate
+```
+
+For hardware dependency metadata checks on native Windows, install the hardware
+extra in the same fresh environment:
+
+```powershell
+python -m pip install --no-cache-dir "matchpatch[gui,hardware]==0.8.2"
+python -c "import mido; import sounddevice; print('hardware imports OK')"
+```
+
+These checks verify that the published wheel declares the dependencies needed
+by the installed command-line entry points. They do not replace installer smoke
+tests or real hardware checks.
+
 ## Packaging
 
 The checked-in Windows packaging pipeline builds a frozen application payload
