@@ -14,6 +14,8 @@ and final setlist balancing.
 - Make sure your computer can see the Helix MIDI output.
 - Have a reference DI WAV ready.
 - Back up your original `.hls` or `.hlx` file.
+- Run preflight check from Advanced > Diagnostics before your first hardware
+  measurement.
 
 See also:
 
@@ -36,6 +38,22 @@ the output-level changes.
 3. Set Backend to `hardware`.
 
 ![Backend selector in Advanced Device](../assets/screenshots/backend-selector.png)
+
+
+## Run Preflight First
+
+Before the first real measurement, open Advanced > Diagnostics and click Run
+preflight check. The check validates the file selection, preset selection,
+reference DI, resolved settings, and hardware setup before MatchPatch starts
+recording.
+
+In hardware mode, the hardware checks validate the selected audio device,
+recording and playback channels, MIDI output, MIDI channel, and timing values
+used by the native Windows worker.
+
+If Preflight reports a failure, fix that item before starting normalization. If
+you need help, use Export diagnostic bundle from the same tab and include the
+bundle in a bug report.
 
 
 (help-hardware-routing)=
@@ -80,7 +98,9 @@ available.
 If the check succeeds, measurement continues.
 
 If the check fails, MatchPatch shows an error. Check USB connection, audio
-device name, MIDI output name, and whether the Helix is powered on.
+device name, MIDI output name, and whether the Helix is powered on. The error
+uses the same structured hardware checks that Preflight and diagnostic bundles
+save for troubleshooting.
 
 
 (help-recorded-output-playback)=

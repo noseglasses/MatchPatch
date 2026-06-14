@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import queue
 import re
@@ -12,7 +13,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,6 +24,12 @@ from matchpatch.devices.base import (
     NormalizationPolicy,
     normalize_regex_pattern,
     validate_snapshot_count,
+)
+from matchpatch.diagnostics import (
+    DiagnosticCheck,
+    HardwarePreflightResult,
+    diagnostic_check_from_dict,
+    summarize_failed_checks,
 )
 from matchpatch.measurement_optimizer import OptimizationProgress
 from matchpatch.progress import ProgressEvent
@@ -534,7 +541,11 @@ def run_windows_optimization(
     )
 
 
-def check_windows_hardware(args: argparse.Namespace | NormalizationRequest) -> None:
+def _windows_hardware_command(
+    args: argparse.Namespace | NormalizationRequest,
+    *,
+    diagnostics_json: bool = False,
+) -> list[object]:
     windows_python = Path(args.windows_python).resolve()
 
     if not windows_python.exists():
@@ -557,26 +568,130 @@ def check_windows_hardware(args: argparse.Namespace | NormalizationRequest) -> N
         "--preset-wait": getattr(args, "preset_wait", None),
         "--snapshot-wait": getattr(args, "snapshot_wait", None),
         "--measurement-wait": getattr(args, "measurement_wait", None),
+        "--pre-roll": getattr(args, "pre_roll", None),
+        "--post-roll": getattr(args, "post_roll", None),
+        "--round-trip-latency": getattr(args, "round_trip_latency", None),
     }
 
     for option, value in optional_values.items():
         if value is not None:
             command.extend([option, value])
 
+    if diagnostics_json:
+        command.append("--diagnostics-json")
+
+    return command
+
+
+def check_windows_hardware(args: argparse.Namespace | NormalizationRequest) -> None:
+    checks = collect_windows_hardware_diagnostics(args)
+    if any(check.status == "fail" for check in checks):
+        raise RuntimeError(summarize_failed_checks(checks))
+
+
+def collect_windows_hardware_diagnostics(
+    args: argparse.Namespace | NormalizationRequest,
+) -> list[DiagnosticCheck]:
     try:
-        subprocess.run(
+        command = _windows_hardware_command(args, diagnostics_json=True)
+    except RuntimeError as exc:
+        return [
+            DiagnosticCheck(
+                "windows_hardware_check",
+                "fail",
+                str(exc),
+                f"windows_python={getattr(args, 'windows_python', '')}",
+            )
+        ]
+
+    try:
+        completed = subprocess.run(
             [str(arg) for arg in command],
-            check=True,
+            check=False,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=args.timeout,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError("Timed out checking native Windows hardware") from exc
-    except subprocess.CalledProcessError as exc:
-        message = (exc.stderr or exc.stdout or "").strip()
-        raise RuntimeError(message or "Native Windows hardware check failed") from exc
+    except subprocess.TimeoutExpired:
+        return [
+            DiagnosticCheck(
+                "windows_hardware_check",
+                "fail",
+                "Native Windows hardware check timed out",
+                f"timeout={args.timeout}",
+            )
+        ]
+
+    try:
+        data = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        if completed.returncode == 0 and not completed.stdout.strip():
+            return [
+                DiagnosticCheck(
+                    "windows_hardware_check",
+                    "pass",
+                    "Native Windows hardware check completed",
+                )
+            ]
+        message = (completed.stderr or completed.stdout or "").strip()
+        return [
+            DiagnosticCheck(
+                "windows_hardware_check",
+                "fail",
+                message or "Native Windows hardware check failed without structured output",
+            )
+        ]
+
+    checks = _diagnostic_checks_from_native_payload(data)
+    if checks:
+        return checks
+
+    if completed.returncode != 0:
+        message = (completed.stderr or completed.stdout or "").strip()
+        return [
+            DiagnosticCheck(
+                "windows_hardware_check",
+                "fail",
+                message or "Native Windows hardware check failed",
+            )
+        ]
+
+    return [
+        DiagnosticCheck(
+            "windows_hardware_check",
+            "warning",
+            "Native Windows hardware check returned no checks",
+        )
+    ]
+
+
+def collect_windows_hardware_preflight(
+    args: argparse.Namespace | NormalizationRequest,
+) -> HardwarePreflightResult:
+    return HardwarePreflightResult.from_diagnostic_checks(
+        args.device,
+        getattr(args, "backend", "hardware"),
+        collect_windows_hardware_diagnostics(args),
+    )
+
+
+def _diagnostic_checks_from_native_payload(data: object) -> list[DiagnosticCheck]:
+    if isinstance(data, list):
+        return [
+            diagnostic_check_from_dict(cast("Mapping[str, object]", item))
+            for item in data
+            if isinstance(item, Mapping)
+        ]
+    if isinstance(data, Mapping):
+        checks = data.get("checks")
+        if isinstance(checks, list):
+            return [
+                diagnostic_check_from_dict(cast("Mapping[str, object]", item))
+                for item in checks
+                if isinstance(item, Mapping)
+            ]
+    return []
 
 
 def _run_progress_command(

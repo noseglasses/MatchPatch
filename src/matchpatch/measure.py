@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 import sys
 import time
@@ -31,6 +32,13 @@ from matchpatch.devices.base import (
     SteeringOptions,
     validate_snapshot_count,
 )
+from matchpatch.diagnostics import (
+    DiagnosticCheck,
+    HardwarePreflightResult,
+    diagnostic_check_to_dict,
+    preflight_check_to_diagnostic,
+    summarize_failed_checks,
+)
 from matchpatch.measurement_optimizer import (
     TIMING_PARAMETERS,
     OptimizationProgress,
@@ -47,6 +55,10 @@ if TYPE_CHECKING:
 SnapshotPlan = dict[str, tuple[int, ...]]
 SnapshotResult = tuple[float, float] | None
 SNAPSHOT_SKIP_SENTINEL = "SKIP"
+
+
+class HardwareDiagnosticError(RuntimeError, ValueError):
+    """Hardware preflight error that preserves legacy ValueError callers."""
 
 
 class MeasurementBackend(Protocol):
@@ -865,29 +877,174 @@ def _timing_values(args: argparse.Namespace) -> dict[str, float]:
 
 def check_hardware(args: argparse.Namespace) -> None:
     """Validate that configured processor audio and steering endpoints are present."""
-    profile = get_device_profile(args.device)
-
-    from matchpatch.audio import validate_audio_device_available
-
-    validate_audio_device_available(resolve_audio_config(args, profile))
-    steering_options = resolve_steering_options(args, profile)
-    _validate_steering_output_available(steering_options)
+    checks = collect_hardware_diagnostics(args)
+    if any(check.status == "fail" for check in checks):
+        raise HardwareDiagnosticError(summarize_failed_checks(checks))
 
 
-def _validate_steering_output_available(steering_options: SteeringOptions) -> None:
-    from matchpatch.midi import midi_output_names
+def collect_hardware_diagnostics(args: argparse.Namespace) -> list[DiagnosticCheck]:
+    """Collect structured hardware diagnostics without changing endpoints."""
+    checks: list[DiagnosticCheck] = []
+    backend = getattr(args, "backend", "hardware")
+    profile: DeviceProfile | None = None
 
-    names = midi_output_names()
-    query = steering_options.output
-    matches = (
-        names if query is None else [name for name in names if query.casefold() in name.casefold()]
+    try:
+        profile = get_device_profile(args.device)
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            DiagnosticCheck(
+                "device_profile",
+                "fail",
+                str(exc),
+                f"device={args.device}; backend={backend}",
+            )
+        )
+        return checks
+
+    checks.append(
+        DiagnosticCheck(
+            "device_profile",
+            "pass",
+            f"Loaded {profile.display_name}",
+            f"device={profile.name}; display_name={profile.display_name}; backend={backend}",
+        )
     )
 
-    if len(matches) != 1:
+    try:
+        from matchpatch.audio import validate_audio_device_available
+
+        audio_config = resolve_audio_config(args, profile)
+        checked_audio_config = validate_audio_device_available(audio_config)
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            DiagnosticCheck(
+                "audio_device",
+                "fail",
+                str(exc),
+                _diagnostic_detail(
+                    query=getattr(args, "audio_device", None),
+                    sample_rate=getattr(args, "sample_rate", None),
+                    input_mapping=getattr(args, "input_mapping", None),
+                    output_mapping=getattr(args, "output_mapping", None),
+                    backend=backend,
+                ),
+            )
+        )
+    else:
+        checks.append(
+            DiagnosticCheck(
+                "audio_device",
+                "pass",
+                "Audio device is available",
+                _diagnostic_detail(
+                    query=getattr(args, "audio_device", None),
+                    device=checked_audio_config.device,
+                    sample_rate=checked_audio_config.sample_rate,
+                    input_mapping=checked_audio_config.input_mapping,
+                    output_mapping=checked_audio_config.output_mapping,
+                    blocksize=checked_audio_config.blocksize,
+                    backend=backend,
+                ),
+            )
+        )
+
+    try:
+        steering_options = resolve_steering_options(args, profile)
+        midi_outputs = _midi_output_names()
+        matched_outputs = _matching_steering_outputs(midi_outputs, steering_options.output)
+        matched_output = _validate_steering_output_available(
+            steering_options,
+            matched_outputs=matched_outputs,
+        )
+    except Exception as exc:  # noqa: BLE001
+        midi_outputs = locals().get("midi_outputs")
+        matched_outputs = locals().get("matched_outputs")
+        checks.append(
+            DiagnosticCheck(
+                "midi_output",
+                "fail",
+                str(exc),
+                _diagnostic_detail(
+                    query=getattr(args, "steering_output", None),
+                    channel=getattr(args, "steering_channel", None),
+                    output_count=len(midi_outputs) if isinstance(midi_outputs, list) else None,
+                    match_count=(
+                        len(matched_outputs) if isinstance(matched_outputs, list) else None
+                    ),
+                    matched_outputs=(
+                        matched_outputs if isinstance(matched_outputs, list) else None
+                    ),
+                ),
+            )
+        )
+    else:
+        checks.append(
+            DiagnosticCheck(
+                "midi_output",
+                "pass",
+                "MIDI steering output is available",
+                _diagnostic_detail(
+                    query=steering_options.output,
+                    output=matched_output,
+                    channel=steering_options.channel,
+                    output_count=len(midi_outputs),
+                    match_count=len(matched_outputs),
+                    matched_outputs=matched_outputs,
+                ),
+            )
+        )
+
+    return checks
+
+
+def collect_hardware_preflight(args: argparse.Namespace) -> HardwarePreflightResult:
+    """Compatibility wrapper around structured hardware diagnostics."""
+    return HardwarePreflightResult.from_diagnostic_checks(
+        args.device,
+        getattr(args, "backend", "hardware"),
+        collect_hardware_diagnostics(args),
+    )
+
+
+def _diagnostic_detail(**values: object) -> str:
+    return "; ".join(
+        f"{key}={_diagnostic_detail_value(value)}"
+        for key, value in values.items()
+        if value is not None
+    )
+
+
+def _diagnostic_detail_value(value: object) -> str:
+    if isinstance(value, tuple):
+        return json.dumps(list(value))
+    if isinstance(value, list):
+        return json.dumps(value)
+    return str(value)
+
+
+def _midi_output_names() -> list[str]:
+    from matchpatch.midi import midi_output_names
+
+    return midi_output_names()
+
+
+def _matching_steering_outputs(names: list[str], query: str | None) -> list[str]:
+    if query is None:
+        return names
+    return [name for name in names if query.casefold() in name.casefold()]
+
+
+def _validate_steering_output_available(
+    steering_options: SteeringOptions,
+    *,
+    matched_outputs: list[str],
+) -> str:
+    if len(matched_outputs) != 1:
         raise ValueError(
-            f"MIDI output query {query!r} matched {len(matches)} ports; "
+            f"MIDI output query {steering_options.output!r} matched {len(matched_outputs)} ports; "
             "configure a unique steering output"
         )
+    return matched_outputs[0]
 
 
 def list_devices() -> None:
@@ -935,6 +1092,9 @@ def add_hardware_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--preset-wait", type=float)
     parser.add_argument("--snapshot-wait", type=float)
     parser.add_argument("--measurement-wait", type=float)
+    parser.add_argument("--pre-roll", type=float)
+    parser.add_argument("--post-roll", type=float)
+    parser.add_argument("--round-trip-latency", type=float)
 
 
 def apply_config(args: argparse.Namespace) -> argparse.Namespace:
@@ -1081,6 +1241,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     check_parser.add_argument("--device", required=True)
     check_parser.add_argument("--config", help="TOML configuration file")
+    check_parser.add_argument(
+        "--diagnostics-json",
+        action="store_true",
+        help="Print structured hardware preflight diagnostics as JSON",
+    )
     add_hardware_arguments(check_parser)
 
     measure_parser = subparsers.add_parser(
@@ -1108,9 +1273,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     measure_parser.add_argument("--analysis-window", type=float)
     measure_parser.add_argument("--analysis-interval", type=float)
     measure_parser.add_argument("--minimum-valid-lufs", type=float)
-    measure_parser.add_argument("--pre-roll", type=float)
-    measure_parser.add_argument("--post-roll", type=float)
-    measure_parser.add_argument("--round-trip-latency", type=float)
     measure_parser.add_argument("--play-recorded-output", action="store_true")
     measure_parser.add_argument("--playback-toggle-file")
     measure_parser.add_argument("--recordings-dir")
@@ -1148,9 +1310,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     optimize_parser.add_argument("--analysis-window", type=float)
     optimize_parser.add_argument("--analysis-interval", type=float)
     optimize_parser.add_argument("--minimum-valid-lufs", type=float)
-    optimize_parser.add_argument("--pre-roll", type=float)
-    optimize_parser.add_argument("--post-roll", type=float)
-    optimize_parser.add_argument("--round-trip-latency", type=float)
     optimize_parser.add_argument("--play-recorded-output", action="store_true")
     optimize_parser.add_argument("--playback-toggle-file")
     optimize_parser.add_argument("--progress-jsonl", action="store_true")
@@ -1166,6 +1325,16 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "devices":
         list_devices()
     elif args.command == "check-hardware":
+        if getattr(args, "diagnostics_json", False):
+            preflight = collect_hardware_preflight(args)
+            checks = [preflight_check_to_diagnostic(check) for check in preflight.checks]
+            print(
+                json.dumps([diagnostic_check_to_dict(check) for check in checks], sort_keys=True),
+                flush=True,
+            )
+            if any(check.status == "fail" for check in checks):
+                raise SystemExit(1)
+            return
         try:
             check_hardware(args)
         except Exception as exc:  # noqa: BLE001

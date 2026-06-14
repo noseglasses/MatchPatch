@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import subprocess
 import sys
 import threading
@@ -663,6 +664,7 @@ def test_check_windows_hardware_uses_installed_app_worker_command(tmp_path, monk
         "--device",
     ]
     assert kwargs["timeout"] == 5
+    assert command[-1] == "--diagnostics-json"
 
 
 def test_frozen_windows_default_worker_is_current_executable(monkeypatch, tmp_path) -> None:
@@ -744,6 +746,159 @@ def test_check_windows_hardware_builds_worker_command(tmp_path, monkeypatch) -> 
     assert kwargs["timeout"] == 5
     assert kwargs["stdout"] == subprocess.PIPE
     assert kwargs["stderr"] == subprocess.PIPE
+    assert command[-1] == "--diagnostics-json"
+
+
+def test_collect_windows_hardware_preflight_parses_failed_json(tmp_path, monkeypatch) -> None:
+    windows_python = tmp_path / "python.exe"
+    windows_python.touch()
+    args = argparse.Namespace(
+        windows_python=str(windows_python),
+        device="helix",
+        audio_device="Helix",
+        steering_output="Missing",
+        steering_channel=None,
+        sample_rate=48000,
+        input_mapping="1,2",
+        output_mapping="3,4",
+        blocksize=0,
+        preset_wait=None,
+        snapshot_wait=None,
+        measurement_wait=None,
+        timeout=5,
+    )
+    calls = []
+    payload = {
+        "device": "helix",
+        "backend": "hardware",
+        "ok": False,
+        "checks": [
+            {
+                "name": "audio_device",
+                "status": "ok",
+                "message": "Audio device is available",
+                "details": {"device": 2},
+            },
+            {
+                "name": "midi_output",
+                "status": "failed",
+                "message": "MIDI output query 'Missing' matched 0 ports",
+                "details": {"query": "Missing"},
+            },
+        ],
+    }
+    monkeypatch.setattr(
+        normalize.subprocess,
+        "run",
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 1, stdout=json.dumps(payload), stderr="")
+        ),
+    )
+
+    result = normalize.collect_windows_hardware_preflight(args)
+
+    command, kwargs = calls[0]
+    assert command[-1] == "--diagnostics-json"
+    assert kwargs["check"] is False
+    assert result.ok is False
+    assert result.failure_message == "MIDI output query 'Missing' matched 0 ports"
+    assert result.checks[0].details["device"] == 2
+
+
+def test_collect_windows_hardware_diagnostics_parses_json_array(tmp_path, monkeypatch) -> None:
+    windows_python = tmp_path / "python.exe"
+    windows_python.touch()
+    args = argparse.Namespace(
+        windows_python=str(windows_python),
+        device="helix",
+        audio_device=None,
+        steering_output=None,
+        steering_channel=None,
+        sample_rate=None,
+        input_mapping=None,
+        output_mapping=None,
+        blocksize=None,
+        preset_wait=None,
+        snapshot_wait=None,
+        measurement_wait=None,
+        timeout=5,
+    )
+    payload = [
+        {
+            "name": "device_profile",
+            "status": "pass",
+            "summary": "Loaded Helix",
+            "detail": "device=helix",
+        },
+        {
+            "name": "midi_output",
+            "status": "fail",
+            "summary": "MIDI output query matched 0 ports",
+            "detail": "query=Missing; match_count=0",
+        },
+    ]
+    monkeypatch.setattr(
+        normalize.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1, stdout=json.dumps(payload), stderr=""
+        ),
+    )
+
+    checks = normalize.collect_windows_hardware_diagnostics(args)
+
+    assert [check.status for check in checks] == ["pass", "fail"]
+    assert checks[1].summary == "MIDI output query matched 0 ports"
+
+
+def test_collect_windows_hardware_diagnostics_returns_failed_check_for_malformed_output(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    windows_python = tmp_path / "python.exe"
+    windows_python.touch()
+    args = argparse.Namespace(
+        windows_python=str(windows_python),
+        device="helix",
+        audio_device=None,
+        steering_output=None,
+        steering_channel=None,
+        sample_rate=None,
+        input_mapping=None,
+        output_mapping=None,
+        blocksize=None,
+        preset_wait=None,
+        snapshot_wait=None,
+        measurement_wait=None,
+        timeout=5,
+    )
+    monkeypatch.setattr(
+        normalize.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1, stdout="not json", stderr="native failed"
+        ),
+    )
+
+    checks = normalize.collect_windows_hardware_diagnostics(args)
+
+    assert checks == [normalize.DiagnosticCheck("windows_hardware_check", "fail", "native failed")]
+
+
+def test_collect_windows_hardware_diagnostics_returns_failed_check_for_missing_python(
+    tmp_path,
+) -> None:
+    args = argparse.Namespace(
+        windows_python=str(tmp_path / "missing.exe"),
+        device="helix",
+    )
+
+    checks = normalize.collect_windows_hardware_diagnostics(args)
+
+    assert len(checks) == 1
+    assert checks[0].status == "fail"
+    assert "sync-windows" in checks[0].summary
 
 
 def test_run_windows_analysis_translates_timeout(tmp_path, monkeypatch) -> None:

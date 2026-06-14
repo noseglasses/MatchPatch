@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import csv
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,8 @@ from matchpatch.measure import (
     LoopbackBackend,
     SimulatedHardwareBackend,
     check_hardware,
+    collect_hardware_diagnostics,
+    collect_hardware_preflight,
     csv_fields,
     list_devices,
     load_reference_audio,
@@ -922,6 +925,34 @@ def test_worker_parse_args_rejects_snapshot_count_above_device_limit(monkeypatch
         parse_args()
 
 
+def test_check_hardware_parse_args_accepts_diagnostic_timing_flags(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "measure",
+            "check-hardware",
+            "--device",
+            "helix",
+            "--diagnostics-json",
+            "--pre-roll",
+            "0.3",
+            "--post-roll",
+            "0.5",
+            "--round-trip-latency",
+            "0.001",
+        ],
+    )
+
+    args = parse_args()
+
+    assert args.command == "check-hardware"
+    assert args.diagnostics_json is True
+    assert args.pre_roll == 0.3
+    assert args.post_roll == 0.5
+    assert args.round_trip_latency == 0.001
+
+
 def test_worker_main_dispatches_devices_and_legacy_helix_backend(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr("matchpatch.measure.list_devices", lambda: calls.append("devices"))
@@ -970,3 +1001,178 @@ def test_check_hardware_main_reports_error_without_traceback(monkeypatch, capsys
     captured = capsys.readouterr()
     assert captured.err == "No audio device matched 'Helix'\n"
     assert "Traceback" not in captured.err
+
+
+def test_collect_hardware_preflight_returns_structured_checks(monkeypatch) -> None:
+    def fake_validate_audio_device_available(config):
+        return config
+
+    monkeypatch.setitem(
+        sys.modules,
+        "matchpatch.audio",
+        SimpleNamespace(
+            AudioConfig=SimpleNamespace,
+            validate_audio_device_available=fake_validate_audio_device_available,
+        ),
+    )
+    monkeypatch.setattr("matchpatch.midi.midi_output_names", lambda: ["Helix MIDI"])
+
+    result = collect_hardware_preflight(
+        SimpleNamespace(
+            device="helix",
+            backend="hardware",
+            audio_device="Helix",
+            steering_output="Helix",
+            steering_channel=2,
+            sample_rate=48000,
+            input_mapping=(1, 2),
+            output_mapping=(3, 4),
+            blocksize=128,
+            preset_wait=None,
+            snapshot_wait=None,
+            measurement_wait=None,
+            pre_roll=0.2,
+            post_roll=0.1,
+            round_trip_latency=0.02,
+        )
+    )
+
+    assert result.ok
+    assert [check.name for check in result.checks] == [
+        "device_profile",
+        "audio_device",
+        "midi_output",
+    ]
+    assert result.checks[1].details["input_mapping"] == [1, 2]
+    assert result.checks[2].details["output"] == "Helix MIDI"
+    assert result.checks[2].details["match_count"] == 1
+    assert result.checks[2].details["matched_outputs"] == ["Helix MIDI"]
+
+    checks = collect_hardware_diagnostics(
+        SimpleNamespace(
+            device="helix",
+            backend="hardware",
+            audio_device="Helix",
+            steering_output="Helix",
+            steering_channel=2,
+            sample_rate=48000,
+            input_mapping=(1, 2),
+            output_mapping=(3, 4),
+            blocksize=128,
+            preset_wait=None,
+            snapshot_wait=None,
+            measurement_wait=None,
+            pre_roll=0.2,
+            post_roll=0.1,
+            round_trip_latency=0.02,
+        )
+    )
+    assert [check.status for check in checks] == ["pass", "pass", "pass"]
+    assert "input_mapping=[1, 2]" in checks[1].detail
+    assert 'matched_outputs=["Helix MIDI"]' in checks[2].detail
+
+
+def test_collect_hardware_preflight_preserves_first_failure_message(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "matchpatch.audio",
+        SimpleNamespace(
+            AudioConfig=SimpleNamespace,
+            validate_audio_device_available=lambda config: (_ for _ in ()).throw(
+                ValueError("No audio device matched 'Helix'")
+            ),
+        ),
+    )
+    monkeypatch.setattr("matchpatch.midi.midi_output_names", lambda: ["Other MIDI"])
+
+    result = collect_hardware_preflight(
+        SimpleNamespace(
+            device="helix",
+            backend="hardware",
+            audio_device="Helix",
+            steering_output="Helix",
+            steering_channel=None,
+            sample_rate=48000,
+            input_mapping=(1, 2),
+            output_mapping=(3, 4),
+            blocksize=0,
+            preset_wait=None,
+            snapshot_wait=None,
+            measurement_wait=None,
+            pre_roll=0.2,
+            post_roll=0.1,
+            round_trip_latency=0.02,
+        )
+    )
+
+    assert not result.ok
+    assert result.failure_message == "No audio device matched 'Helix'"
+    assert [check.status for check in result.checks] == ["ok", "failed", "failed"]
+    assert result.checks[2].details["match_count"] == 0
+    assert result.checks[2].details["matched_outputs"] == []
+
+    with pytest.raises(RuntimeError, match="No audio device matched 'Helix'"):
+        check_hardware(
+            SimpleNamespace(
+                device="helix",
+                backend="hardware",
+                audio_device="Helix",
+                steering_output="Helix",
+                steering_channel=None,
+                sample_rate=48000,
+                input_mapping=(1, 2),
+                output_mapping=(3, 4),
+                blocksize=0,
+                preset_wait=None,
+                snapshot_wait=None,
+                measurement_wait=None,
+                pre_roll=0.2,
+                post_roll=0.1,
+                round_trip_latency=0.02,
+            )
+        )
+
+
+def test_check_hardware_diagnostics_json_exits_failed_with_json(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "matchpatch.measure.collect_hardware_preflight",
+        lambda args: collect_hardware_preflight(
+            SimpleNamespace(
+                device="helix",
+                backend="hardware",
+                audio_device="Helix",
+                steering_output="Missing",
+                steering_channel=None,
+                sample_rate=48000,
+                input_mapping=(1, 2),
+                output_mapping=(3, 4),
+                blocksize=0,
+                preset_wait=None,
+                snapshot_wait=None,
+                measurement_wait=None,
+                pre_roll=0.2,
+                post_roll=0.1,
+                round_trip_latency=0.02,
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "matchpatch.audio",
+        SimpleNamespace(
+            AudioConfig=SimpleNamespace, validate_audio_device_available=lambda config: config
+        ),
+    )
+    monkeypatch.setattr("matchpatch.midi.midi_output_names", lambda: [])
+    monkeypatch.setattr(
+        "matchpatch.measure.parse_args",
+        lambda: SimpleNamespace(command="check-hardware", diagnostics_json=True),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload[-1]["name"] == "midi_output"
+    assert payload[-1]["status"] == "fail"

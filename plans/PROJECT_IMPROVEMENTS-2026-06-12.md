@@ -186,6 +186,22 @@ GUI affordances:
 - "Copy diagnostic summary";
 - "Open troubleshooting page for this error".
 
+Implementation status:
+
+- Implemented: GUI Diagnostics tab with "Run preflight check",
+  "Copy diagnostic summary", "Export diagnostic bundle", log view, and privacy
+  notice.
+- Implemented: diagnostic bundle export with summary text, JSON, effective
+  config, GUI logs, progress events, and safe retained-CSV summaries.
+- Implemented: structured hardware diagnostics for native `check-hardware` and
+  WSL/GUI collection, including improved automatic hardware-check reporting.
+- Implemented: preflight checks for request/config summary, device profile,
+  input/output validation, reference DI, custom adjustments, backend, hardware
+  diagnostics, and snapshot selection.
+- Implemented: focused worker cancellation/failure tests and docs updates.
+- Remaining: a standalone `matchpatch diagnose` CLI command and direct
+  audio/MIDI device-list capture in exported bundles are still future work.
+
 Expected benefits:
 
 - faster support;
@@ -376,13 +392,19 @@ Potential high-impact user-facing features:
 
 Goal: make failures easier to understand before changing core architecture.
 
+Status: substantially implemented. The GUI now has a Diagnostics tab with
+preflight, diagnostic summary copy, diagnostic bundle export, recent logs, and a
+privacy notice. Structured hardware diagnostics feed preflight and automatic
+hardware-check failure reporting. Remaining work is mostly CLI-level diagnosis
+and future polish.
+
 Work:
 
-- add diagnostic bundle export;
-- add a GUI preflight/doctor workflow;
-- improve hardware check reporting;
-- expose effective config in a readable way;
-- add focused tests for worker and cancellation failures.
+- done: add diagnostic bundle export;
+- done: add a GUI preflight/doctor workflow;
+- done: improve hardware check reporting;
+- done: expose effective config in a readable way;
+- done: add focused tests for worker and cancellation failures.
 
 Why first:
 
@@ -450,14 +472,16 @@ Good first implementation tickets:
 
 1. Add `matchpatch diagnose` CLI command that prints version, platform, Python,
    config paths, device profiles, and optional audio/MIDI discovery.
-2. Add GUI "Copy Diagnostics" action using the same diagnostic data source.
-3. Add tests for `NormalizationWorker.cancel()` while waiting for import
+2. Done: add GUI "Copy diagnostic summary" action using the same diagnostic data
+   source.
+3. Done: add tests for `NormalizationWorker.cancel()` while waiting for import
    confirmation.
 4. Split result log parsing from `MainWindow` into a small pure module.
 5. Split preset table selection state from `MainWindow` into a pure dataclass
    helper.
 6. Add structured confidence flags to measurement/result rows.
-7. Add docs page for diagnostic bundles and preflight checks.
+7. Done: document diagnostic bundles and preflight checks in the troubleshooting,
+   quick-start, and hardware-measurement docs.
 8. Add a fake device profile used by tests to harden non-Helix paths.
 9. Convert one small legacy Helix script behavior into an importable package
    function as a migration pilot.
