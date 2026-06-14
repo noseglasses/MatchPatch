@@ -16,6 +16,8 @@ Helix results, use hardware mode.
 - Decide which backend to use:
   - loopback for a safe no-hardware test;
   - hardware for real Helix measurement.
+- If this is your first hardware run, use Run preflight check in Advanced >
+  Diagnostics before starting normalization.
 - Optional: save a config file if you want the same defaults every time. On
   installed Windows builds, the automatic config path is
   `%APPDATA%\MatchPatch\config.toml`.
@@ -58,13 +60,14 @@ Use hardware mode when you are ready to measure the Helix.
 5. Set Backend to `hardware`.
 6. Check audio routing and MIDI steering.
 7. Check the Reference DI in Advanced > Files.
-8. Select the presets you want to measure.
-9. Click Start normalization.
-10. Follow any import prompts.
-11. Review the result table.
-12. Click Save As and save an adjusted file.
-13. Import the adjusted file into the Helix.
-14. Listen through the presets and snapshots.
+8. Open Advanced > Diagnostics and click Run preflight check.
+9. Select the presets you want to measure.
+10. Click Start normalization.
+11. Follow any import prompts.
+12. Review the result table.
+13. Click Save As and save an adjusted file.
+14. Import the adjusted file into the Helix.
+15. Listen through the presets and snapshots.
 
 
 For more detail, see [Hardware Measurement](workflows/hardware-measurement.md)

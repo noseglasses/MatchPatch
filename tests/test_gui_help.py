@@ -240,7 +240,7 @@ def test_main_window_assigns_stable_help_ids(app) -> None:
         "LUFS": HelpId.LUFS_LOUDNESS,
         "Misc": HelpId.SNAPSHOT_COUNT,
         "Meta Data": HelpId.METADATA,
-        "Log": HelpId.TROUBLESHOOTING,
+        "Diagnostics": HelpId.TROUBLESHOOTING,
     }
     window.close()
 

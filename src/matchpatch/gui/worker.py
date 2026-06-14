@@ -6,16 +6,41 @@ import threading
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from matchpatch.diagnostics import summarize_failed_checks
 from matchpatch.normalize import (
-    check_windows_hardware,
+    collect_windows_hardware_diagnostics,
     run_windows_analysis,
     run_windows_optimization,
 )
+from matchpatch.preflight import run_preflight_checks
 from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_presets
 
 
 class HardwareCheckWorker(QThread):
     completed = Signal()
+    failed = Signal(str)
+    diagnostics_completed = Signal(object)
+
+    def __init__(self, request: NormalizationRequest, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.request = request
+
+    def run(self) -> None:
+        try:
+            checks = collect_windows_hardware_diagnostics(self.request)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+            return
+
+        self.diagnostics_completed.emit(checks)
+        if any(check.status == "fail" for check in checks):
+            self.failed.emit(summarize_failed_checks(checks))
+        else:
+            self.completed.emit()
+
+
+class PreflightWorker(QThread):
+    completed = Signal(object)
     failed = Signal(str)
 
     def __init__(self, request: NormalizationRequest, parent: QObject | None = None) -> None:
@@ -24,11 +49,11 @@ class HardwareCheckWorker(QThread):
 
     def run(self) -> None:
         try:
-            check_windows_hardware(self.request)
+            checks = run_preflight_checks(self.request)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
         else:
-            self.completed.emit()
+            self.completed.emit(checks)
 
 
 class NormalizationWorker(QThread):

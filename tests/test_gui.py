@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
 import tomllib
 import wave
+import zipfile
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -121,6 +123,37 @@ def _mock_single_hlx_handler(
             return Handler()
 
     monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+
+
+class _SignalStub:
+    def __init__(self):
+        self.callbacks = []
+
+    def connect(self, callback):
+        self.callbacks.append(callback)
+
+    def emit(self, *args):
+        for callback in list(self.callbacks):
+            callback(*args)
+
+
+class _FakePreflightWorker:
+    instances = []
+
+    def __init__(self, request, parent=None):
+        self.request = request
+        self.parent = parent
+        self.completed = _SignalStub()
+        self.failed = _SignalStub()
+        self.finished = _SignalStub()
+        self.started = False
+        _FakePreflightWorker.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+    def deleteLater(self):
+        return None
 
 
 class _FakeSaveChangesMessageBox:
@@ -250,7 +283,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
         "LUFS",
         "Misc",
         "Meta Data",
-        "Log",
+        "Diagnostics",
     ]
     assert window.advanced_tabs.widget(0).isAncestorOf(window.backend)
     assert not window.advanced_tabs.widget(1).isAncestorOf(window.backend)
@@ -259,6 +292,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert "Snapshot wait (s)" not in device_labels
     assert "Measurement wait (s)" not in device_labels
     assert window.advanced_tabs.widget(1).isAncestorOf(window.config_path)
+    assert not window.advanced_tabs.widget(1).isAncestorOf(window.diagnostic_bundle_button)
     assert window.advanced_tabs.widget(1).isAncestorOf(window.custom_adjustments_path)
     assert window.advanced_tabs.widget(1).isAncestorOf(window.reference_di)
     assert window.advanced_tabs.widget(1).isAncestorOf(window.keep_temp)
@@ -299,6 +333,22 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert "Ignored" in lufs_labels
     assert "Ignore snapshot" not in lufs_labels
     assert window.advanced_tabs.widget(4).isAncestorOf(window.snapshot_count_input)
+    assert window.advanced_tabs.widget(6).isAncestorOf(window.preflight_button)
+    assert window.advanced_tabs.widget(6).isAncestorOf(window.diagnostic_summary_button)
+    assert window.advanced_tabs.widget(6).isAncestorOf(window.diagnostic_bundle_button)
+    assert window.advanced_tabs.widget(6).isAncestorOf(window.log)
+    assert window.advanced_tabs.widget(6).isAncestorOf(window.log_level)
+    diagnostic_groups = {
+        group.title() for group in window.advanced_tabs.widget(6).findChildren(QGroupBox)
+    }
+    assert "Privacy notice" in diagnostic_groups
+    assert "Log" in diagnostic_groups
+    assert "saved locally" in window.diagnostics_privacy_notice.text()
+    assert "Review the ZIP before sharing" in window.diagnostics_privacy_notice.text()
+    privacy_style = window.diagnostics_privacy_panel.styleSheet()
+    assert "#eff6ff" in privacy_style
+    assert "#3b82f6" in privacy_style
+    assert "#1d4ed8" in privacy_style
     assert not isinstance(window.presets, QGroupBox)
     assert window.measurement_parameter_preset.currentText() == "Default"
     assert window.pre_roll.text() == "0.3"
@@ -1193,6 +1243,7 @@ def test_log_section_and_busy_indicator(monkeypatch, app) -> None:
     monkeypatch.setattr(window, "_schedule_resize_for_content", lambda: resize_calls.append(True))
 
     assert window.log_section is window.log
+    assert window.advanced_tabs.widget(6).isAncestorOf(window.log_section)
     window._start_busy_phase()
     assert window.progress_group.isHidden()
     assert window.busy_animation.state() == QAbstractAnimation.State.Running
@@ -1775,6 +1826,680 @@ def test_main_window_exports_current_config_by_default(tmp_path, monkeypatch, ap
     assert saved["devices"]["helix"]["steering"]["preset_wait_seconds"] == 1.2
     assert saved["devices"]["helix"]["audio"]["device"] == "Modified Helix"
     assert "Saved current configuration" in messages[0][2]
+
+    window.close()
+
+
+def test_diagnostic_bundle_action_is_available_in_diagnostics_tab(app) -> None:
+    window = MainWindow()
+
+    assert window.preflight_button.text() == "Run preflight check"
+    assert window.diagnostic_summary_button.text() == "Copy diagnostic summary"
+    assert window.diagnostic_bundle_button.text() == "Export diagnostic bundle"
+    diagnostics_tab = window.advanced_tabs.widget(6)
+    assert window.advanced_tabs.tabText(6) == "Diagnostics"
+    assert diagnostics_tab.isAncestorOf(window.preflight_button)
+    assert diagnostics_tab.isAncestorOf(window.diagnostic_summary_button)
+    assert diagnostics_tab.isAncestorOf(window.diagnostic_bundle_button)
+    assert diagnostics_tab.isAncestorOf(window.log)
+
+    window.close()
+
+
+def test_current_diagnostic_request_reuses_normalization_config_path(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    config_path = tmp_path / "matchpatch.toml"
+    window.input_path.setText(str(tmp_path / "input.hls"))
+    window.config_path.setText(str(config_path))
+    captured = {}
+    request = _request(input_path=tmp_path / "input.hls")
+
+    def parse_args(argv):
+        captured["argv"] = argv
+        return SimpleNamespace(parsed=True)
+
+    def apply_config(args):
+        captured["parsed"] = args
+        return SimpleNamespace(effective=True)
+
+    def request_from_args(args):
+        captured["effective"] = args
+        return request
+
+    monkeypatch.setattr(main_window, "parse_args", parse_args)
+    monkeypatch.setattr(main_window, "apply_config", apply_config)
+    monkeypatch.setattr(main_window, "request_from_args", request_from_args)
+
+    assert window._current_diagnostic_request() is request
+    assert captured["argv"] == window._build_argv()
+    assert ["--config", str(config_path)] == captured["argv"][
+        captured["argv"].index("--config") : captured["argv"].index("--config") + 2
+    ]
+    assert captured["parsed"].parsed
+    assert captured["effective"].effective
+
+    window.close()
+
+
+def test_copy_diagnostic_summary_uses_effective_config_and_clipboard(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    config_path = tmp_path / "matchpatch.toml"
+    request = _request(
+        input_path=tmp_path / "input.hls",
+        reference_di=tmp_path / "reference.wav",
+        target_lufs=-17.25,
+        backend="loopback",
+    )
+    window.config_path.setText(str(config_path))
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    app.clipboard().clear()
+
+    window.copy_diagnostic_summary()
+
+    summary = app.clipboard().text()
+    assert f"Config: {config_path}" in summary
+    assert f"Input: {request.input_path}" in summary
+    assert f"Reference DI: {request.reference_di}" in summary
+    assert "Backend: loopback" in summary
+    assert "Target LUFS: -17.25" in summary
+    assert any("Diagnostic summary copied" in entry[2] for entry in window.log_entries)
+
+    window.close()
+
+
+def test_copy_diagnostic_summary_reports_invalid_request(monkeypatch, app) -> None:
+    window = MainWindow()
+    errors = []
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(
+        main_window,
+        "request_from_args",
+        lambda args: (_ for _ in ()).throw(ValueError("bad config")),
+    )
+    monkeypatch.setattr(window, "show_error", lambda message: errors.append(message))
+
+    window.copy_diagnostic_summary()
+
+    assert errors == ["bad config"]
+    assert not any("Diagnostic summary copied" in entry[2] for entry in window.log_entries)
+
+    window.close()
+
+
+def test_diagnostic_actions_disable_while_workflow_is_active(app) -> None:
+    window = MainWindow()
+
+    window.worker = object()
+    window._refresh_file_actions()
+
+    assert not window.preflight_button.isEnabled()
+    assert not window.diagnostic_summary_button.isEnabled()
+    assert not window.diagnostic_bundle_button.isEnabled()
+
+    window.worker = None
+    window._refresh_file_actions()
+
+    assert window.preflight_button.isEnabled()
+    assert window.diagnostic_summary_button.isEnabled()
+    assert window.diagnostic_bundle_button.isEnabled()
+
+    window.close()
+
+
+def test_preflight_action_starts_worker_without_starting_normalization(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    request = _request(input_path=tmp_path / "input.hls")
+    _FakePreflightWorker.instances = []
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(main_window, "PreflightWorker", _FakePreflightWorker)
+
+    window.run_preflight_check()
+
+    assert len(_FakePreflightWorker.instances) == 1
+    assert _FakePreflightWorker.instances[0].request is request
+    assert _FakePreflightWorker.instances[0].started
+    assert window.preflight_worker is _FakePreflightWorker.instances[0]
+    assert window.worker is None
+
+    window.preflight_worker = None
+    window.close()
+
+
+def test_preflight_request_includes_measurable_snapshot_plan(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(input_path=tmp_path / "input.hls", preset_set="02B,02C")
+    _FakePreflightWorker.instances = []
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(main_window, "PreflightWorker", _FakePreflightWorker)
+    window.snapshot_count_input.setValue(3)
+    for row, preset_id in enumerate(("02B", "02C")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked)
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+
+    window._set_ignored_snapshot_highlight(0, 1, True)
+    window._set_ignored_snapshot_highlight(1, 0, True)
+    window._set_ignored_snapshot_highlight(1, 2, True)
+
+    window.run_preflight_check()
+
+    assert len(_FakePreflightWorker.instances) == 1
+    assert _FakePreflightWorker.instances[0].request.snapshot_plan == (
+        ("02B", (1, 3)),
+        ("02C", (2,)),
+    )
+
+    window.preflight_worker = None
+    window.close()
+
+
+def test_preflight_request_overlays_table_selection_when_args_have_no_selection(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    request = _request(input_path=tmp_path / "input.hls")
+    _FakePreflightWorker.instances = []
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(main_window, "PreflightWorker", _FakePreflightWorker)
+    window.snapshot_count_input.setValue(3)
+    for row, preset_id in enumerate(("02A", "02B", "02C")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(
+            Qt.CheckState.Unchecked if preset_id == "02A" else Qt.CheckState.Checked
+        )
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+
+    window._set_snapshot_ignore_reason(1, 0, main_window.IGNORE_REASON_COMPARISON, True)
+    window._set_snapshot_ignore_reason(1, 2, main_window.IGNORE_REASON_COMPARISON, True)
+    window._set_snapshot_ignore_reason(2, 0, main_window.IGNORE_REASON_COMPARISON, True)
+    window._set_snapshot_ignore_reason(2, 1, main_window.IGNORE_REASON_COMPARISON, True)
+    window._set_snapshot_ignore_reason(2, 2, main_window.IGNORE_REASON_COMPARISON, True)
+
+    window.run_preflight_check()
+
+    assert len(_FakePreflightWorker.instances) == 1
+    assert _FakePreflightWorker.instances[0].request.preset_set == "02B,02C"
+    assert _FakePreflightWorker.instances[0].request.snapshot_plan == (("02B", (2,)),)
+
+    window.preflight_worker = None
+    window.close()
+
+
+def test_preflight_completed_replaces_stale_selection_skips_from_table_state(app) -> None:
+    window = MainWindow()
+    shown = []
+    window.snapshot_count_input.setValue(3)
+    for row, preset_id in enumerate(("02A", "02B", "02C")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(
+            Qt.CheckState.Unchecked if preset_id == "02A" else Qt.CheckState.Checked
+        )
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+    window._set_snapshot_ignore_reason(1, 0, main_window.IGNORE_REASON_COMPARISON, True)
+    window._set_snapshot_ignore_reason(1, 2, main_window.IGNORE_REASON_COMPARISON, True)
+    window._set_snapshot_ignore_reason(2, 0, main_window.IGNORE_REASON_COMPARISON, True)
+    window._set_snapshot_ignore_reason(2, 1, main_window.IGNORE_REASON_COMPARISON, True)
+    window._set_snapshot_ignore_reason(2, 2, main_window.IGNORE_REASON_COMPARISON, True)
+    window._show_preflight_results = lambda checks: shown.append(checks)
+
+    window._preflight_completed(
+        [
+            main_window.DiagnosticCheck("request", "pass", "Request ok"),
+            main_window.DiagnosticCheck(
+                "preset_set",
+                "skip",
+                "No preset selection configured; all presets are eligible",
+            ),
+            main_window.DiagnosticCheck(
+                "snapshot_plan",
+                "skip",
+                "No per-snapshot selection configured; selected presets use all measurable snapshots",
+            ),
+        ]
+    )
+
+    assert shown
+    by_name = {check.name: check for check in shown[0]}
+    assert by_name["preset_set"].status == "pass"
+    assert by_name["preset_set"].summary == "Preset selection includes 2 preset(s): 02B, 02C"
+    assert by_name["snapshot_plan"].status == "pass"
+    assert by_name["snapshot_plan"].summary == (
+        "Per-snapshot selection includes 1 preset(s) and 1 snapshot(s)"
+    )
+
+    window.close()
+
+
+def test_preflight_completed_uses_enabled_comparison_plan_without_cell_flags(app) -> None:
+    window = MainWindow()
+    shown = []
+    window.snapshot_count_input.setValue(3)
+    for row, preset_id in enumerate(("02A", "02B", "02C")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(
+            Qt.CheckState.Unchecked if preset_id == "02A" else Qt.CheckState.Checked
+        )
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+    window._comparison_changed_by_patch = {"02B": (2,), "02C": ()}
+    window.comparison_enabled.setEnabled(True)
+    window.comparison_enabled.setChecked(True)
+    window._show_preflight_results = lambda checks: shown.append(checks)
+
+    window._preflight_completed(
+        [
+            main_window.DiagnosticCheck(
+                "preset_set",
+                "skip",
+                "No preset selection configured; all presets are eligible",
+            ),
+            main_window.DiagnosticCheck(
+                "snapshot_plan",
+                "skip",
+                "No per-snapshot selection configured; selected presets use all measurable snapshots",
+            ),
+        ]
+    )
+
+    by_name = {check.name: check for check in shown[0]}
+    assert by_name["preset_set"].summary == "Preset selection includes 2 preset(s): 02B, 02C"
+    assert by_name["snapshot_plan"].summary == (
+        "Per-snapshot selection includes 1 preset(s) and 1 snapshot(s)"
+    )
+
+    window.close()
+
+
+def test_preflight_completed_reports_configured_selection_with_zero_measurable_snapshots(
+    app,
+) -> None:
+    window = MainWindow()
+    shown = []
+    window.snapshot_count_input.setValue(2)
+    for row, preset_id in enumerate(("02A", "02B")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(
+            Qt.CheckState.Unchecked if preset_id == "02A" else Qt.CheckState.Checked
+        )
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+    window._comparison_changed_by_patch = {"02B": ()}
+    window.comparison_enabled.setEnabled(True)
+    window.comparison_enabled.setChecked(True)
+    window._show_preflight_results = lambda checks: shown.append(checks)
+
+    window._preflight_completed(
+        [
+            main_window.DiagnosticCheck(
+                "preset_set",
+                "skip",
+                "No preset selection configured; all presets are eligible",
+            ),
+            main_window.DiagnosticCheck(
+                "snapshot_plan",
+                "skip",
+                "No per-snapshot selection configured; selected presets use all measurable snapshots",
+            ),
+        ]
+    )
+
+    by_name = {check.name: check for check in shown[0]}
+    assert by_name["preset_set"].summary == "Preset selection includes 1 preset(s): 02B"
+    assert by_name["snapshot_plan"].status == "warning"
+    assert by_name["snapshot_plan"].summary == (
+        "Per-snapshot selection is configured but leaves no measurable snapshots "
+        "across 1 selected preset(s)"
+    )
+
+    window.close()
+
+
+def test_preflight_intersects_comparison_plan_with_current_ignored_cells(app) -> None:
+    window = MainWindow()
+    shown = []
+    window.snapshot_count_input.setValue(2)
+    for row, preset_id in enumerate(("02A", "02B")):
+        window.preset_table.insertRow(row)
+        selected = QTableWidgetItem()
+        selected.setCheckState(Qt.CheckState.Checked)
+        window.preset_table.setItem(row, 0, selected)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(preset_id))
+        window.preset_table.setItem(row, 2, QTableWidgetItem("Song"))
+        window._clear_preset_adjustments(row)
+        window._set_snapshot_ignore_reason(row, 0, main_window.IGNORE_REASON_COMPARISON, True)
+        window._set_snapshot_ignore_reason(row, 1, main_window.IGNORE_REASON_COMPARISON, True)
+    window._comparison_changed_by_patch = {"02A": (1, 2), "02B": ()}
+    window.comparison_enabled.setEnabled(True)
+    window.comparison_enabled.setChecked(True)
+    window.preset_table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
+    window._show_preflight_results = lambda checks: shown.append(checks)
+
+    window._preflight_completed(
+        [
+            main_window.DiagnosticCheck(
+                "preset_set",
+                "skip",
+                "No preset selection configured; all presets are eligible",
+            ),
+            main_window.DiagnosticCheck(
+                "snapshot_plan",
+                "skip",
+                "No per-snapshot selection configured; selected presets use all measurable snapshots",
+            ),
+        ]
+    )
+
+    by_name = {check.name: check for check in shown[0]}
+    assert by_name["preset_set"].summary == "Preset selection includes 1 preset(s): 02B"
+    assert by_name["snapshot_plan"].status == "warning"
+    assert by_name["snapshot_plan"].summary == (
+        "Per-snapshot selection is configured but leaves no measurable snapshots "
+        "across 1 selected preset(s)"
+    )
+
+    window.close()
+
+
+def test_preflight_completed_checks_open_result_dialog(monkeypatch, app) -> None:
+    window = MainWindow()
+    checks = [main_window.DiagnosticCheck("input_file", "fail", "Missing input", "missing.hls")]
+    shown = []
+    monkeypatch.setattr(window, "_show_preflight_results", lambda checks: shown.append(checks))
+
+    window._preflight_completed(checks)
+
+    assert shown == [checks]
+    assert any(
+        "Preflight check completed with 1 failure" in entry[2] for entry in window.log_entries
+    )
+
+    window.close()
+
+
+def test_preflight_result_markup_highlights_statuses() -> None:
+    html = main_window._format_preflight_results_html(
+        [
+            main_window.DiagnosticCheck("request", "pass", "Request ok"),
+            main_window.DiagnosticCheck("hardware", "skip", "Hardware skipped"),
+            main_window.DiagnosticCheck(
+                "snapshot_plan",
+                "skip",
+                "No per-snapshot selection configured; selected presets use all measurable snapshots",
+            ),
+            main_window.DiagnosticCheck(
+                "audio_device",
+                "fail",
+                "Audio failed",
+                "<unsafe detail>",
+            ),
+        ]
+    )
+
+    assert "#15803d" in html
+    assert "#854d0e" in html
+    assert "#dc2626" in html
+    assert "Per-snapshot selection" in html
+    assert "snapshot_plan" not in html
+    assert "snapshot plan" not in html.lower()
+    assert "&lt;unsafe detail&gt;" in html
+    assert "<unsafe detail>" not in html
+
+
+def test_preflight_failure_appears_in_dialog_and_log(monkeypatch, app) -> None:
+    window = MainWindow()
+    messages = []
+    monkeypatch.setattr(
+        main_window.QMessageBox,
+        "critical",
+        lambda parent, title, message: messages.append((title, message)),
+    )
+
+    window._preflight_failed("unexpected problem")
+
+    assert messages == [("Preflight check", "Preflight check failed: unexpected problem")]
+    assert any("unexpected problem" in entry[2] for entry in window.log_entries)
+
+    window.close()
+
+
+def test_preflight_controls_disable_while_worker_runs(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(input_path=tmp_path / "input.hls")
+    _FakePreflightWorker.instances = []
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(main_window, "PreflightWorker", _FakePreflightWorker)
+
+    window.run_preflight_check()
+
+    assert not window.preflight_button.isEnabled()
+    assert not window.diagnostic_summary_button.isEnabled()
+    assert not window.diagnostic_bundle_button.isEnabled()
+    assert not window.start_button.isEnabled()
+
+    window.preflight_worker = None
+    window.close()
+
+
+def test_diagnostic_bundle_export_cancel_stops_after_request_build(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request()
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(window, "_choose_diagnostic_bundle_path", lambda: None)
+    writes = []
+    monkeypatch.setattr(main_window, "write_diagnostic_bundle", lambda *args: writes.append(args))
+
+    window.export_diagnostic_bundle()
+
+    assert writes == []
+    assert not any("Diagnostic bundle exported" in entry[2] for entry in window.log_entries)
+
+    window.close()
+
+
+def test_diagnostic_bundle_export_writes_gui_logs_config_and_retained_csv(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    destination = tmp_path / "diagnostics"
+    config_path = tmp_path / "matchpatch.toml"
+    csv_path = tmp_path / "lufs_analysis.csv"
+    csv_path.write_text("Preset,DevicePatch,LUFS1\n1,01A,-16.0\n", encoding="utf-8")
+    request = _request(
+        input_path=tmp_path / "input.hls",
+        reference_di=tmp_path / "reference.wav",
+        target_lufs=-17.0,
+    )
+    window.config_path.setText(str(config_path))
+    window.retained_csv.setText(str(csv_path))
+    window._log("Visible diagnostic line", "info")
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(window, "_choose_diagnostic_bundle_path", lambda: destination)
+
+    window.export_diagnostic_bundle()
+
+    bundle_path = tmp_path / "diagnostics.zip"
+    assert bundle_path.exists()
+    with zipfile.ZipFile(bundle_path) as archive:
+        diagnostics = json.loads(archive.read("diagnostics.json"))
+        gui_log = archive.read("gui-log.txt").decode("utf-8")
+        csv_summary = json.loads(archive.read("retained-csv-summary.json"))
+
+    assert diagnostics["config_path"] == str(config_path)
+    assert diagnostics["effective_config"]["target_lufs"] == -17.0
+    assert diagnostics["recent_gui_log_lines"][0]["message"] == "Visible diagnostic line"
+    assert "Visible diagnostic line" in gui_log
+    assert csv_summary["path"] == str(csv_path)
+    assert csv_summary["device_patches"] == ["01A"]
+    assert any(
+        f"Diagnostic bundle exported: {bundle_path}" in entry[2] for entry in window.log_entries
+    )
+
+    window.close()
+
+
+def test_recent_progress_events_are_retained_for_diagnostics(monkeypatch, app) -> None:
+    window = MainWindow()
+    event = ProgressEvent("snapshot_started", device_patch="02B", snapshot=2)
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: _request())
+
+    window.update_progress(event)
+
+    snapshot = window._current_diagnostic_snapshot()
+    assert snapshot.recent_progress_events == [
+        {
+            "kind": "snapshot_started",
+            "message": None,
+            "phase": None,
+            "preset_id": None,
+            "device_patch": "02B",
+            "preset_index": None,
+            "preset_total": None,
+            "snapshot": 2,
+            "snapshot_total": None,
+            "reference_lufs": None,
+            "lufs": None,
+            "crest_factor_db": None,
+            "path": None,
+        }
+    ]
+
+    window.close()
+
+
+def test_recent_progress_events_keep_last_100(app) -> None:
+    window = MainWindow()
+
+    for index in range(105):
+        window.update_progress(ProgressEvent("log", message=f"event-{index}"))
+
+    assert len(window._recent_progress_events) == 100
+    assert window._recent_progress_events[0].message == "event-5"
+    assert window._recent_progress_events[-1].message == "event-104"
+
+    window.close()
+
+
+def test_recent_progress_events_clear_when_new_normalization_starts(monkeypatch, app) -> None:
+    window = MainWindow()
+    monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
+    window.update_progress(ProgressEvent("log", message="previous failure context"))
+
+    window._start_normalization_request(_request())
+
+    assert list(window._recent_progress_events) == []
+
+    window.worker_finished()
+    window.close()
+
+
+def test_diagnostic_bundle_export_includes_recent_progress_events(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    destination = tmp_path / "diagnostics.zip"
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: _request())
+    monkeypatch.setattr(window, "_choose_diagnostic_bundle_path", lambda: destination)
+    window.update_progress(
+        ProgressEvent(
+            "snapshot_failed",
+            message="bad LUFS",
+            device_patch="02B",
+            snapshot=1,
+            lufs=-16.5,
+        )
+    )
+
+    window.export_diagnostic_bundle()
+
+    with zipfile.ZipFile(destination) as archive:
+        events = json.loads(archive.read("progress-events.json"))
+        diagnostics = json.loads(archive.read("diagnostics.json"))
+
+    assert events[0]["kind"] == "snapshot_failed"
+    assert events[0]["device_patch"] == "02B"
+    assert events[0]["lufs"] == -16.5
+    assert diagnostics["recent_progress_events"] == events
+
+    window.close()
+
+
+def test_diagnostic_bundle_export_reports_write_errors(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    errors = []
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: _request())
+    monkeypatch.setattr(
+        window, "_choose_diagnostic_bundle_path", lambda: tmp_path / "diagnostics.zip"
+    )
+    monkeypatch.setattr(
+        main_window,
+        "write_diagnostic_bundle",
+        lambda *args: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setattr(window, "show_error", lambda message: errors.append(message))
+
+    window.export_diagnostic_bundle()
+
+    assert errors == ["disk full"]
+
+    window.close()
+
+
+def test_diagnostic_bundle_export_can_cancel_overwrite(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    existing = tmp_path / "diagnostics.zip"
+    existing.write_text("old", encoding="utf-8")
+    questions = []
+    writes = []
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: _request())
+    monkeypatch.setattr(window, "_choose_diagnostic_bundle_path", lambda: tmp_path / "diagnostics")
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: questions.append(args) or QMessageBox.StandardButton.No,
+    )
+    monkeypatch.setattr(main_window, "write_diagnostic_bundle", lambda *args: writes.append(args))
+
+    window.export_diagnostic_bundle()
+
+    assert writes == []
+    assert questions
+    assert str(existing) in questions[0][2]
+    assert existing.read_text(encoding="utf-8") == "old"
 
     window.close()
 
@@ -4664,8 +5389,11 @@ def test_first_hardware_optimization_checks_backend_once(monkeypatch, app) -> No
     )
     monkeypatch.setattr(
         gui_worker,
-        "check_windows_hardware",
-        lambda checked_request: checks.append(checked_request),
+        "collect_windows_hardware_diagnostics",
+        lambda checked_request: (
+            checks.append(checked_request)
+            or [main_window.DiagnosticCheck("windows_hardware_check", "pass", "ok")]
+        ),
     )
 
     window.determine_optimal_parameters()
@@ -4733,9 +5461,17 @@ def test_failed_hardware_optimization_restores_parameter_setup(monkeypatch, app)
     monkeypatch.setattr(main_window, "MeasurementOptimizationSetupDialog", SetupDialog)
     monkeypatch.setattr(
         gui_worker,
-        "check_windows_hardware",
+        "collect_windows_hardware_diagnostics",
         lambda checked_request: (
-            checks.append(checked_request) or (_ for _ in ()).throw(RuntimeError("no audio device"))
+            checks.append(checked_request)
+            or [
+                main_window.DiagnosticCheck(
+                    "audio_device",
+                    "fail",
+                    "No audio device matched",
+                    "audio_device=Helix",
+                )
+            ]
         ),
     )
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
@@ -5017,8 +5753,11 @@ def test_determine_optimal_parameters_cancel_setup_aborts(monkeypatch, app) -> N
     )
     monkeypatch.setattr(
         gui_worker,
-        "check_windows_hardware",
-        lambda checked_request: checks.append(checked_request),
+        "collect_windows_hardware_diagnostics",
+        lambda checked_request: (
+            checks.append(checked_request)
+            or [main_window.DiagnosticCheck("windows_hardware_check", "pass", "ok")]
+        ),
     )
 
     window.determine_optimal_parameters()
@@ -5084,8 +5823,11 @@ def test_first_hardware_normalization_checks_backend_once(monkeypatch, app) -> N
     monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
     monkeypatch.setattr(
         gui_worker,
-        "check_windows_hardware",
-        lambda checked_request: checks.append(checked_request),
+        "collect_windows_hardware_diagnostics",
+        lambda checked_request: (
+            checks.append(checked_request)
+            or [main_window.DiagnosticCheck("windows_hardware_check", "pass", "ok")]
+        ),
     )
     monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
 
@@ -5115,7 +5857,14 @@ def test_first_hardware_normalization_checks_backend_once(monkeypatch, app) -> N
 
 def test_unavailable_backend_blocks_first_normalization(monkeypatch, app) -> None:
     window = MainWindow()
-    request = _request(backend="hardware")
+    request = _request(
+        backend="hardware",
+        audio_device="Line 6 Helix",
+        sample_rate=48000,
+        input_mapping="1,2",
+        output_mapping="3,4",
+        steering_output="Helix MIDI",
+    )
     popups = []
     checks = []
     monkeypatch.setattr(window, "_backend_check_enabled", lambda: True)
@@ -5124,9 +5873,17 @@ def test_unavailable_backend_blocks_first_normalization(monkeypatch, app) -> Non
     monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
     monkeypatch.setattr(
         gui_worker,
-        "check_windows_hardware",
+        "collect_windows_hardware_diagnostics",
         lambda checked_request: (
-            checks.append(checked_request) or (_ for _ in ()).throw(RuntimeError("no audio device"))
+            checks.append(checked_request)
+            or [
+                main_window.DiagnosticCheck(
+                    "audio_device",
+                    "fail",
+                    "no audio device",
+                    "audio_device=Line 6 Helix",
+                )
+            ]
         ),
     )
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
@@ -5151,9 +5908,84 @@ def test_unavailable_backend_blocks_first_normalization(monkeypatch, app) -> Non
     assert popups[0][1] == "Error"
     assert "No suitable device connected" in popups[0][2]
     assert "no audio device" in popups[0][2]
+    assert "audio_device=Line 6 Helix" in popups[0][2]
+    assert "Preflight check" in popups[0][2]
+    assert any("Hardware check failed: no audio device" in entry[2] for entry in window.log_entries)
+    assert any(
+        "backend=hardware" in entry[2]
+        and "sample_rate=48000" in entry[2]
+        and "midi_output=Helix MIDI" in entry[2]
+        for entry in window.log_entries
+    )
     assert window.worker is None
     assert window.hardware_check_worker is None
     assert window.hardware_check_overlay.isHidden()
+    assert window._available_backend is None
+
+    window.close()
+
+
+def test_hardware_check_warning_logs_and_allows_normalization(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(backend="hardware")
+    checks = []
+    monkeypatch.setattr(window, "_backend_check_enabled", lambda: True)
+    monkeypatch.setattr(main_window, "parse_args", lambda argv: object())
+    monkeypatch.setattr(main_window, "apply_config", lambda args: args)
+    monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
+    monkeypatch.setattr(
+        gui_worker,
+        "collect_windows_hardware_diagnostics",
+        lambda checked_request: (
+            checks.append(checked_request)
+            or [
+                main_window.DiagnosticCheck("audio_device", "pass", "Audio device resolved"),
+                main_window.DiagnosticCheck(
+                    "midi_output",
+                    "warning",
+                    "MIDI output not selected",
+                    "steering_output=None",
+                ),
+            ]
+        ),
+    )
+    monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
+
+    window.start_normalization()
+
+    for _ in range(100):
+        app.processEvents()
+        if window.worker is not None and window.hardware_check_worker is None:
+            break
+        time.sleep(0.01)
+
+    assert len(checks) == 1
+    assert window.worker is not None
+    assert any(
+        "Hardware check warning: MIDI output not selected" in entry[2]
+        for entry in window.log_entries
+    )
+    assert window._available_backend == "hardware"
+
+    window.worker_finished()
+    window.close()
+
+
+def test_old_string_hardware_failure_path_still_shows_error(monkeypatch, app) -> None:
+    window = MainWindow()
+    request = _request(backend="hardware")
+    popups = []
+    window._pending_backend_check_request = request
+    window._pending_backend_check_action = "normalization"
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: popups.append(args))
+
+    window._hardware_check_failed("legacy failure")
+
+    assert popups
+    assert popups[0][1] == "Error"
+    assert "No suitable device connected" in popups[0][2]
+    assert "legacy failure" in popups[0][2]
+    assert window._available_backend is None
 
     window.close()
 
@@ -5168,8 +6000,11 @@ def test_switching_backend_only_rechecks_on_next_normalization(monkeypatch, app)
     monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
     monkeypatch.setattr(
         gui_worker,
-        "check_windows_hardware",
-        lambda checked_request: checks.append(checked_request),
+        "collect_windows_hardware_diagnostics",
+        lambda checked_request: (
+            checks.append(checked_request)
+            or [main_window.DiagnosticCheck("windows_hardware_check", "pass", "ok")]
+        ),
     )
     monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)
 
@@ -5225,7 +6060,7 @@ def test_loopback_normalization_skips_hardware_check(monkeypatch, app) -> None:
     monkeypatch.setattr(main_window, "request_from_args", lambda args: request)
     monkeypatch.setattr(
         gui_worker,
-        "check_windows_hardware",
+        "collect_windows_hardware_diagnostics",
         lambda request: (_ for _ in ()).throw(AssertionError("unexpected hardware check")),
     )
     monkeypatch.setattr(main_window.NormalizationWorker, "start", lambda self: None)

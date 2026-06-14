@@ -12,15 +12,53 @@ Start with the checklist below, then find the problem that matches what you see.
 
 ## Start Here
 
-1. Confirm the correct backend:
+1. Open Advanced > Diagnostics and click Run preflight check before a first
+   hardware run or after changing device settings.
+2. Confirm the correct backend:
    - loopback for testing without Helix;
    - hardware for real Helix measurement.
-2. If using hardware, confirm the Helix is connected and powered on.
-3. Confirm the Reference DI path points to an existing WAV.
-4. Confirm playback and recording channels match your Helix routing.
-5. Confirm MIDI output and MIDI channel are correct.
-6. Confirm selected presets have snapshots that are not all ignored.
-7. If using a single `.hlx`, confirm the temporary slot is filled in.
+3. If using hardware, confirm the Helix is connected and powered on.
+4. Confirm the Reference DI path points to an existing WAV.
+5. Confirm playback and recording channels match your Helix routing.
+6. Confirm MIDI output and MIDI channel are correct.
+7. Confirm selected presets have snapshots that are not all ignored.
+8. If using a single `.hlx`, confirm the temporary slot is filled in.
+
+## Preflight And Diagnostics
+
+The Preflight check is the fastest way to diagnose setup problems before a full
+measurement. It validates the current file, selected presets, reference DI,
+effective settings, and hardware backend details when hardware mode is selected.
+For hardware mode, the native hardware check validates the selected audio device,
+audio channels, MIDI output, and timing settings from the Windows environment
+that will run the measurement.
+
+Open Advanced > Diagnostics, then use:
+
+- Run preflight check to validate the current setup without writing adjusted
+  files.
+- Copy diagnostic summary to copy resolved settings and recent context.
+- Export diagnostic bundle to save a support bundle for a bug report.
+
+Diagnostic bundles are designed for troubleshooting, not for moving your tone
+files around. They include:
+
+- a human-readable summary;
+- structured diagnostic JSON;
+- effective MatchPatch settings;
+- recent GUI log lines;
+- recent progress events;
+- hardware/preflight check results;
+- retained CSV path and safe row summaries when available.
+
+Diagnostic bundles intentionally exclude raw audio recordings, reference DI audio
+contents, preset or setlist contents, adjusted output files, and full retained
+CSV contents.
+
+When sharing a bug report, attach the `.zip` created by Export diagnostic bundle
+and describe what you clicked immediately before the problem. If the issue is
+hardware-related, also mention whether the Helix was visible to Windows as both
+an audio device and a MIDI output.
 
 ## Red Highlighted Rows
 

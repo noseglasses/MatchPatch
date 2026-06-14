@@ -11,12 +11,13 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 from html import escape
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Sequence
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -116,6 +117,15 @@ from matchpatch.devices.base import (
     PatchFileAdjustments,
     normalize_regex_pattern,
 )
+from matchpatch.diagnostics import (
+    DiagnosticCheck,
+    DiagnosticSnapshot,
+    build_diagnostic_snapshot,
+    progress_event_to_dict,
+    snapshot_to_text,
+    summarize_failed_checks,
+    write_diagnostic_bundle,
+)
 from matchpatch.gui import help as gui_help
 from matchpatch.gui.device_panels import HelixSettingsPanel
 from matchpatch.gui.dialogs import ASSETS_DIR, AboutDialog
@@ -125,6 +135,7 @@ from matchpatch.gui.worker import (
     HardwareCheckWorker,
     MeasurementOptimizationWorker,
     NormalizationWorker,
+    PreflightWorker,
 )
 from matchpatch.measurement_optimizer import (
     TIMING_PARAMETERS,
@@ -959,10 +970,12 @@ class MainWindow(QMainWindow):
         self.hardware_check_worker: HardwareCheckWorker | None = None
         self.worker: NormalizationWorker | None = None
         self.optimization_worker: MeasurementOptimizationWorker | None = None
+        self.preflight_worker: PreflightWorker | None = None
         self.optimization_dialog: MeasurementOptimizationDialog | None = None
         self.playback_worker: AudioPlaybackWorker | None = None
         self.completed_request: NormalizationRequest | None = None
         self.completed_result: NormalizationResult | None = None
+        self._last_hardware_diagnostic_checks: list[DiagnosticCheck] = []
         self.device_panels: dict[str, HelixSettingsPanel] = {}
         self.snapshot_count = 4
         self.preset_snapshot_positions: dict[str, int] = {}
@@ -975,6 +988,7 @@ class MainWindow(QMainWindow):
         self._manual_cell_target: tuple[int, int] | None = None
         self._custom_adjustments: CustomAdjustments = {}
         self.log_entries: list[tuple[str, str, str]] = []
+        self._recent_progress_events: deque[ProgressEvent] = deque(maxlen=100)
         self._processing_dot_green = False
         self._loading_defaults = False
         self._available_backend: str | None = None
@@ -1592,7 +1606,7 @@ class MainWindow(QMainWindow):
         footer.addPermanentWidget(self.processing_dot)
 
     def _build_log(self) -> QWidget:
-        content = QWidget()
+        content = QGroupBox("Log")
         content.setProperty("help_id", HelpId.TROUBLESHOOTING)
         layout = QVBoxLayout(content)
         filter_row = QHBoxLayout()
@@ -1638,7 +1652,10 @@ class MainWindow(QMainWindow):
         lufs_tab_index = self.advanced_tabs.addTab(self._build_lufs(), "LUFS")
         misc_tab_index = self.advanced_tabs.addTab(self._build_misc(), "Misc")
         metadata_tab_index = self.advanced_tabs.addTab(self._build_metadata(), "Meta Data")
-        log_tab_index = self.advanced_tabs.addTab(self._build_log(), "Log")
+        diagnostics_tab_index = self.advanced_tabs.addTab(
+            self._build_diagnostics(),
+            "Diagnostics",
+        )
         tab_bar = self.advanced_tabs.tabBar()
         tab_bar.setTabData(device_tab_index, HelpId.BACKENDS)
         tab_bar.setTabData(files_tab_index, HelpId.FILES_TAB)
@@ -1646,7 +1663,7 @@ class MainWindow(QMainWindow):
         tab_bar.setTabData(lufs_tab_index, HelpId.LUFS_LOUDNESS)
         tab_bar.setTabData(misc_tab_index, HelpId.SNAPSHOT_COUNT)
         tab_bar.setTabData(metadata_tab_index, HelpId.METADATA)
-        tab_bar.setTabData(log_tab_index, HelpId.TROUBLESHOOTING)
+        tab_bar.setTabData(diagnostics_tab_index, HelpId.TROUBLESHOOTING)
         self.advanced_tabs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self.advanced_tabs.currentChanged.connect(self._schedule_resize_for_content)
         advanced_header = QHBoxLayout()
@@ -1726,6 +1743,79 @@ class MainWindow(QMainWindow):
             ),
             self.keep_temp,
         )
+        return content
+
+    def _build_diagnostics(self) -> QWidget:
+        content = QWidget()
+        content.setProperty("help_id", HelpId.TROUBLESHOOTING)
+        layout = QVBoxLayout(content)
+        self.diagnostics_privacy_panel = QGroupBox("Privacy notice")
+        self.diagnostics_privacy_panel.setStyleSheet(
+            "QGroupBox {"
+            "background: #eff6ff;"
+            "border: 1px solid #3b82f6;"
+            "border-radius: 6px;"
+            "margin-top: 0.75em;"
+            "padding: 10px;"
+            "color: #1d4ed8;"
+            "}"
+            "QGroupBox::title {"
+            "subcontrol-origin: margin;"
+            "left: 8px;"
+            "padding: 0 4px;"
+            "color: #1d4ed8;"
+            "}"
+            "QLabel {"
+            "color: #1d4ed8;"
+            "}"
+        )
+        privacy_layout = QVBoxLayout(self.diagnostics_privacy_panel)
+        self.diagnostics_privacy_notice = QLabel(
+            "Diagnostic bundles are saved locally and may include file paths, effective "
+            "settings, recent GUI log lines, progress events, hardware/audio/MIDI names, "
+            "and safe CSV summaries. They do not include raw audio, preset or setlist "
+            "file contents, adjusted output files, or full retained CSV contents. Review "
+            "the ZIP before sharing and remove anything that reveals private names, "
+            "client/project folders, setlist details, or other sensitive information."
+        )
+        self.diagnostics_privacy_notice.setWordWrap(True)
+        privacy_layout.addWidget(self.diagnostics_privacy_notice)
+        layout.addWidget(self.diagnostics_privacy_panel)
+        form = QFormLayout()
+        self.diagnostic_bundle_button = QPushButton("Export diagnostic bundle")
+        self.diagnostic_bundle_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        )
+        self.diagnostic_bundle_button.setToolTip(
+            "Save a support bundle with effective settings, GUI logs, and safe summaries."
+        )
+        self.diagnostic_bundle_button.clicked.connect(self.export_diagnostic_bundle)
+        self.diagnostic_summary_button = QPushButton("Copy diagnostic summary")
+        self.diagnostic_summary_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
+        )
+        self.diagnostic_summary_button.setToolTip(
+            "Copy resolved settings and diagnostic context to the clipboard."
+        )
+        self.diagnostic_summary_button.clicked.connect(self.copy_diagnostic_summary)
+        self.preflight_button = QPushButton("Run preflight check")
+        self.preflight_button.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
+        )
+        self.preflight_button.setToolTip(
+            "Validate setup and backend availability before starting measurement."
+        )
+        self.preflight_button.clicked.connect(self.run_preflight_check)
+        form.addRow(
+            _label("Preflight", "Validate setup before starting measurement."),
+            _button_row(self.preflight_button),
+        )
+        form.addRow(
+            _label("Diagnostics", "Support bundle with settings, logs, and safe summaries."),
+            _button_row(self.diagnostic_summary_button, self.diagnostic_bundle_button),
+        )
+        layout.addLayout(form)
+        layout.addWidget(self._build_log())
         return content
 
     def _set_advanced_visible(self, visible: bool) -> None:
@@ -2038,6 +2128,16 @@ class MainWindow(QMainWindow):
 
     def _row_has_measured_snapshots(self, row: int) -> bool:
         return self._row_measured_snapshot_count(row) > 0
+
+    def _has_ignored_snapshot_cells(self) -> bool:
+        if not hasattr(self, "preset_table"):
+            return False
+        for row in range(self.preset_table.rowCount()):
+            for snapshot_index in range(self._snapshot_count_for_estimate()):
+                item = self.preset_table.item(row, self._snapshot_name_column(snapshot_index))
+                if item is not None and item.data(IGNORED_SNAPSHOT_ROLE):
+                    return True
+        return False
 
     def _checked_preset_rows(self) -> list[int]:
         rows = []
@@ -2666,6 +2766,349 @@ class MainWindow(QMainWindow):
         if not path:
             return None
         return path, save_default.isChecked()
+
+    def _choose_diagnostic_bundle_path(self) -> Path | None:
+        dialog = QFileDialog(self, "Export diagnostic bundle")
+        dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setNameFilter("Zip archives (*.zip)")
+        dialog.selectFile("matchpatch-diagnostics.zip")
+        dialog.setLabelText(QFileDialog.DialogLabel.Accept, "Save")
+        path = dialog.selectedFiles()[0] if dialog.exec() and dialog.selectedFiles() else ""
+        return Path(path) if path else None
+
+    def _current_diagnostic_request(self) -> NormalizationRequest:
+        request = request_from_args(apply_config(parse_args(self._build_argv())))
+        return self._request_with_preset_table_selection(request)
+
+    def _request_with_preset_table_selection(
+        self,
+        request: NormalizationRequest,
+    ) -> NormalizationRequest:
+        if not hasattr(self, "preset_table") or self.preset_table.rowCount() == 0:
+            return request
+
+        checked_rows = set(self._checked_preset_rows())
+        has_unchecked_presets = any(
+            row not in checked_rows for row in range(self.preset_table.rowCount())
+        )
+        has_ignored_snapshots = self._has_ignored_snapshot_cells()
+        comparison_snapshot_plan = (
+            self._comparison_changed_by_patch
+            if hasattr(self, "comparison_enabled")
+            and self.comparison_enabled.isChecked()
+            and self._comparison_changed_by_patch is not None
+            else None
+        )
+        if comparison_snapshot_plan is not None:
+            has_ignored_snapshots = True
+        preset_set = request.preset_set
+        progress_plan = self._measurement_progress_plan_for_request(request)
+        if has_unchecked_presets or has_ignored_snapshots:
+            if Path(self.input_path.text()).suffix.lower() == ".hlx":
+                candidate_rows = [0] if self.preset_table.rowCount() else []
+            elif has_unchecked_presets:
+                candidate_rows = sorted(checked_rows)
+            else:
+                candidate_rows = list(range(self.preset_table.rowCount()))
+            selected_patches = []
+            preset_snapshots = []
+            for row in candidate_rows:
+                patch_item = self.preset_table.item(row, 1)
+                if patch_item is None:
+                    continue
+                patch = patch_item.text().strip().upper()
+                if not patch:
+                    continue
+                selected_patches.append(patch)
+                measurable_snapshots = self._row_measured_snapshot_indexes(row)
+                snapshots = (
+                    tuple(
+                        snapshot
+                        for snapshot in comparison_snapshot_plan.get(patch, ())
+                        if snapshot in measurable_snapshots
+                    )
+                    if comparison_snapshot_plan is not None
+                    else measurable_snapshots
+                )
+                if snapshots:
+                    preset_snapshots.append((patch, snapshots))
+            if selected_patches:
+                preset_set = ",".join(selected_patches)
+            progress_plan = (
+                _MeasurementProgressPlan(tuple(preset_snapshots)) if preset_snapshots else None
+            )
+        if progress_plan is None:
+            if preset_set == request.preset_set:
+                return request
+            return replace(request, preset_set=preset_set)
+
+        if preset_set is None and (has_unchecked_presets or has_ignored_snapshots):
+            preset_set = ",".join(patch for patch, _snapshots in progress_plan.preset_snapshots)
+        snapshot_plan = request.snapshot_plan
+        if has_ignored_snapshots:
+            snapshot_plan = progress_plan.preset_snapshots
+        if preset_set == request.preset_set and snapshot_plan == request.snapshot_plan:
+            return request
+        return replace(request, preset_set=preset_set, snapshot_plan=snapshot_plan)
+
+    def _current_diagnostic_snapshot(
+        self,
+        checks: Sequence[DiagnosticCheck] = (),
+    ) -> DiagnosticSnapshot:
+        request = self._current_diagnostic_request()
+        result = self.completed_result
+        retained_csv_path = result.retained_csv_path if result is not None else None
+        if retained_csv_path is None and self.retained_csv.text().strip():
+            candidate = Path(self.retained_csv.text().strip())
+            if candidate.is_file():
+                retained_csv_path = candidate
+        return build_diagnostic_snapshot(
+            request,
+            config_path=self.config_path.text().strip() or None,
+            checks=checks,
+            recent_progress=(
+                progress_event_to_dict(event) for event in self._recent_progress_events
+            ),
+            recent_logs=self.log_entries,
+            retained_csv_path=retained_csv_path,
+            result=result,
+        )
+
+    def export_diagnostic_bundle(self) -> None:
+        try:
+            snapshot = self._current_diagnostic_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return
+
+        destination = self._choose_diagnostic_bundle_path()
+        if destination is None:
+            return
+
+        bundle_path = (
+            destination
+            if destination.suffix.lower() == ".zip"
+            else destination.with_name(f"{destination.name}.zip")
+        )
+        if bundle_path.exists():
+            answer = QMessageBox.question(
+                self,
+                "Replace diagnostic bundle",
+                f"Replace existing diagnostic bundle?\n\n{bundle_path}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        try:
+            saved_path = write_diagnostic_bundle(snapshot, destination)
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return
+
+        self._log(f"Diagnostic bundle exported: {saved_path}", "success")
+
+    def copy_diagnostic_summary(self) -> None:
+        try:
+            snapshot = self._current_diagnostic_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return
+
+        QApplication.clipboard().setText(snapshot_to_text(snapshot))
+        self._log("Diagnostic summary copied", "success")
+
+    def run_preflight_check(self) -> None:
+        if (
+            self.worker is not None
+            or self.hardware_check_worker is not None
+            or self.optimization_worker is not None
+            or self.preflight_worker is not None
+        ):
+            return
+        try:
+            request = self._current_diagnostic_request()
+        except Exception as exc:  # noqa: BLE001
+            self.show_error(str(exc))
+            return
+
+        self.preflight_button.setEnabled(False)
+        self.preflight_button.setText("Running...")
+        self.start_button.setEnabled(False)
+        self.determine_parameters_button.setEnabled(False)
+        if hasattr(self, "diagnostic_summary_button"):
+            self.diagnostic_summary_button.setEnabled(False)
+        if hasattr(self, "diagnostic_bundle_button"):
+            self.diagnostic_bundle_button.setEnabled(False)
+        if hasattr(self, "preflight_button"):
+            self.preflight_button.setEnabled(False)
+        self._set_phase("starting")
+        self._log("Preflight check started", "info")
+        self._start_busy_phase()
+        self.preflight_worker = PreflightWorker(request, self)
+        self.preflight_worker.completed.connect(self._preflight_completed)
+        self.preflight_worker.failed.connect(self._preflight_failed)
+        self.preflight_worker.finished.connect(self._preflight_finished)
+        self.preflight_worker.finished.connect(self.preflight_worker.deleteLater)
+        self.preflight_worker.start()
+
+    def _preflight_completed(self, checks: Sequence[DiagnosticCheck]) -> None:
+        self._stop_busy_phase()
+        checks = self._preflight_checks_with_preset_table_selection(checks)
+        failed_count = sum(1 for check in checks if check.status == "fail")
+        warning_count = sum(1 for check in checks if check.status == "warning")
+        if failed_count:
+            self._set_phase("error")
+            self._log(f"Preflight check completed with {failed_count} failure(s)", "error")
+        elif warning_count:
+            self._set_phase("ready")
+            self._log(f"Preflight check completed with {warning_count} warning(s)", "warning")
+        else:
+            self._set_phase("ready")
+            self._log("Preflight check passed", "success")
+        self._show_preflight_results(checks)
+
+    def _preflight_checks_with_preset_table_selection(
+        self,
+        checks: Sequence[DiagnosticCheck],
+    ) -> list[DiagnosticCheck]:
+        table_checks = self._preset_table_selection_preflight_checks()
+        if not table_checks:
+            return list(checks)
+        replacements = {check.name: check for check in table_checks}
+        merged = [replacements.get(check.name, check) for check in checks]
+        existing_names = {check.name for check in merged}
+        merged.extend(check for check in table_checks if check.name not in existing_names)
+        return merged
+
+    def _preset_table_selection_preflight_checks(self) -> list[DiagnosticCheck]:
+        if not hasattr(self, "preset_table") or self.preset_table.rowCount() == 0:
+            return []
+        checked_rows = set(self._checked_preset_rows())
+        has_unchecked_presets = any(
+            row not in checked_rows for row in range(self.preset_table.rowCount())
+        )
+        has_ignored_snapshots = self._has_ignored_snapshot_cells()
+        comparison_snapshot_plan = (
+            self._comparison_changed_by_patch
+            if hasattr(self, "comparison_enabled")
+            and self.comparison_enabled.isChecked()
+            and self._comparison_changed_by_patch is not None
+            else None
+        )
+        if comparison_snapshot_plan is not None:
+            has_ignored_snapshots = True
+        if not has_unchecked_presets and not has_ignored_snapshots:
+            return []
+
+        if Path(self.input_path.text()).suffix.lower() == ".hlx":
+            candidate_rows = [0] if self.preset_table.rowCount() else []
+        elif has_unchecked_presets:
+            candidate_rows = sorted(checked_rows)
+        else:
+            candidate_rows = list(range(self.preset_table.rowCount()))
+
+        selected_patches = []
+        preset_snapshots = []
+        for row in candidate_rows:
+            patch_item = self.preset_table.item(row, 1)
+            if patch_item is None:
+                continue
+            patch = patch_item.text().strip().upper()
+            if not patch:
+                continue
+            selected_patches.append(patch)
+            measurable_snapshots = self._row_measured_snapshot_indexes(row)
+            snapshots = (
+                tuple(
+                    snapshot
+                    for snapshot in comparison_snapshot_plan.get(patch, ())
+                    if snapshot in measurable_snapshots
+                )
+                if comparison_snapshot_plan is not None
+                else measurable_snapshots
+            )
+            if snapshots:
+                preset_snapshots.append((patch, snapshots))
+        if not selected_patches:
+            return []
+
+        checks = [
+            DiagnosticCheck(
+                "preset_set",
+                "pass",
+                (
+                    f"Preset selection includes {len(selected_patches)} preset(s): "
+                    f"{', '.join(selected_patches)}"
+                ),
+            )
+        ]
+        if has_ignored_snapshots:
+            snapshot_total = sum(len(snapshots) for _patch, snapshots in preset_snapshots)
+            snapshot_status = "pass" if snapshot_total else "warning"
+            snapshot_summary = (
+                f"Per-snapshot selection includes {len(preset_snapshots)} preset(s) "
+                f"and {snapshot_total} snapshot(s)"
+                if snapshot_total
+                else (
+                    "Per-snapshot selection is configured but leaves no measurable "
+                    f"snapshots across {len(selected_patches)} selected preset(s)"
+                )
+            )
+            checks.append(
+                DiagnosticCheck(
+                    "snapshot_plan",
+                    snapshot_status,
+                    snapshot_summary,
+                )
+            )
+        return checks
+
+    def _preflight_failed(self, detail: str) -> None:
+        self._stop_busy_phase(PROCESSING_DOT_RED)
+        self._set_phase("error")
+        message = f"Preflight check failed: {detail}"
+        self._log(message, "error")
+        QMessageBox.critical(self, "Preflight check", message)
+
+    def _preflight_finished(self) -> None:
+        self.preflight_worker = None
+        if hasattr(self, "preflight_button"):
+            self.preflight_button.setText("Run preflight check")
+        self._refresh_file_actions()
+
+    def _show_preflight_results(self, checks: Sequence[DiagnosticCheck]) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Preflight check")
+        layout = QVBoxLayout(dialog)
+
+        headline = QLabel(_preflight_headline(checks), dialog)
+        headline_font = headline.font()
+        headline_font.setBold(True)
+        headline.setFont(headline_font)
+        layout.addWidget(headline)
+
+        details = QTextEdit(dialog)
+        details.setReadOnly(True)
+        details.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        details.setHtml(_format_preflight_results_html(checks))
+        details.setMinimumSize(560, 280)
+        layout.addWidget(details)
+
+        hint = QLabel(
+            "Use Export diagnostic bundle to save these checks with settings and recent logs.",
+            dialog,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, dialog)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def _active_gui_config(self) -> Config:
         args = apply_config(parse_args(self._build_config_export_argv()))
@@ -3316,10 +3759,15 @@ class MainWindow(QMainWindow):
             return
 
         self.start_button.setEnabled(False)
+        if hasattr(self, "diagnostic_summary_button"):
+            self.diagnostic_summary_button.setEnabled(False)
+        if hasattr(self, "diagnostic_bundle_button"):
+            self.diagnostic_bundle_button.setEnabled(False)
         self.start_cancel_stack.setCurrentWidget(self.cancel_button)
         self._discard_completed_export()
         self.log.clear()
         self.log_entries.clear()
+        self._recent_progress_events.clear()
         self.preset_snapshot_positions.clear()
         self._deferred_gain_correction_logs.clear()
         self._deferred_gain_correction_patch = None
@@ -3336,6 +3784,14 @@ class MainWindow(QMainWindow):
         self._set_phase("starting")
         self._log("Normalization started", "info")
         self._log(f"Backend: {getattr(request, 'backend', 'unknown')}", "info")
+        if request.backend == self._available_backend:
+            for check in self._last_hardware_diagnostic_checks:
+                if check.status == "warning":
+                    self._log(f"Hardware check warning: {check.summary}", "warning")
+                    if check.detail:
+                        self._log(f"Hardware check detail: {check.detail}", "info")
+                elif check.status == "pass" and check.detail:
+                    self._log(f"Hardware check detail: {check.detail}", "info")
         if self._custom_adjustments:
             self._log(
                 f"Custom adjustments loaded: {request.custom_adjustments_path}",
@@ -3400,6 +3856,12 @@ class MainWindow(QMainWindow):
 
         self.start_button.setEnabled(False)
         self.determine_parameters_button.setEnabled(False)
+        if hasattr(self, "diagnostic_summary_button"):
+            self.diagnostic_summary_button.setEnabled(False)
+        if hasattr(self, "diagnostic_bundle_button"):
+            self.diagnostic_bundle_button.setEnabled(False)
+        if hasattr(self, "preflight_button"):
+            self.preflight_button.setEnabled(False)
         self._show_hardware_check_overlay()
         self._set_phase("starting")
         self._log("Checking backend availability", "info")
@@ -3408,11 +3870,18 @@ class MainWindow(QMainWindow):
         self._pending_backend_check_action = action
         self._pending_optimization_preset_id = optimization_preset_id
         self._pending_optimization_settings = optimization_settings
+        self._last_hardware_diagnostic_checks = []
+        self.hardware_check_worker.diagnostics_completed.connect(
+            self._hardware_check_diagnostics_completed
+        )
         self.hardware_check_worker.completed.connect(self._hardware_check_completed)
         self.hardware_check_worker.failed.connect(self._hardware_check_failed)
         self.hardware_check_worker.finished.connect(self._hardware_check_finished)
         self.hardware_check_worker.finished.connect(self.hardware_check_worker.deleteLater)
         self.hardware_check_worker.start()
+
+    def _hardware_check_diagnostics_completed(self, checks: Sequence[DiagnosticCheck]) -> None:
+        self._last_hardware_diagnostic_checks = list(checks)
 
     def _hardware_check_completed(self) -> None:
         self._hide_hardware_check_overlay()
@@ -3427,6 +3896,13 @@ class MainWindow(QMainWindow):
         if request is not None:
             self._available_backend = request.backend
         self._log("Backend availability check completed", "success")
+        for check in self._last_hardware_diagnostic_checks:
+            if check.status == "warning":
+                self._log(f"Hardware check warning: {check.summary}", "warning")
+                if check.detail:
+                    self._log(f"Hardware check detail: {check.detail}", "info")
+            elif check.status == "pass" and check.detail:
+                self._log(f"Hardware check detail: {check.detail}", "info")
         if request is not None and action == "optimization":
             if optimization_settings is None:
                 setup_preset_id = (
@@ -3476,10 +3952,37 @@ class MainWindow(QMainWindow):
         self._set_phase("ready")
         message = "No suitable device connected."
         detail = detail.strip()
-        self._log(f"{message} {detail}".strip(), "error")
+        checks = self._last_hardware_diagnostic_checks
+        selected_values = _format_hardware_check_request_details(request)
+        if checks:
+            failed_checks = [check for check in checks if check.status == "fail"]
+            for check in failed_checks:
+                self._log(f"Hardware check failed: {check.summary}", "error")
+                if check.detail:
+                    self._log(f"Hardware check detail: {check.detail}", "info")
+            for check in checks:
+                if check.status == "warning":
+                    self._log(f"Hardware check warning: {check.summary}", "warning")
+                    if check.detail:
+                        self._log(f"Hardware check detail: {check.detail}", "info")
+            if selected_values:
+                self._log(f"Hardware check selected values: {selected_values}", "info")
+            summary = summarize_failed_checks(checks)
+        else:
+            self._log(f"{message} {detail}".strip(), "error")
+            if selected_values:
+                self._log(f"Hardware check selected values: {selected_values}", "info")
+            summary = detail
         popup_message = f"{message}\n\nConnect a compatible audio processor and try again."
-        if detail:
-            popup_message = f"{popup_message}\n\nDetails:\n{detail}"
+        if summary:
+            popup_message = f"{popup_message}\n\n{summary}"
+        detail_lines = _hardware_check_failure_details(checks, detail)
+        if detail_lines:
+            popup_message = f"{popup_message}\n\nDetails:\n{detail_lines}"
+        popup_message = (
+            f"{popup_message}\n\nRun Preflight check or export a diagnostic bundle "
+            "for more troubleshooting context."
+        )
         QMessageBox.critical(
             self,
             "Error",
@@ -3590,6 +4093,7 @@ class MainWindow(QMainWindow):
         return True
 
     def update_progress(self, event: ProgressEvent) -> None:
+        self._recent_progress_events.append(event)
         if event.phase:
             self._set_phase(event.phase)
             self._hide_progress()
@@ -4156,6 +4660,30 @@ class MainWindow(QMainWindow):
             self.record_output_button.setEnabled(has_loaded_file)
         if hasattr(self, "play_recorded_output_button"):
             self.play_recorded_output_button.setEnabled(True)
+        if hasattr(self, "diagnostic_summary_button"):
+            workflow_active = (
+                self.worker is not None
+                or self.hardware_check_worker is not None
+                or self.optimization_worker is not None
+                or self.preflight_worker is not None
+            )
+            self.diagnostic_summary_button.setEnabled(not workflow_active)
+        if hasattr(self, "diagnostic_bundle_button"):
+            workflow_active = (
+                self.worker is not None
+                or self.hardware_check_worker is not None
+                or self.optimization_worker is not None
+                or self.preflight_worker is not None
+            )
+            self.diagnostic_bundle_button.setEnabled(not workflow_active)
+        if hasattr(self, "preflight_button"):
+            workflow_active = (
+                self.worker is not None
+                or self.hardware_check_worker is not None
+                or self.optimization_worker is not None
+                or self.preflight_worker is not None
+            )
+            self.preflight_button.setEnabled(not workflow_active)
 
     def _determine_parameters_disabled_hint(
         self,
@@ -4296,7 +4824,7 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self.hardware_check_worker is not None:
+        if self.hardware_check_worker is not None or self.preflight_worker is not None:
             event.ignore()
             return
         if (
@@ -7722,10 +8250,106 @@ def _path_row(field: QLineEdit, *buttons: QPushButton) -> QWidget:
     return widget
 
 
+def _button_row(*buttons: QPushButton) -> QWidget:
+    widget = QWidget()
+    layout = QHBoxLayout(widget)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addStretch()
+    for button in buttons:
+        layout.addWidget(button)
+    return widget
+
+
 def _append_optional_argument(argv: list[str], name: str, value: object) -> None:
     text = "" if value is None else str(value).strip()
     if text and text != "None":
         argv.extend([name, text])
+
+
+def _preflight_headline(checks: Sequence[DiagnosticCheck]) -> str:
+    if any(check.status == "fail" for check in checks):
+        return "Preflight found setup problems."
+    if any(check.status == "warning" for check in checks):
+        return "Preflight completed with warnings."
+    return "Preflight passed."
+
+
+def _format_preflight_results(checks: Sequence[DiagnosticCheck]) -> str:
+    lines: list[str] = []
+    for check in checks:
+        lines.append(
+            f"{check.status.upper()} {_preflight_check_display_name(check)}: {check.summary}"
+        )
+        if check.status in {"fail", "warning"} and check.detail:
+            lines.append(f"  {check.detail}")
+    return "\n".join(lines)
+
+
+def _preflight_check_display_name(check: DiagnosticCheck) -> str:
+    display_names = {
+        "preset_set": "Preset selection",
+        "snapshot_plan": "Per-snapshot selection",
+    }
+    return display_names.get(check.name, check.name)
+
+
+def _format_preflight_results_html(checks: Sequence[DiagnosticCheck]) -> str:
+    colors = {
+        "pass": "#15803d",
+        "skip": "#854d0e",
+        "warning": "#a16207",
+        "fail": "#dc2626",
+    }
+    blocks: list[str] = []
+    for check in checks:
+        color = colors.get(check.status, "#374151")
+        status = escape(check.status.upper())
+        name = escape(_preflight_check_display_name(check))
+        summary = escape(check.summary)
+        detail = ""
+        if check.status in {"fail", "warning"} and check.detail:
+            detail = (
+                f"<div style='margin-left: 1.5em; color: #374151;'>{escape(check.detail)}</div>"
+            )
+        blocks.append(
+            "<div style='margin-bottom: 0.35em;'>"
+            f"<span style='font-weight: 700; color: {color};'>{status}</span> "
+            f"<span style='font-weight: 700;'>{name}</span>: {summary}"
+            f"{detail}</div>"
+        )
+    return (
+        "<div style='font-family: monospace; white-space: pre-wrap;'>" + "".join(blocks) + "</div>"
+    )
+
+
+def _format_hardware_check_request_details(request: NormalizationRequest | None) -> str:
+    if request is None:
+        return ""
+    values = {
+        "backend": request.backend,
+        "audio_device": request.audio_device,
+        "sample_rate": request.sample_rate,
+        "input_mapping": request.input_mapping,
+        "output_mapping": request.output_mapping,
+        "midi_output": request.steering_output,
+    }
+    return ", ".join(f"{name}={value}" for name, value in values.items() if value not in {None, ""})
+
+
+def _hardware_check_failure_details(
+    checks: Sequence[DiagnosticCheck],
+    fallback_detail: str,
+) -> str:
+    if not checks:
+        return fallback_detail
+
+    lines: list[str] = []
+    for check in checks:
+        if check.status != "fail":
+            continue
+        if check.detail:
+            lines.append(check.detail)
+    return "\n".join(lines)
 
 
 def _nested_config_value(config: dict[str, Any], path: tuple[str, ...]) -> object | None:
