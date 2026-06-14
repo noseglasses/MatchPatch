@@ -159,6 +159,12 @@ Open PyPI and verify the new version:
 gh browse https://pypi.org/project/matchpatch/
 ```
 
+Test the published PyPI package in fresh WSL and native Windows virtual
+environments using the "Test The Published PyPI Package" section in
+[Commands](commands.md).
+This catches missing wheel dependency metadata and entry-point startup problems
+that a repository checkout can hide.
+
 Download the installer from the GitHub Release and run a final smoke test on a
 Windows machine if the release includes installer or GUI changes.
 
