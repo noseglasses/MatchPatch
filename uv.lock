@@ -487,12 +487,22 @@ wheels = [
 
 [[package]]
 name = "matchpatch"
-version = "0.8.1"
+version = "0.8.2"
 source = { editable = "." }
+dependencies = [
+    { name = "numpy" },
+    { name = "pyloudnorm" },
+    { name = "soundfile" },
+]
 
 [package.optional-dependencies]
 gui = [
     { name = "pyside6" },
+]
+hardware = [
+    { name = "mido" },
+    { name = "python-rtmidi", marker = "sys_platform == 'win32'" },
+    { name = "sounddevice", marker = "sys_platform == 'win32'" },
 ]
 
 [package.dev-dependencies]
@@ -532,8 +542,16 @@ wsl = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.8" }]
-provides-extras = ["gui"]
+requires-dist = [
+    { name = "mido", marker = "extra == 'hardware'", specifier = ">=1.3.3" },
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "pyloudnorm", specifier = ">=0.1.1" },
+    { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.8" },
+    { name = "python-rtmidi", marker = "sys_platform == 'win32' and extra == 'hardware'", specifier = ">=1.5.8" },
+    { name = "sounddevice", marker = "sys_platform == 'win32' and extra == 'hardware'", specifier = ">=0.5.1" },
+    { name = "soundfile", specifier = ">=0.13.1" },
+]
+provides-extras = ["gui", "hardware"]
 
 [package.metadata.requires-dev]
 docs = [

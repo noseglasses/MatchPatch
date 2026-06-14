@@ -11,6 +11,7 @@ from PySide6.QtCore import QMessageLogContext, Qt, QTimer, QtMsgType, qInstallMe
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
+from matchpatch import __version__
 from matchpatch.gui.main_window import MainWindow
 
 IGNORED_QT_MESSAGES = {"This plugin supports grabbing the mouse only for popup windows"}
@@ -166,12 +167,34 @@ def gui_smoke_enabled() -> bool:
     return os.getenv(GUI_SMOKE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def handle_cli_arguments(argv: list[str]) -> bool:
+    if argv == ["--help"] or argv == ["-h"]:
+        print("usage: matchpatch-gui [-h] [--version]")
+        print()
+        print("Launch the MatchPatch desktop interface")
+        print()
+        print("options:")
+        print("  -h, --help  show this help message and exit")
+        print("  --version   show program's version number and exit")
+        return True
+
+    if argv == ["--version"]:
+        print(f"matchpatch-gui {__version__}")
+        return True
+
+    return False
+
+
 def main(argv: list[str] | None = None) -> None:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if handle_cli_arguments(args):
+        raise SystemExit(0)
+
     configure_wslg_runtime()
     configure_high_dpi_scaling()
     register_desktop_entry()
     qInstallMessageHandler(qt_message_handler)
-    app = QApplication([sys.argv[0], *(argv or [])])
+    app = QApplication([sys.argv[0], *args])
     configure_gui_appearance(app)
     app.setApplicationName(DESKTOP_FILE_ID)
     app.setApplicationDisplayName("MatchPatch")
