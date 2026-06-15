@@ -13,13 +13,17 @@ from matchpatch.devices import get_device_profile
 from matchpatch.gui.advanced_settings import GuiSettingsBinder
 from matchpatch.gui.loudness_widgets import _loudness_bar_color, _loudness_text
 from matchpatch.gui.preset_table import snapshot_name_column
-from matchpatch.gui.progress_widgets import MeasurementProgressEstimate
+from matchpatch.gui.progress_widgets import MeasurementProgressEstimate, MeasurementProgressPlan
 from matchpatch.gui.table_roles import IGNORED_SNAPSHOT_ROLE, RECORDED_OUTPUT_PATH_ROLE
 from matchpatch.gui.worker import NormalizationWorker
 from matchpatch.progress import ProgressEvent
 from matchpatch.workflow import ImportRequest, NormalizationRequest, NormalizationResult
 
 PROCESSING_DOT_RED = "#dc2626"
+TABLE_EVENT_HANDLERS = {
+    "snapshot_completed": "_apply_snapshot_measurement",
+    "snapshot_failed": "_apply_snapshot_measurement_failure",
+}
 
 
 class NormalizationWorkflowController:
@@ -72,14 +76,25 @@ class NormalizationWorkflowController:
         window._start_normalization_request(request)
 
     def start_request(self, request: NormalizationRequest) -> None:
+        if not self._confirm_start_allowed(request):
+            return
+        self._reset_normalization_ui()
+        self._log_start_context(request)
+        request, progress_plan = self._prepare_measurement_plan(request)
+        self._start_worker(request, progress_plan)
+
+    def _confirm_start_allowed(self, request: NormalizationRequest) -> bool:
         window = self.window
         try:
             if not window._confirm_automation_overwrites(request):
-                return
+                return False
         except Exception as exc:  # noqa: BLE001
             window.show_error(str(exc))
-            return
+            return False
+        return True
 
+    def _reset_normalization_ui(self) -> None:
+        window = self.window
         window.start_button.setEnabled(False)
         if hasattr(window, "diagnostics_panel"):
             window.diagnostics_panel.set_workflow_active(True)
@@ -101,25 +116,43 @@ class NormalizationWorkflowController:
         window.retained_csv_pane.hide()
         window._reset_loudness_bars()
         window._set_phase("starting")
+        window._start_busy_phase()
+
+    def _log_start_context(self, request: NormalizationRequest) -> None:
+        window = self.window
         window._log("Normalization started", "info")
         window._log(f"Backend: {getattr(request, 'backend', 'unknown')}", "info")
         if request.backend == window._available_backend:
-            for check in window._last_hardware_diagnostic_checks:
-                if check.status == "warning":
-                    window._log(f"Hardware check warning: {check.summary}", "warning")
-                    if check.detail:
-                        window._log(f"Hardware check detail: {check.detail}", "info")
-                elif check.status == "pass" and check.detail:
-                    window._log(f"Hardware check detail: {check.detail}", "info")
+            self._log_hardware_check_context()
         if window._custom_adjustments:
             window._log(
                 f"Custom adjustments loaded: {request.custom_adjustments_path}",
                 "info",
             )
-        window._start_busy_phase()
+
+    def _log_hardware_check_context(self) -> None:
+        window = self.window
+        for check in window._last_hardware_diagnostic_checks:
+            if check.status == "warning":
+                window._log(f"Hardware check warning: {check.summary}", "warning")
+                if check.detail:
+                    window._log(f"Hardware check detail: {check.detail}", "info")
+            elif check.status == "pass" and check.detail:
+                window._log(f"Hardware check detail: {check.detail}", "info")
+
+    def _prepare_measurement_plan(
+        self, request: NormalizationRequest
+    ) -> tuple[NormalizationRequest, MeasurementProgressPlan | None]:
+        window = self.window
         progress_plan = window._measurement_progress_plan_for_request(request)
         if progress_plan is not None:
             request = replace(request, snapshot_plan=progress_plan.preset_snapshots)
+        return request, progress_plan
+
+    def _start_worker(
+        self, request: NormalizationRequest, progress_plan: MeasurementProgressPlan | None
+    ) -> None:
+        window = self.window
         window.completed_request = request
         window._measurement_progress_estimate = MeasurementProgressEstimate.from_request(request)
         window._measurement_progress_plan = progress_plan
@@ -161,82 +194,123 @@ class NormalizationWorkflowController:
     def update_progress(self, event: ProgressEvent) -> None:
         window = self.window
         window.log_controller.retain_progress_event(event)
-        if event.phase:
-            window._set_phase(event.phase)
-            window._hide_progress()
-            if event.phase == "completed":
-                window._apply_deferred_gain_correction_logs()
-            if event.phase in {
-                "completed",
-                "waiting_for_measurement_import",
-                "waiting_for_adjusted_import",
-            }:
-                window._stop_busy_phase()
-            else:
-                window._start_busy_phase()
-            if event.phase == "measuring":
-                window._show_indeterminate_progress(event.message or "Preparing measurement...")
+        self._handle_phase_event(event)
+        self._handle_measurement_progress(event)
+        window._update_normalization_focus(event)
+        self._handle_loudness_event(event)
+        message = self._progress_message(event)
+        self._handle_table_progress_event(event, message)
+        message = self._message_with_loudness_detail(event, message)
+        self._handle_output_artifact_event(event)
+        self._log_progress_event(event, message)
 
+    def _handle_phase_event(self, event: ProgressEvent) -> None:
+        if not event.phase:
+            return
+        window = self.window
+        window._set_phase(event.phase)
+        window._hide_progress()
+        if event.phase == "completed":
+            window._apply_deferred_gain_correction_logs()
+        if event.phase in {
+            "completed",
+            "waiting_for_measurement_import",
+            "waiting_for_adjusted_import",
+        }:
+            window._stop_busy_phase()
+        else:
+            window._start_busy_phase()
+        if event.phase == "measuring":
+            window._show_indeterminate_progress(event.message or "Preparing measurement...")
+
+    def _handle_measurement_progress(self, event: ProgressEvent) -> None:
+        window = self.window
         if event.kind == "measurement_preparation":
             window._show_indeterminate_progress(event.message or "Preparing measurement...")
 
         if event.preset_total and event.snapshot_total and event.preset_index:
-            progress_was_hidden = window.progress_group.isHidden()
-            window.progress_group.show()
-            if progress_was_hidden:
-                window._schedule_resize_for_content()
-            plan = window._measurement_progress_plan
-            if plan is not None:
-                total = max(1, plan.measured_snapshot_total)
-                value = min(total, plan.progress_value(event))
-            else:
-                total = event.preset_total * event.snapshot_total
-                snapshot = event.snapshot or 1
-                value = (event.preset_index - 1) * event.snapshot_total + snapshot
-            window.preset_progress.setRange(0, total)
-            window.preset_progress.setValue(value)
-            window._update_measurement_progress_format(event)
+            self._show_measurement_progress(event)
         elif event.kind == "measurement_completed":
             window._hide_progress()
 
-        window._update_normalization_focus(event)
+    def _show_measurement_progress(self, event: ProgressEvent) -> None:
+        window = self.window
+        progress_was_hidden = window.progress_group.isHidden()
+        window.progress_group.show()
+        if progress_was_hidden:
+            window._schedule_resize_for_content()
+        total, value = self._measurement_progress_value(event)
+        window.preset_progress.setRange(0, total)
+        window.preset_progress.setValue(value)
+        window._update_measurement_progress_format(event)
 
-        if event.lufs is not None:
-            if event.device_patch:
-                text = window._preset_progress_text(event)
-                if event.snapshot is not None:
-                    text += window._snapshot_progress_text(event)
-                window.current.setText(text)
-            target_lufs = window._target_lufs()
-            window.measured_loudness.set_loudness(
+    def _measurement_progress_value(self, event: ProgressEvent) -> tuple[int, int]:
+        plan = self.window._measurement_progress_plan
+        if plan is not None:
+            total = max(1, plan.measured_snapshot_total)
+            return total, min(total, plan.progress_value(event))
+
+        assert event.preset_total is not None
+        assert event.snapshot_total is not None
+        assert event.preset_index is not None
+        total = event.preset_total * event.snapshot_total
+        snapshot = event.snapshot or 1
+        value = (event.preset_index - 1) * event.snapshot_total + snapshot
+        return total, value
+
+    def _handle_loudness_event(self, event: ProgressEvent) -> None:
+        if event.lufs is None:
+            return
+        window = self.window
+        if event.device_patch:
+            text = window._preset_progress_text(event)
+            if event.snapshot is not None:
+                text += window._snapshot_progress_text(event)
+            window.current.setText(text)
+        target_lufs = window._target_lufs()
+        window.measured_loudness.set_loudness(
+            event.lufs,
+            target_lufs,
+            _loudness_bar_color(
                 event.lufs,
                 target_lufs,
-                _loudness_bar_color(
-                    event.lufs,
-                    target_lufs,
-                ),
-            )
-            window.measured_loudness_reading.setText(_loudness_text(event.lufs, target_lufs))
+            ),
+        )
+        window.measured_loudness_reading.setText(_loudness_text(event.lufs, target_lufs))
 
-        message = event.message or event.kind.replace("_", " ")
+    def _progress_message(self, event: ProgressEvent) -> str:
+        return event.message or event.kind.replace("_", " ")
+
+    def _handle_table_progress_event(self, event: ProgressEvent, message: str) -> None:
+        window = self.window
         if event.kind == "log":
             window._handle_gain_correction_log(message)
-        elif event.kind == "snapshot_completed":
+            return
+
+        handler_name = TABLE_EVENT_HANDLERS.get(event.kind)
+        if handler_name is not None:
             with window.preset_table.updates_paused():
-                window._apply_snapshot_measurement(event)
-        elif event.kind == "snapshot_failed":
-            with window.preset_table.updates_paused():
-                window._apply_snapshot_measurement_failure(event)
-        elif event.kind == "preset_completed":
+                getattr(window, handler_name)(event)
+            return
+
+        if event.kind == "preset_completed":
             window._apply_deferred_gain_correction_logs(event.device_patch)
+
+    def _message_with_loudness_detail(self, event: ProgressEvent, message: str) -> str:
         if event.lufs is not None and event.crest_factor_db is not None:
-            message += f": {event.lufs:.3f} LUFS, {event.crest_factor_db:.3f} dB crest"
+            return f"{message}: {event.lufs:.3f} LUFS, {event.crest_factor_db:.3f} dB crest"
+        return message
+
+    def _handle_output_artifact_event(self, event: ProgressEvent) -> None:
+        window = self.window
         if event.kind == "temp_retained" and event.path:
             window.retained_csv.setText(event.path)
             window.retained_csv_pane.show()
         if event.kind == "snapshot_recorded" and event.path:
             window._set_recorded_output(event)
 
+    def _log_progress_event(self, event: ProgressEvent, message: str) -> None:
+        window = self.window
         if (
             "bad LUFS" in message
             or "measurement unavailable" in message

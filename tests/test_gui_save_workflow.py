@@ -129,6 +129,72 @@ _FakePreflightWorker = FakePreflightWorker
 _FakeSaveChangesMessageBox = FakeSaveChangesMessageBox
 
 
+class SaveMeasurementFileDialog:
+    Option = QFileDialog.Option
+    AcceptMode = QFileDialog.AcceptMode
+    FileMode = QFileDialog.FileMode
+    DialogLabel = QFileDialog.DialogLabel
+    output_path = ""
+
+    def __init__(self, *args):
+        pass
+
+    def setOption(self, option):
+        pass
+
+    def setAcceptMode(self, mode):
+        pass
+
+    def setFileMode(self, mode):
+        pass
+
+    def setNameFilter(self, file_filter):
+        pass
+
+    def selectFile(self, path):
+        pass
+
+    def setLabelText(self, label, text):
+        pass
+
+    def exec(self):
+        return True
+
+    def selectedFiles(self):
+        return [str(self.output_path)]
+
+
+class RecordingMeasurementHandler:
+    created = []
+    validated = []
+
+    def validate_output(self, selected_input_path, selected_output_path):
+        self.validated.append((selected_input_path, selected_output_path))
+
+    def create_measurement_file(self, selected_input_path, selected_output_path):
+        self.created.append((selected_input_path, selected_output_path))
+
+
+class RecordingMeasurementProfile:
+    @staticmethod
+    def create_patch_file_handler(project_dir):
+        return RecordingMeasurementHandler()
+
+
+def install_save_measurement_fakes(monkeypatch, output_path, request):
+    SaveMeasurementFileDialog.output_path = output_path
+    RecordingMeasurementHandler.created = []
+    RecordingMeasurementHandler.validated = []
+    monkeypatch.setattr(main_window, "QFileDialog", SaveMeasurementFileDialog)
+    monkeypatch.setattr(advanced_settings, "parse_args", lambda argv: argv)
+    monkeypatch.setattr(advanced_settings, "apply_config", lambda args: args)
+    monkeypatch.setattr(advanced_settings, "request_from_args", lambda args: request)
+    monkeypatch.setattr(
+        main_window, "get_device_profile", lambda device: RecordingMeasurementProfile()
+    )
+    return RecordingMeasurementHandler
+
+
 def _request(**kwargs) -> NormalizationRequest:
     values = dict(
         device="helix",
@@ -549,54 +615,6 @@ def test_save_measurement_file_creates_matching_measurement_file(
     input_path = tmp_path / "input.hls"
     output_path = tmp_path / "manual_measurement.hls"
     input_path.touch()
-    created = []
-    validated = []
-
-    class FileDialog:
-        Option = QFileDialog.Option
-        AcceptMode = QFileDialog.AcceptMode
-        FileMode = QFileDialog.FileMode
-        DialogLabel = QFileDialog.DialogLabel
-
-        def __init__(self, *args):
-            pass
-
-        def setOption(self, option):
-            pass
-
-        def setAcceptMode(self, mode):
-            pass
-
-        def setFileMode(self, mode):
-            pass
-
-        def setNameFilter(self, file_filter):
-            pass
-
-        def selectFile(self, path):
-            pass
-
-        def setLabelText(self, label, text):
-            pass
-
-        def exec(self):
-            return True
-
-        def selectedFiles(self):
-            return [str(output_path)]
-
-    class Handler:
-        def validate_output(self, selected_input_path, selected_output_path):
-            validated.append((selected_input_path, selected_output_path))
-
-        def create_measurement_file(self, selected_input_path, selected_output_path):
-            created.append((selected_input_path, selected_output_path))
-
-    class Profile:
-        @staticmethod
-        def create_patch_file_handler(project_dir):
-            return Handler()
-
     request = NormalizationRequest(
         device="helix",
         input_path=input_path,
@@ -604,19 +622,15 @@ def test_save_measurement_file_creates_matching_measurement_file(
         windows_python=str(DEFAULT_WINDOWS_PYTHON),
         reference_di=DEFAULT_REFERENCE_DI,
     )
-    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
-    monkeypatch.setattr(advanced_settings, "parse_args", lambda argv: argv)
-    monkeypatch.setattr(advanced_settings, "apply_config", lambda args: args)
-    monkeypatch.setattr(advanced_settings, "request_from_args", lambda args: request)
-    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    handler = install_save_measurement_fakes(monkeypatch, output_path, request)
     window.input_path.setText(str(input_path))
     window._loaded_input_path = str(input_path)
     window._refresh_file_actions()
 
     assert window.save_measurement_action.isEnabled()
     assert window.save_measurement_file()
-    assert validated == [(input_path, output_path)]
-    assert created == [(input_path, output_path)]
+    assert handler.validated == [(input_path, output_path)]
+    assert handler.created == [(input_path, output_path)]
     window.close()
 
 

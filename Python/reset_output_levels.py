@@ -84,60 +84,63 @@ def reset_output_levels(data):
     snapshot_changes = 0
 
     for preset_index, preset in enumerate(data.get("presets", [])):
-        if is_default_preset(preset):
+        tone = _resettable_tone(preset)
+        if tone is None:
             continue
-
-        tone = preset.get("tone", {})
-
-        if not isinstance(tone, dict):
-            continue
-
         preset_changes = []
-
-        for dsp_name in ["dsp0", "dsp1"]:
-            dsp = tone.get(dsp_name)
-
-            if not isinstance(dsp, dict):
-                continue
-
-            for output_name in OUTPUT_BLOCKS:
-                output_block = dsp.get(output_name)
-
-                if not is_active_output(output_block):
-                    continue
-
-                output_id = output_block.get("@output")
-                old_gain = output_block.get("gain")
-                changed = set_gain_to_zero(output_block)
-                snapshot_count = reset_snapshot_output_gains(tone, dsp_name, output_name)
-
-                if changed:
-                    base_changes += 1
-
-                snapshot_changes += snapshot_count
-
-                if changed or snapshot_count:
-                    preset_changes.append(
-                        (dsp_name, output_name, output_id, old_gain, snapshot_count)
-                    )
+        for output in _iter_active_outputs(tone):
+            changed, snapshot_count, change = _reset_output_level(tone, output)
+            base_changes += 1 if changed else 0
+            snapshot_changes += snapshot_count
+            if change is not None:
+                preset_changes.append(change)
 
         if preset_changes:
-            mappings = ", ".join(
-                f"{dsp_name}.{output_name} "
-                f"{output_label(output_id)}: "
-                f"{old_gain} dB -> 0.0 dB"
-                + (f", {snapshot_count} snapshot values" if snapshot_count else "")
-                for (dsp_name, output_name, output_id, old_gain, snapshot_count) in preset_changes
-            )
-
-            print(
-                f"[OUTPUT] "
-                f"{preset_index_to_helix(preset_index)} "
-                f'"{get_preset_name(preset)}": '
-                f"{mappings}"
-            )
+            _log_output_level_changes(preset_index, preset, preset_changes)
 
     return base_changes, snapshot_changes
+
+
+def _resettable_tone(preset):
+    if is_default_preset(preset):
+        return None
+    tone = preset.get("tone", {})
+    return tone if isinstance(tone, dict) else None
+
+
+def _iter_active_outputs(tone):
+    for dsp_name in ["dsp0", "dsp1"]:
+        dsp = tone.get(dsp_name)
+        if not isinstance(dsp, dict):
+            continue
+        for output_name in OUTPUT_BLOCKS:
+            output_block = dsp.get(output_name)
+            if is_active_output(output_block):
+                yield dsp_name, output_name, output_block
+
+
+def _reset_output_level(tone, output):
+    dsp_name, output_name, output_block = output
+    output_id = output_block.get("@output")
+    old_gain = output_block.get("gain")
+    changed = set_gain_to_zero(output_block)
+    snapshot_count = reset_snapshot_output_gains(tone, dsp_name, output_name)
+    change = None
+    if changed or snapshot_count:
+        change = (dsp_name, output_name, output_id, old_gain, snapshot_count)
+    return changed, snapshot_count, change
+
+
+def _log_output_level_changes(preset_index, preset, preset_changes):
+    mappings = ", ".join(_output_level_change_text(change) for change in preset_changes)
+    print(f'[OUTPUT] {preset_index_to_helix(preset_index)} "{get_preset_name(preset)}": {mappings}')
+
+
+def _output_level_change_text(change):
+    dsp_name, output_name, output_id, old_gain, snapshot_count = change
+    return f"{dsp_name}.{output_name} {output_label(output_id)}: {old_gain} dB -> 0.0 dB" + (
+        f", {snapshot_count} snapshot values" if snapshot_count else ""
+    )
 
 
 def parse_args():

@@ -29,32 +29,46 @@ def load_custom_adjustments_file(path: Path, snapshot_count: int) -> CustomAdjus
                 raise ValueError(
                     f"Line {line_number}: expected {expected_columns} columns, got {len(row)}"
                 )
-
-            preset_id = row[0].strip().upper()
-            if not preset_id:
-                raise ValueError(f"Line {line_number}: preset ID is empty")
+            preset_id, preset_adjustments = _parse_custom_adjustment_row(row, line_number)
             if preset_id in adjustments:
                 raise ValueError(f"Line {line_number}: duplicate preset ID {preset_id!r}")
-
-            preset_adjustments: dict[int, float] = {}
-            for snapshot_index, cell in enumerate(row[1:]):
-                text = cell.strip()
-                if not text:
-                    continue
-                try:
-                    value = float(text)
-                except ValueError as exc:
-                    raise ValueError(
-                        f"Line {line_number}: snapshot {snapshot_index + 1} "
-                        f"custom adjustment is not a floating point number: {text!r}"
-                    ) from exc
-                if not math.isfinite(value):
-                    raise ValueError(
-                        f"Line {line_number}: snapshot {snapshot_index + 1} "
-                        f"custom adjustment is not finite: {text!r}"
-                    )
-                preset_adjustments[snapshot_index] = value
-
             adjustments[preset_id] = preset_adjustments
 
     return adjustments
+
+
+def _parse_custom_adjustment_row(
+    row: list[str],
+    line_number: int,
+) -> tuple[str, dict[int, float]]:
+    preset_id = row[0].strip().upper()
+    if not preset_id:
+        raise ValueError(f"Line {line_number}: preset ID is empty")
+    return preset_id, _parse_snapshot_adjustments(row[1:], line_number)
+
+
+def _parse_snapshot_adjustments(cells: list[str], line_number: int) -> dict[int, float]:
+    preset_adjustments: dict[int, float] = {}
+    for snapshot_index, cell in enumerate(cells):
+        text = cell.strip()
+        if text:
+            preset_adjustments[snapshot_index] = _parse_snapshot_adjustment(
+                text, line_number, snapshot_index
+            )
+    return preset_adjustments
+
+
+def _parse_snapshot_adjustment(text: str, line_number: int, snapshot_index: int) -> float:
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"Line {line_number}: snapshot {snapshot_index + 1} "
+            f"custom adjustment is not a floating point number: {text!r}"
+        ) from exc
+    if not math.isfinite(value):
+        raise ValueError(
+            f"Line {line_number}: snapshot {snapshot_index + 1} "
+            f"custom adjustment is not finite: {text!r}"
+        )
+    return value

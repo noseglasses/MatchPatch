@@ -300,51 +300,70 @@ class PresetTableController:
         snapshot_names = {}
         gain_deltas = {}
 
-        for row in range(self.table.rowCount()):
-            patch_item = self.table.item(row, 1)
-            preset_item = self.table.item(row, 2)
-            if patch_item is None or preset_item is None:
-                continue
-
-            patch = patch_item.text()
-            preset_names[patch] = self.callbacks.validate_helix_name(
-                preset_item.text(),
-                self.callbacks.preset_name_max_length(),
-            )
+        for row, patch, preset_item in self._iter_preset_rows():
+            preset_names[patch] = self._validated_preset_name(preset_item)
             patch_snapshot_names = {}
             patch_gain_deltas = {}
-            for snapshot_index in range(self.callbacks.snapshot_count()):
-                name_item = self.table.item(row, snapshot_name_column(snapshot_index))
-                adjustment_item = self.table.item(row, snapshot_adjustment_column(snapshot_index))
+            for snapshot_index, name_item, adjustment_item in self._iter_snapshot_adjustment_cells(
+                row
+            ):
                 if name_item is not None:
-                    patch_snapshot_names[snapshot_index] = self.callbacks.validate_helix_name(
-                        name_item.text(),
-                        self.callbacks.snapshot_name_max_length(),
-                    )
+                    patch_snapshot_names[snapshot_index] = self._validated_snapshot_name(name_item)
                 if adjustment_item is not None:
-                    if adjustment_item.data(IGNORED_SNAPSHOT_ROLE):
-                        continue
-                    if adjustment_item.data(BAD_LUFS_HIGHLIGHT_ROLE):
-                        continue
-                    stored_value = adjustment_item.data(ADJUSTMENT_VALUE_ROLE)
-                    if isinstance(stored_value, (int, float)) and not isinstance(
-                        stored_value, bool
-                    ):
-                        value = float(stored_value)
-                    else:
-                        try:
-                            value = _parse_adjustment_display_text(adjustment_item.text())
-                        except ValueError as exc:
-                            raise ValueError(
-                                f"Invalid gain adjustment: {adjustment_item.text()!r}"
-                            ) from exc
-                    if not math.isfinite(value):
-                        raise ValueError(f"Invalid gain adjustment: {adjustment_item.text()!r}")
-                    patch_gain_deltas[snapshot_index] = value
+                    value = self._table_adjustment_value(adjustment_item)
+                    if value is not None:
+                        patch_gain_deltas[snapshot_index] = value
             snapshot_names[patch] = patch_snapshot_names
             gain_deltas[patch] = patch_gain_deltas
 
         return PatchFileAdjustments(preset_names, snapshot_names, gain_deltas)
+
+    def _iter_preset_rows(self) -> Iterator[tuple[int, str, QTableWidgetItem]]:
+        for row in range(self.table.rowCount()):
+            patch_item = self.table.item(row, 1)
+            preset_item = self.table.item(row, 2)
+            if patch_item is not None and preset_item is not None:
+                yield row, patch_item.text(), preset_item
+
+    def _iter_snapshot_adjustment_cells(
+        self, row: int
+    ) -> Iterator[tuple[int, QTableWidgetItem | None, QTableWidgetItem | None]]:
+        for snapshot_index in range(self.callbacks.snapshot_count()):
+            yield (
+                snapshot_index,
+                self.table.item(row, snapshot_name_column(snapshot_index)),
+                self.table.item(row, snapshot_adjustment_column(snapshot_index)),
+            )
+
+    def _validated_preset_name(self, item: QTableWidgetItem) -> str:
+        return self.callbacks.validate_helix_name(
+            item.text(),
+            self.callbacks.preset_name_max_length(),
+        )
+
+    def _validated_snapshot_name(self, item: QTableWidgetItem) -> str:
+        return self.callbacks.validate_helix_name(
+            item.text(),
+            self.callbacks.snapshot_name_max_length(),
+        )
+
+    def _table_adjustment_value(self, item: QTableWidgetItem) -> float | None:
+        if item.data(IGNORED_SNAPSHOT_ROLE) or item.data(BAD_LUFS_HIGHLIGHT_ROLE):
+            return None
+        stored_value = item.data(ADJUSTMENT_VALUE_ROLE)
+        if isinstance(stored_value, (int, float)) and not isinstance(stored_value, bool):
+            value = float(stored_value)
+        else:
+            value = self._parsed_adjustment_item_value(item)
+        if not math.isfinite(value):
+            raise ValueError(f"Invalid gain adjustment: {item.text()!r}")
+        return value
+
+    def _parsed_adjustment_item_value(self, item: QTableWidgetItem) -> float:
+        try:
+            return _parse_adjustment_display_text(item.text())
+        except ValueError as exc:
+            raise ValueError(f"Invalid gain adjustment: {item.text()!r}") from exc
 
     def preset_patches(self) -> list[str]:
         patches: list[str] = []
@@ -728,44 +747,61 @@ class PresetTableController:
         return True
 
     def preset_item_changed(self, item: QTableWidgetItem) -> None:
-        if item.data(PRESET_TABLE_ATTENTION_ROLE):
-            item.setData(PRESET_TABLE_ATTENTION_ROLE, None)
-            self.table.viewport().update(self.table.visualItemRect(item))
+        self._consume_attention_marker(item)
         if item.column() == 0:
-            self.callbacks.set_preset_ignore_reason(
-                item.row(),
-                item.checkState() != Qt.CheckState.Checked,
-            )
-            self.callbacks.refresh_preset_measurement_time_estimate()
-            self.callbacks.refresh_file_actions()
+            self._handle_checkbox_item_change(item)
         if Path(self.callbacks.input_path_text()).suffix.lower() == ".hlx" and item.column() == 1:
-            normalized = item.text().strip().upper()
-            if normalized != item.text():
-                signals_blocked = self.table.blockSignals(True)
-                try:
-                    item.setText(normalized)
-                finally:
-                    self.table.blockSignals(signals_blocked)
+            self._normalize_single_preset_patch_item(item)
             return
 
         if item.column() == 0 and item.checkState() != Qt.CheckState.Checked:
             self.callbacks.clear_preset_adjustments(item.row())
         elif self.manual_adjustments_enabled() and is_manual_adjustment_column(item.column()):
-            if item.column() == 2:
-                self._sanitize_item_text(item, self.callbacks.preset_name_max_length())
-            elif is_snapshot_name_column(item.column()):
-                self._snapshot_name_item_changed(item)
-            elif is_snapshot_adjustment_column(item.column()):
-                try:
-                    value = float(item.text())
-                except ValueError:
-                    return
-                self.set_adjustment_value(item, item.text(), value)
-            if (
-                self.preset_table_content_signature()
-                != self.callbacks.preset_table_clean_signature()
-            ):
+            if self._handle_manual_adjustment_item_change(item):
                 self.mark_preset_table_modified()
+
+    def _consume_attention_marker(self, item: QTableWidgetItem) -> None:
+        if not item.data(PRESET_TABLE_ATTENTION_ROLE):
+            return
+        item.setData(PRESET_TABLE_ATTENTION_ROLE, None)
+        self.table.viewport().update(self.table.visualItemRect(item))
+
+    def _handle_checkbox_item_change(self, item: QTableWidgetItem) -> None:
+        self.callbacks.set_preset_ignore_reason(
+            item.row(),
+            item.checkState() != Qt.CheckState.Checked,
+        )
+        self.callbacks.refresh_preset_measurement_time_estimate()
+        self.callbacks.refresh_file_actions()
+
+    def _normalize_single_preset_patch_item(self, item: QTableWidgetItem) -> None:
+        normalized = item.text().strip().upper()
+        if normalized != item.text():
+            signals_blocked = self.table.blockSignals(True)
+            try:
+                item.setText(normalized)
+            finally:
+                self.table.blockSignals(signals_blocked)
+
+    def _handle_manual_adjustment_item_change(self, item: QTableWidgetItem) -> bool:
+        if item.column() == 2:
+            self._sanitize_item_text(item, self.callbacks.preset_name_max_length())
+        elif is_snapshot_name_column(item.column()):
+            self._snapshot_name_item_changed(item)
+        elif is_snapshot_adjustment_column(item.column()):
+            if not self._handle_snapshot_adjustment_item_change(item):
+                return False
+        return (
+            self.preset_table_content_signature() != self.callbacks.preset_table_clean_signature()
+        )
+
+    def _handle_snapshot_adjustment_item_change(self, item: QTableWidgetItem) -> bool:
+        try:
+            value = float(item.text())
+        except ValueError:
+            return False
+        self.set_adjustment_value(item, item.text(), value)
+        return True
 
     def _snapshot_name_item_changed(self, item: QTableWidgetItem) -> None:
         self._sanitize_item_text(item, self.callbacks.snapshot_name_max_length())

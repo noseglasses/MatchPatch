@@ -9,6 +9,82 @@ from matchpatch.gui import app as gui_app
 from matchpatch.gui.app import configure_wslg_runtime
 
 
+class RecordingApplication:
+    calls = []
+
+    def __init__(self, argv) -> None:
+        self.argv = argv
+
+    def setApplicationName(self, name: str) -> None:
+        self.calls.append(("application_name", name))
+
+    def setApplicationDisplayName(self, name: str) -> None:
+        self.calls.append(("display_name", name))
+
+    def setDesktopFileName(self, name: str) -> None:
+        self.calls.append(("desktop_file", name))
+
+    def setWindowIcon(self, icon) -> None:
+        self.calls.append(("window_icon", icon))
+
+    def processEvents(self) -> None:
+        self.calls.append(("process_events",))
+
+    def exec(self) -> int:
+        self.calls.append(("exec",))
+        return 0
+
+
+class MaximizedWindow:
+    calls = []
+
+    def showMaximized(self) -> None:
+        self.calls.append(("show_maximized",))
+
+    def showFullScreen(self) -> None:
+        self.calls.append(("show_fullscreen",))
+
+    def show(self) -> None:
+        self.calls.append(("show",))
+
+
+class SmokeWindow:
+    calls = []
+
+    def showMaximized(self) -> None:
+        self.calls.append(("show_maximized",))
+
+    def show(self) -> None:
+        self.calls.append(("show",))
+
+    def close(self) -> None:
+        self.calls.append(("close",))
+
+
+def install_recording_gui(monkeypatch, calls, window_type) -> None:
+    RecordingApplication.calls = calls
+    window_type.calls = calls
+    monkeypatch.setattr(gui_app, "configure_wslg_runtime", lambda: calls.append(("wslg",)))
+    monkeypatch.setattr(gui_app, "configure_high_dpi_scaling", lambda: calls.append(("dpi",)))
+    monkeypatch.setattr(
+        gui_app,
+        "configure_gui_appearance",
+        lambda app: calls.append(("appearance", app)),
+    )
+    monkeypatch.setattr(gui_app, "register_desktop_entry", lambda: calls.append(("desktop",)))
+    monkeypatch.setattr(
+        gui_app, "qInstallMessageHandler", lambda handler: calls.append(("qt", handler))
+    )
+    monkeypatch.setattr(gui_app, "QApplication", RecordingApplication)
+    monkeypatch.setattr(gui_app, "QIcon", lambda path: path)
+    monkeypatch.setattr(gui_app, "MainWindow", window_type)
+    monkeypatch.setattr(
+        gui_app,
+        "install_terminal_interrupt_handler",
+        lambda app, window: calls.append(("interrupt", app, window)),
+    )
+
+
 def test_configure_wslg_runtime_uses_existing_runtime_socket(tmp_path, monkeypatch) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir()
@@ -200,60 +276,7 @@ def test_main_version_prints_version_without_starting_gui(monkeypatch, capsys) -
 
 def test_main_shows_window_maximized(monkeypatch) -> None:
     calls = []
-
-    class FakeApplication:
-        def __init__(self, argv) -> None:
-            self.argv = argv
-
-        def setApplicationName(self, name: str) -> None:
-            calls.append(("application_name", name))
-
-        def setApplicationDisplayName(self, name: str) -> None:
-            calls.append(("display_name", name))
-
-        def setDesktopFileName(self, name: str) -> None:
-            calls.append(("desktop_file", name))
-
-        def setWindowIcon(self, icon) -> None:
-            calls.append(("window_icon", icon))
-
-        def processEvents(self) -> None:
-            calls.append(("process_events",))
-
-        def exec(self) -> int:
-            calls.append(("exec",))
-            return 0
-
-    class FakeWindow:
-        def showMaximized(self) -> None:
-            calls.append(("show_maximized",))
-
-        def showFullScreen(self) -> None:
-            calls.append(("show_fullscreen",))
-
-        def show(self) -> None:
-            calls.append(("show",))
-
-    monkeypatch.setattr(gui_app, "configure_wslg_runtime", lambda: calls.append(("wslg",)))
-    monkeypatch.setattr(gui_app, "configure_high_dpi_scaling", lambda: calls.append(("dpi",)))
-    monkeypatch.setattr(
-        gui_app,
-        "configure_gui_appearance",
-        lambda app: calls.append(("appearance", app)),
-    )
-    monkeypatch.setattr(gui_app, "register_desktop_entry", lambda: calls.append(("desktop",)))
-    monkeypatch.setattr(
-        gui_app, "qInstallMessageHandler", lambda handler: calls.append(("qt", handler))
-    )
-    monkeypatch.setattr(gui_app, "QApplication", FakeApplication)
-    monkeypatch.setattr(gui_app, "QIcon", lambda path: path)
-    monkeypatch.setattr(gui_app, "MainWindow", FakeWindow)
-    monkeypatch.setattr(
-        gui_app,
-        "install_terminal_interrupt_handler",
-        lambda app, window: calls.append(("interrupt", app, window)),
-    )
-
+    install_recording_gui(monkeypatch, calls, MaximizedWindow)
     monkeypatch.delenv(gui_app.GUI_SMOKE_ENV, raising=False)
 
     try:
@@ -278,60 +301,8 @@ def test_main_shows_window_maximized(monkeypatch) -> None:
 
 def test_main_smoke_mode_processes_events_and_exits(monkeypatch) -> None:
     calls = []
-
-    class FakeApplication:
-        def __init__(self, argv) -> None:
-            self.argv = argv
-
-        def setApplicationName(self, name: str) -> None:
-            calls.append(("application_name", name))
-
-        def setApplicationDisplayName(self, name: str) -> None:
-            calls.append(("display_name", name))
-
-        def setDesktopFileName(self, name: str) -> None:
-            calls.append(("desktop_file", name))
-
-        def setWindowIcon(self, icon) -> None:
-            calls.append(("window_icon", icon))
-
-        def processEvents(self) -> None:
-            calls.append(("process_events",))
-
-        def exec(self) -> int:
-            calls.append(("exec",))
-            return 0
-
-    class FakeWindow:
-        def showMaximized(self) -> None:
-            calls.append(("show_maximized",))
-
-        def show(self) -> None:
-            calls.append(("show",))
-
-        def close(self) -> None:
-            calls.append(("close",))
-
     monkeypatch.setenv(gui_app.GUI_SMOKE_ENV, "1")
-    monkeypatch.setattr(gui_app, "configure_wslg_runtime", lambda: calls.append(("wslg",)))
-    monkeypatch.setattr(gui_app, "configure_high_dpi_scaling", lambda: calls.append(("dpi",)))
-    monkeypatch.setattr(
-        gui_app,
-        "configure_gui_appearance",
-        lambda app: calls.append(("appearance", app)),
-    )
-    monkeypatch.setattr(gui_app, "register_desktop_entry", lambda: calls.append(("desktop",)))
-    monkeypatch.setattr(
-        gui_app, "qInstallMessageHandler", lambda handler: calls.append(("qt", handler))
-    )
-    monkeypatch.setattr(gui_app, "QApplication", FakeApplication)
-    monkeypatch.setattr(gui_app, "QIcon", lambda path: path)
-    monkeypatch.setattr(gui_app, "MainWindow", FakeWindow)
-    monkeypatch.setattr(
-        gui_app,
-        "install_terminal_interrupt_handler",
-        lambda app, window: calls.append(("interrupt", app, window)),
-    )
+    install_recording_gui(monkeypatch, calls, SmokeWindow)
 
     try:
         gui_app.main()

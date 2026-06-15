@@ -118,27 +118,54 @@ def failure_presentation(
     message = "No suitable device connected."
     detail = detail.strip()
     selected_values = _format_hardware_check_request_details(request)
-    log_entries: list[tuple[str, str]] = []
-    if checks:
-        failed_checks = [check for check in checks if check.status == "fail"]
-        for check in failed_checks:
-            log_entries.append((f"Hardware check failed: {check.summary}", "error"))
-            if check.detail:
-                log_entries.append((f"Hardware check detail: {check.detail}", "info"))
-        for check in checks:
-            if check.status == "warning":
-                log_entries.append((f"Hardware check warning: {check.summary}", "warning"))
-                if check.detail:
-                    log_entries.append((f"Hardware check detail: {check.detail}", "info"))
-        if selected_values:
-            log_entries.append((f"Hardware check selected values: {selected_values}", "info"))
-        summary = summarize_failed_checks(checks)
-    else:
-        log_entries.append((f"{message} {detail}".strip(), "error"))
-        if selected_values:
-            log_entries.append((f"Hardware check selected values: {selected_values}", "info"))
-        summary = detail
+    log_entries = _failure_log_entries(checks, detail, message, selected_values)
+    summary = summarize_failed_checks(checks) if checks else detail
+    popup_message = _failure_popup_message(message, checks, detail, summary)
+    return HardwareCheckFailurePresentation(
+        popup_message=popup_message,
+        log_entries=tuple(log_entries),
+    )
 
+
+def _failure_log_entries(
+    checks: Sequence[DiagnosticCheck],
+    detail: str,
+    message: str,
+    selected_values: str,
+) -> list[tuple[str, str]]:
+    if checks:
+        return _structured_failure_log_entries(checks, selected_values)
+    entries = [(f"{message} {detail}".strip(), "error")]
+    if selected_values:
+        entries.append((f"Hardware check selected values: {selected_values}", "info"))
+    return entries
+
+
+def _structured_failure_log_entries(
+    checks: Sequence[DiagnosticCheck],
+    selected_values: str,
+) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for check in checks:
+        if check.status == "fail":
+            entries.append((f"Hardware check failed: {check.summary}", "error"))
+            if check.detail:
+                entries.append((f"Hardware check detail: {check.detail}", "info"))
+        elif check.status == "warning":
+            entries.append((f"Hardware check warning: {check.summary}", "warning"))
+            if check.detail:
+                entries.append((f"Hardware check detail: {check.detail}", "info"))
+    if selected_values:
+        entries.append((f"Hardware check selected values: {selected_values}", "info"))
+    return entries
+
+
+def _failure_popup_message(
+    message: str,
+    checks: Sequence[DiagnosticCheck],
+    detail: str,
+    summary: str,
+) -> str:
     popup_message = f"{message}\n\nConnect a compatible audio processor and try again."
     if summary:
         popup_message = f"{popup_message}\n\n{summary}"
@@ -149,10 +176,7 @@ def failure_presentation(
         f"{popup_message}\n\nRun Preflight check or export a diagnostic bundle "
         "for more troubleshooting context."
     )
-    return HardwareCheckFailurePresentation(
-        popup_message=popup_message,
-        log_entries=tuple(log_entries),
-    )
+    return popup_message
 
 
 __all__ = [

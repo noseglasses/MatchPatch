@@ -65,6 +65,9 @@ jobs:
       - name: Ruff format check
         run: uv run --frozen --no-default-groups --group wsl --extra gui ruff format --check .
 
+      - name: Maintainability budgets
+        run: uv run --frozen --no-default-groups --group wsl --extra gui python scripts/check_maintainability.py
+
       - name: ty
         run: uv run --frozen --no-default-groups --group wsl --extra gui ty check
 
@@ -103,6 +106,7 @@ jobs:
           uv sync --locked --no-default-groups --group wsl --extra gui
           uv run --frozen --no-default-groups --group wsl --extra gui ruff check .
           uv run --frozen --no-default-groups --group wsl --extra gui ruff format --check .
+          uv run --frozen --no-default-groups --group wsl --extra gui python scripts/check_maintainability.py
           uv run --frozen --no-default-groups --group wsl --extra gui ty check
           uv run --frozen --no-default-groups --group wsl --extra gui pytest
 

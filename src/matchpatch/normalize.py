@@ -700,67 +700,38 @@ def _run_progress_command(
     on_progress: Callable[[ProgressEvent], None],
     cancel_requested: Callable[[], bool] | None = None,
 ) -> None:
-    process = subprocess.Popen(  # noqa: S603
-        [str(arg) for arg in command],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=1,
-    )
-    lines: queue.Queue[tuple[str, str] | None] = queue.Queue()
+    process = _start_process(command)
 
-    def read_stream(name: str) -> None:
-        stream = getattr(process, name)
-        assert stream is not None
+    def parse_stdout(text: str) -> None:
+        try:
+            on_progress(ProgressEvent.from_json(text))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Invalid progress output from native Windows analysis: {text}"
+            ) from exc
 
-        for line in stream:
-            lines.put((name, line))
-
-        lines.put(None)
-
-    threading.Thread(target=read_stream, args=("stdout",), daemon=True).start()
-    threading.Thread(target=read_stream, args=("stderr",), daemon=True).start()
-    deadline = time.monotonic() + timeout if timeout is not None else None
-    open_streams = 2
+    def parse_stderr(text: str) -> None:
+        on_progress(ProgressEvent("error_log", message=text.rstrip()))
 
     try:
-        while open_streams or process.poll() is None:
-            if cancel_requested is not None and cancel_requested():
-                raise RuntimeError("Normalization cancelled by user")
-
-            if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError("Timed out waiting for native Windows analysis")
-
-            try:
-                line = lines.get(timeout=0.1)
-            except queue.Empty:
-                continue
-
-            if line is None:
-                open_streams -= 1
-                continue
-
-            stream_name, text = line
-            if stream_name == "stderr":
-                on_progress(ProgressEvent("error_log", message=text.rstrip()))
-                continue
-
-            try:
-                on_progress(ProgressEvent.from_json(text))
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"Invalid progress output from native Windows analysis: {text}"
-                ) from exc
-
-        return_code = process.wait()
-
-        if return_code:
-            raise subprocess.CalledProcessError(return_code, [str(arg) for arg in command])
+        _read_progress_lines(
+            process,
+            timeout,
+            cancel_requested,
+            "Normalization cancelled by user",
+            "Timed out waiting for native Windows analysis",
+            parse_stdout,
+            parse_stderr,
+        )
+        _finish_progress_process(
+            process,
+            command,
+            lambda return_code: subprocess.CalledProcessError(
+                return_code, [str(arg) for arg in command]
+            ),
+        )
     finally:
-        if process.poll() is None:
-            cleanup = threading.Thread(target=_kill_process, args=(process,), daemon=True)
-            cleanup.start()
-            cleanup.join(PROCESS_REAP_TIMEOUT_SECONDS)
+        _cleanup_progress_process(process)
 
 
 def _run_optimization_progress_command(
@@ -769,6 +740,44 @@ def _run_optimization_progress_command(
     on_progress: Callable[[OptimizationProgress], None],
     cancel_requested: Callable[[], bool] | None = None,
 ) -> str:
+    process = _start_process(command)
+    result_toml = ""
+    error_lines: list[str] = []
+
+    def parse_stdout(text: str) -> None:
+        nonlocal result_toml
+        event = _parse_optimization_progress(text)
+        if event.result_toml is not None:
+            result_toml = event.result_toml
+        on_progress(event)
+
+    def parse_stderr(text: str) -> None:
+        stripped = text.rstrip()
+        if stripped:
+            error_lines.append(stripped)
+
+    try:
+        _read_progress_lines(
+            process,
+            timeout,
+            cancel_requested,
+            "Measurement optimization cancelled by user",
+            "Timed out waiting for native Windows optimization",
+            parse_stdout,
+            parse_stderr,
+        )
+        _finish_progress_process(
+            process,
+            command,
+            lambda return_code: _optimization_progress_error(return_code, error_lines),
+        )
+    finally:
+        _cleanup_progress_process(process)
+
+    return result_toml
+
+
+def _start_process(command: list[object]) -> subprocess.Popen[str]:
     process = subprocess.Popen(  # noqa: S603
         [str(arg) for arg in command],
         text=True,
@@ -776,72 +785,118 @@ def _run_optimization_progress_command(
         stderr=subprocess.PIPE,
         bufsize=1,
     )
+    return process
+
+
+def _read_progress_lines(
+    process: subprocess.Popen[str],
+    timeout: float | None,
+    cancel_requested: Callable[[], bool] | None,
+    cancel_message: str,
+    timeout_message: str,
+    parse_stdout: Callable[[str], None],
+    parse_stderr: Callable[[str], None],
+) -> None:
     lines: queue.Queue[tuple[str, str] | None] = queue.Queue()
-    result_toml = ""
-
-    def read_stream(name: str) -> None:
-        stream = getattr(process, name)
-        assert stream is not None
-
-        for line in stream:
-            lines.put((name, line))
-
-        lines.put(None)
-
-    threading.Thread(target=read_stream, args=("stdout",), daemon=True).start()
-    threading.Thread(target=read_stream, args=("stderr",), daemon=True).start()
+    _start_progress_readers(process, lines)
     deadline = time.monotonic() + timeout if timeout is not None else None
     open_streams = 2
-    error_lines: list[str] = []
 
+    while open_streams or process.poll() is None:
+        _raise_if_progress_cancelled(cancel_requested, cancel_message)
+        _raise_if_progress_timed_out(deadline, timeout_message)
+
+        try:
+            line = lines.get(timeout=0.1)
+        except queue.Empty:
+            continue
+
+        if line is None:
+            open_streams -= 1
+            continue
+
+        stream_name, text = line
+        if stream_name == "stderr":
+            parse_stderr(text)
+        else:
+            parse_stdout(text)
+
+
+def _start_progress_readers(
+    process: subprocess.Popen[str],
+    lines: queue.Queue[tuple[str, str] | None],
+) -> None:
+    threading.Thread(
+        target=_read_process_stream,
+        args=(process, "stdout", lines),
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=_read_process_stream,
+        args=(process, "stderr", lines),
+        daemon=True,
+    ).start()
+
+
+def _read_process_stream(
+    process: subprocess.Popen[str],
+    name: str,
+    lines: queue.Queue[tuple[str, str] | None],
+) -> None:
+    stream = getattr(process, name)
+    assert stream is not None
+
+    for line in stream:
+        lines.put((name, line))
+
+    lines.put(None)
+
+
+def _raise_if_progress_cancelled(
+    cancel_requested: Callable[[], bool] | None,
+    message: str,
+) -> None:
+    if cancel_requested is not None and cancel_requested():
+        raise RuntimeError(message)
+
+
+def _raise_if_progress_timed_out(deadline: float | None, message: str) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError(message)
+
+
+def _finish_progress_process(
+    process: subprocess.Popen[str],
+    command: list[object],
+    error_factory: Callable[[int], BaseException],
+) -> None:
+    return_code = process.wait()
+    if return_code:
+        raise error_factory(return_code)
+
+
+def _parse_optimization_progress(text: str) -> OptimizationProgress:
     try:
-        while open_streams or process.poll() is None:
-            if cancel_requested is not None and cancel_requested():
-                raise RuntimeError("Measurement optimization cancelled by user")
+        return OptimizationProgress.from_json(text)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Invalid progress output from native Windows optimization: {text}"
+        ) from exc
 
-            if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError("Timed out waiting for native Windows optimization")
 
-            try:
-                line = lines.get(timeout=0.1)
-            except queue.Empty:
-                continue
+def _optimization_progress_error(return_code: int, error_lines: list[str]) -> RuntimeError:
+    detail = "\n".join(error_lines).strip()
+    if detail:
+        return RuntimeError(detail)
+    return RuntimeError(f"Native Windows optimization failed with exit status {return_code}")
 
-            if line is None:
-                open_streams -= 1
-                continue
 
-            stream_name, text = line
-            if stream_name == "stderr":
-                stripped = text.rstrip()
-                if stripped:
-                    error_lines.append(stripped)
-                continue
-
-            try:
-                event = OptimizationProgress.from_json(text)
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"Invalid progress output from native Windows optimization: {text}"
-                ) from exc
-            if event.result_toml is not None:
-                result_toml = event.result_toml
-            on_progress(event)
-
-        return_code = process.wait()
-
-        if return_code:
-            detail = "\n".join(error_lines).strip()
-            if detail:
-                raise RuntimeError(detail)
-            raise RuntimeError(f"Native Windows optimization failed with exit status {return_code}")
-    finally:
-        if process.poll() is None:
-            cleanup = threading.Thread(target=_kill_process, args=(process,), daemon=True)
-            cleanup.start()
-            cleanup.join(PROCESS_REAP_TIMEOUT_SECONDS)
-
-    return result_toml
+def _cleanup_progress_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    cleanup = threading.Thread(target=_kill_process, args=(process,), daemon=True)
+    cleanup.start()
+    cleanup.join(PROCESS_REAP_TIMEOUT_SECONDS)
 
 
 def _kill_process(process: subprocess.Popen[str]) -> None:

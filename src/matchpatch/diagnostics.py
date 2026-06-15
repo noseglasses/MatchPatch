@@ -341,27 +341,42 @@ def _detail_text_to_dict(detail: str) -> dict[str, JsonValue]:
 def _parse_detail_value(value: str) -> JsonValue:
     if value == "None":
         return None
-    if value.startswith("[") or value.startswith("{"):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            pass
-        else:
-            return _json_ready_value(parsed)
-    if value.startswith("(") and value.endswith(")"):
-        items = [item.strip() for item in value[1:-1].split(",") if item.strip()]
-        return [_parse_detail_value(item) for item in items]
-    if value.startswith("[") and value.endswith("]"):
-        items = [item.strip() for item in value[1:-1].split(",") if item.strip()]
-        return [_parse_detail_value(item) for item in items]
+    parsed = _parse_json_detail_value(value)
+    if parsed is not None:
+        return parsed
+    parsed = _parse_sequence_detail_value(value)
+    if parsed is not None:
+        return parsed
+    return _parse_numeric_detail_value(value)
+
+
+def _parse_json_detail_value(value: str) -> JsonValue | None:
+    if not value.startswith(("[", "{")):
+        return None
+    try:
+        return _json_ready_value(json.loads(value))
+    except json.JSONDecodeError:
+        return None
+
+
+def _parse_sequence_detail_value(value: str) -> list[JsonValue] | None:
+    if not (
+        (value.startswith("(") and value.endswith(")"))
+        or (value.startswith("[") and value.endswith("]"))
+    ):
+        return None
+    items = [item.strip() for item in value[1:-1].split(",") if item.strip()]
+    return [_parse_detail_value(item) for item in items]
+
+
+def _parse_numeric_detail_value(value: str) -> JsonValue:
     try:
         return int(value)
     except ValueError:
-        pass
-    try:
-        return float(value)
-    except ValueError:
-        return value
+        try:
+            return float(value)
+        except ValueError:
+            return value
 
 
 @dataclass(frozen=True)
@@ -661,6 +676,32 @@ def _summarize_csv_data(csv_path: Path, snapshot_count: int | None = None) -> Cs
     except OSError as exc:
         return CsvSummary(path=path_text, exists=True, error=str(exc))
 
+    lufs_columns, values, missing_lufs_count, bad_lufs_count = _count_csv_loudness_cells(
+        headers, rows
+    )
+    preset_ids, device_patches = _summarize_csv_identifiers(rows)
+
+    return CsvSummary(
+        path=path_text,
+        exists=True,
+        headers=headers,
+        row_count=len(rows),
+        preset_ids=preset_ids,
+        device_patches=device_patches,
+        lufs_columns=lufs_columns,
+        valid_lufs_count=len(values),
+        missing_lufs_count=missing_lufs_count,
+        bad_lufs_count=bad_lufs_count,
+        lufs_min=min(values) if values else None,
+        lufs_max=max(values) if values else None,
+        lufs_average=(sum(values) / len(values)) if values else None,
+    )
+
+
+def _count_csv_loudness_cells(
+    headers: tuple[str, ...],
+    rows: list[dict[str, str]],
+) -> tuple[tuple[str, ...], list[float], int, int]:
     lufs_columns = tuple(header for header in headers if _is_lufs_column(header))
     values: list[float] = []
     missing_lufs_count = 0
@@ -672,32 +713,29 @@ def _summarize_csv_data(csv_path: Path, snapshot_count: int | None = None) -> Cs
             if raw_value is None or raw_value.strip() == "":
                 missing_lufs_count += 1
                 continue
-            try:
-                value = float(raw_value)
-            except ValueError:
+            value = _finite_float_or_none(raw_value)
+            if value is None:
                 bad_lufs_count += 1
-                continue
-            if not math.isfinite(value):
-                bad_lufs_count += 1
-                continue
-            values.append(value)
+            else:
+                values.append(value)
 
-    return CsvSummary(
-        path=path_text,
-        exists=True,
-        headers=headers,
-        row_count=len(rows),
-        preset_ids=_unique_text(row.get("Preset") for row in rows),
-        device_patches=_unique_text(
-            row.get("DevicePatch") or row.get("HelixPreset") for row in rows
-        )[:50],
-        lufs_columns=lufs_columns,
-        valid_lufs_count=len(values),
-        missing_lufs_count=missing_lufs_count,
-        bad_lufs_count=bad_lufs_count,
-        lufs_min=min(values) if values else None,
-        lufs_max=max(values) if values else None,
-        lufs_average=(sum(values) / len(values)) if values else None,
+    return lufs_columns, values, missing_lufs_count, bad_lufs_count
+
+
+def _finite_float_or_none(value: str) -> float | None:
+    try:
+        result = float(value)
+    except ValueError:
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _summarize_csv_identifiers(
+    rows: list[dict[str, str]],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    return (
+        _unique_text(row.get("Preset") for row in rows),
+        _unique_text(row.get("DevicePatch") or row.get("HelixPreset") for row in rows)[:50],
     )
 
 

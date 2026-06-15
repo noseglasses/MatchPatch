@@ -257,36 +257,13 @@ def request_with_preset_table_selection(
     preset_set = request.preset_set
     progress_plan = context.measurement_progress_plan_for_request(request)
     if has_unchecked_presets or has_ignored_snapshots:
-        if Path(context.input_path).suffix.lower() == ".hlx":
-            candidate_rows = [0] if context.row_count else []
-        elif has_unchecked_presets:
-            candidate_rows = sorted(context.checked_rows)
-        else:
-            candidate_rows = list(range(context.row_count))
-        selected_patches = []
-        preset_snapshots = []
-        for row in candidate_rows:
-            patch = context.patch_at_row(row)
-            if patch is None:
-                continue
-            patch = patch.strip().upper()
-            if not patch:
-                continue
-            selected_patches.append(patch)
-            measurable_snapshots = context.row_measured_snapshot_indexes(row)
-            snapshots = (
-                tuple(
-                    snapshot
-                    for snapshot in comparison_snapshot_plan.get(patch, ())
-                    if snapshot in measurable_snapshots
-                )
-                if comparison_snapshot_plan is not None
-                else measurable_snapshots
-            )
-            if snapshots:
-                preset_snapshots.append((patch, snapshots))
-        if selected_patches:
-            preset_set = ",".join(selected_patches)
+        candidate_rows = selected_candidate_rows(
+            context, has_unchecked_presets, has_ignored_snapshots
+        )
+        selected_patches, preset_snapshots = selected_patch_snapshots(
+            context, candidate_rows, comparison_snapshot_plan
+        )
+        preset_set = preset_set_from_selected_patches(selected_patches) or preset_set
         progress_plan = (
             context.progress_plan_factory(tuple(preset_snapshots)) if preset_snapshots else None
         )
@@ -303,6 +280,69 @@ def request_with_preset_table_selection(
     if preset_set == request.preset_set and snapshot_plan == request.snapshot_plan:
         return request
     return replace(request, preset_set=preset_set, snapshot_plan=snapshot_plan)
+
+
+def selected_candidate_rows(
+    context: PresetTableSelectionContext,
+    has_unchecked_presets: bool,
+    has_ignored_snapshots: bool,
+) -> list[int]:
+    if Path(context.input_path).suffix.lower() == ".hlx":
+        return [0] if context.row_count else []
+    if has_unchecked_presets:
+        return sorted(context.checked_rows)
+    if has_ignored_snapshots:
+        return list(range(context.row_count))
+    return []
+
+
+def selected_patch_snapshots(
+    context: PresetTableSelectionContext,
+    candidate_rows: Sequence[int],
+    comparison_snapshot_plan: dict[str, tuple[int, ...]] | None,
+) -> tuple[list[str], list[tuple[str, tuple[int, ...]]]]:
+    selected_patches: list[str] = []
+    preset_snapshots: list[tuple[str, tuple[int, ...]]] = []
+    for row in candidate_rows:
+        patch = _normalized_patch_at_row(context, row)
+        if patch is None:
+            continue
+        selected_patches.append(patch)
+        snapshots = _selected_row_snapshots(context, row, patch, comparison_snapshot_plan)
+        if snapshots:
+            preset_snapshots.append((patch, snapshots))
+    return selected_patches, preset_snapshots
+
+
+def preset_set_from_selected_patches(selected_patches: Sequence[str]) -> str | None:
+    return ",".join(selected_patches) if selected_patches else None
+
+
+def _normalized_patch_at_row(
+    context: PresetTableSelectionContext,
+    row: int,
+) -> str | None:
+    patch = context.patch_at_row(row)
+    if patch is None:
+        return None
+    patch = patch.strip().upper()
+    return patch or None
+
+
+def _selected_row_snapshots(
+    context: PresetTableSelectionContext,
+    row: int,
+    patch: str,
+    comparison_snapshot_plan: dict[str, tuple[int, ...]] | None,
+) -> tuple[int, ...]:
+    measurable_snapshots = context.row_measured_snapshot_indexes(row)
+    if comparison_snapshot_plan is None:
+        return measurable_snapshots
+    return tuple(
+        snapshot
+        for snapshot in comparison_snapshot_plan.get(patch, ())
+        if snapshot in measurable_snapshots
+    )
 
 
 def diagnostic_request(

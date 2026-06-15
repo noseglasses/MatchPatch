@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import math
 import re
 import tempfile
@@ -52,11 +51,9 @@ from PySide6.QtWidgets import (
 
 from matchpatch.config import (
     Config,
-    config_value,
     default_config,
     default_config_path,
     export_config,
-    load_config,
 )
 from matchpatch.custom_adjustments import CustomAdjustments, load_custom_adjustments_file
 from matchpatch.devices import get_device_profile, list_device_profiles
@@ -105,6 +102,10 @@ from matchpatch.gui.icons import (
     _visible_tooltip_position,
 )
 from matchpatch.gui.log_panel import GuiLogController
+from matchpatch.gui.main_window_callbacks import (
+    MainWindowPresetTableCallbacks,
+    MainWindowSaveCallbacks,
+)
 from matchpatch.gui.measurement_optimization import (
     MeasurementOptimizationDialog,
     MeasurementOptimizationSettings,
@@ -119,11 +120,7 @@ from matchpatch.gui.normalization_workflow import NormalizationWorkflowControlle
 from matchpatch.gui.optimization_workflow import MeasurementOptimizationWorkflowController
 from matchpatch.gui.playback import AudioPlaybackWorker
 from matchpatch.gui.preset_table import (
-    PresetTableCallbacks,
     _PresetSelectionState,
-    refresh_adjustment_cell_widget,
-    refresh_preset_cell_widget_background,
-    refresh_preset_item_background,
     refresh_snapshot_name_cell_widget,
     snapshot_name_column,
 )
@@ -150,11 +147,9 @@ from matchpatch.gui.results import (
     snapshot_measurement_failure_display,
 )
 from matchpatch.gui.save_workflow import (
-    SaveCallbacks,
     SaveCancelled,
     SaveContext,
     SaveWorkflow,
-    create_table_save_csv,
 )
 from matchpatch.gui.table_formatting import (
     sanitize_helix_name,
@@ -189,7 +184,9 @@ from matchpatch.gui.window_layout import (
     build_retained_csv,
     build_toolbar,
 )
+from matchpatch.gui.window_loading import WindowLoadingController
 from matchpatch.gui.window_state import (
+    FileActionState,
     active_file_title,
     file_action_state,
     recent_file_items,
@@ -205,7 +202,6 @@ from matchpatch.gui.worker import (
 from matchpatch.measurement_optimizer import (
     OptimizationProgress,
 )
-from matchpatch.normalize import apply_config, parse_args
 from matchpatch.progress import ProgressEvent
 from matchpatch.workflow import (
     ImportRequest,
@@ -243,139 +239,6 @@ PHASE_ICON = {
     "cancelling": QStyle.StandardPixmap.SP_MessageBoxWarning,
     "normalization_cancelled_by_user": QStyle.StandardPixmap.SP_MessageBoxWarning,
 }
-
-
-class _MainWindowSaveCallbacks(SaveCallbacks):
-    def __init__(self, window: MainWindow) -> None:
-        self._window = window
-
-    def confirm_overwrite(self, output_path: Path) -> bool:
-        return self._window._confirm_overwrite(output_path)
-
-    def create_table_save_csv(self, directory: Path) -> Path:
-        return create_table_save_csv(
-            directory,
-            snapshot_count=self._window.snapshot_count,
-            patches=self._window.preset_table_controller.preset_patches(),
-            target_lufs=self._window.target_lufs.text(),
-        )
-
-    def table_adjustments(self) -> PatchFileAdjustments:
-        return self._window._table_adjustments()
-
-    def update_progress(self, event: ProgressEvent) -> None:
-        self._window.update_progress(event)
-
-
-class _MainWindowPresetTableCallbacks(PresetTableCallbacks):
-    def __init__(self, window: MainWindow) -> None:
-        self._window = window
-
-    def snapshot_count_for_estimate(self) -> int:
-        return self._window._snapshot_count_for_estimate()
-
-    def snapshot_count(self) -> int:
-        return self._window.snapshot_count
-
-    def input_path_text(self) -> str:
-        return self._window.input_path.text()
-
-    def validate_helix_name(self, name: str, max_length: int | None = None) -> str:
-        return self._window._validate_helix_name(name, max_length)
-
-    def preset_name_max_length(self) -> int | None:
-        return self._window._preset_name_max_length()
-
-    def snapshot_name_max_length(self) -> int | None:
-        return self._window._snapshot_name_max_length()
-
-    def preset_table_csv_row(self, row: int) -> list[str]:
-        return preset_table_csv_row(
-            self._window.preset_table,
-            row,
-            self._window.snapshot_count,
-        )
-
-    def preset_table_clean_signature(self) -> tuple[tuple[str, ...], ...]:
-        return self._window._preset_table_clean_signature
-
-    def preset_row(self, patch: str) -> int | None:
-        return self._window._preset_row(patch)
-
-    def refresh_preset_measurement_time_estimate(self) -> None:
-        self._window._refresh_preset_measurement_time_estimate()
-
-    def refresh_file_actions(self) -> None:
-        self._window._refresh_file_actions()
-
-    def preset_table_modified_changed(self, modified: bool) -> None:
-        self._window._preset_table_modified = modified
-
-    def clear_manual_name_modified_highlights(self) -> None:
-        self._window.preset_table_controller.clear_manual_name_modified_highlights()
-
-    def manual_adjustments_checked(self) -> bool:
-        return (
-            hasattr(self._window, "manual_adjustments")
-            and self._window.manual_adjustments.isChecked()
-        )
-
-    def set_preset_ignore_reason(self, row: int, active: bool) -> None:
-        self._window.preset_table_controller.set_preset_ignore_reason(row, active)
-
-    def clear_preset_adjustments(self, row: int) -> None:
-        self._window.preset_table_controller.clear_preset_adjustments(row)
-
-    def refresh_adjustment_cell_widget(self, item: QTableWidgetItem) -> None:
-        refresh_adjustment_cell_widget(item)
-
-    def refresh_snapshot_name_cell_widget(self, item: QTableWidgetItem) -> None:
-        refresh_snapshot_name_cell_widget(
-            item,
-            ignore_reason_icons=self._window._ignore_reason_icons,
-            speaker_icon=self._window._speaker_icon,
-            normalization_in_progress=self._window._normalization_in_progress,
-            play_recording=self._window._play_recording,
-        )
-
-    def set_snapshot_ignore_reason(
-        self,
-        row: int,
-        snapshot_index: int,
-        reason: str,
-        active: bool,
-    ) -> None:
-        self._window.preset_table_controller.set_snapshot_ignore_reason(
-            row, snapshot_index, reason, active
-        )
-
-    def is_solo_snapshot_name(self, name: str) -> bool:
-        try:
-            solo_pattern = re.compile(normalize_regex_pattern(self._window.solo_regex.text()))
-        except re.error:
-            return False
-        return solo_pattern.search(name) is not None
-
-    def is_ignored_snapshot_name(self, name: str) -> bool:
-        try:
-            ignore_pattern = re.compile(
-                normalize_regex_pattern(self._window.ignore_snapshot_regex.text())
-            )
-        except re.error:
-            return False
-        return ignore_pattern.search(name) is not None
-
-    def refresh_measurement_time_estimate(self) -> None:
-        self._window._refresh_measurement_time_estimate()
-
-    def refresh_preset_item_background(self, item: QTableWidgetItem) -> None:
-        refresh_preset_item_background(item)
-
-    def refresh_preset_cell_widget_background(self, item: QTableWidgetItem) -> None:
-        refresh_preset_cell_widget_background(item)
-
-    def show_error(self, message: str) -> None:
-        self._window.show_error(message)
 
 
 class MainWindow(QMainWindow):
@@ -419,6 +282,7 @@ class MainWindow(QMainWindow):
             summary_formatter=snapshot_to_text,
             progress_formatter=progress_event_to_dict,
         )
+        self.loading_controller = WindowLoadingController(self)
         self.normalization_controller = NormalizationWorkflowController(
             self,
             worker_type=NormalizationWorker,
@@ -499,7 +363,7 @@ class MainWindow(QMainWindow):
         return build_preset_advanced_splitter(self)
 
     def _build_presets(self) -> QWidget:
-        return build_presets(self, _MainWindowPresetTableCallbacks(self))
+        return build_presets(self, MainWindowPresetTableCallbacks(self))
 
     def _build_preset_empty_state(self) -> QWidget:
         return build_preset_empty_state(self)
@@ -1269,128 +1133,17 @@ class MainWindow(QMainWindow):
         self.custom_adjustments_path.setText(path)
 
     def device_changed(self) -> None:
-        name = self.device.currentData()
-        panel = self.device_panels.get(name)
-        if panel is not None:
-            self.device_stack.setCurrentWidget(panel)
-        self.load_defaults()
+        self.loading_controller.device_changed()
 
     def backend_changed(self) -> None:
-        self._refresh_backend_tooltip()
-        if not self._loading_defaults:
-            self._available_backend = None
+        self.loading_controller.backend_changed()
 
     def _refresh_backend_tooltip(self) -> None:
-        if self.backend.currentText() == "loopback":
-            self.device_settings.setToolTip(
-                "Audio and MIDI settings are editable but unused by the loopback backend."
-            )
-        else:
-            self.device_settings.setToolTip("")
+        self.loading_controller.refresh_backend_tooltip()
 
     def load_defaults(self) -> None:
-        if not self.device.currentData():
-            return
-
-        try:
-            config = load_config(self.config_path.text().strip() or None)
-            self._loading_defaults = True
-            try:
-                self.backend.setCurrentText(
-                    config_value(config, "normalize", "backend", default="hardware")
-                )
-            finally:
-                self._loading_defaults = False
-            args = apply_config(
-                parse_args(GuiSettingsBinder.from_widgets(self).base_argv("placeholder.hls"))
-            )
-        except Exception as exc:  # noqa: BLE001
-            self.show_error(str(exc))
-            return
-
-        self._loading_defaults = True
-        try:
-            self.backend.setCurrentText(args.backend)
-        finally:
-            self._loading_defaults = False
-        self.reference_di.setText(str(args.reference_di))
-        self.custom_adjustments_path.setText(
-            str(args.custom_adjustments_file) if args.custom_adjustments_file else ""
-        )
-        self.target_lufs.setText(str(args.target_lufs))
-        self.solo_gain_bump_db.setText(str(args.policy.solo_gain_bump_db))
-        self.solo_regex.setText(args.policy.solo_regex)
-        self.ignore_snapshot_regex.setText(args.policy.ignore_snapshot_regex)
-        self.analysis_window.setText(str(args.analysis_options.window_seconds))
-        self.analysis_interval.setText(str(args.analysis_options.interval_seconds))
-        self._optimization_stability_runs = int(
-            config_value(config, "measurement", "stability_runs", default=3)
-        )
-        self._optimization_termination_tolerance = float(
-            config_value(
-                config,
-                "measurement",
-                "termination_tolerance_percent",
-                default=10.0,
-            )
-        )
-        self._optimization_stability_tolerance = float(
-            config_value(
-                config,
-                "measurement",
-                "stability_tolerance_percent",
-                default=2.0,
-            )
-        )
-        profile = get_device_profile(args.device)
-        self.snapshot_count_input.setMaximum(getattr(profile, "max_snapshot_count", None) or 999)
-        self.snapshot_count_input.setValue(args.policy.snapshot_count)
-        panel = self.device_panels.get(args.device)
-        if panel is not None:
-            panel.populate(args)
-        device_steering = ("devices", args.device, "steering")
-        default_timing = MEASUREMENT_TIMING_PRESETS["Default"]
-        self._apply_measurement_timing_values(
-            {
-                "pre_roll": config_value(
-                    config,
-                    "analysis",
-                    "pre_roll_seconds",
-                    default=default_timing["pre_roll"],
-                ),
-                "post_roll": config_value(
-                    config,
-                    "analysis",
-                    "post_roll_seconds",
-                    default=default_timing["post_roll"],
-                ),
-                "round_trip_latency": config_value(
-                    config,
-                    "analysis",
-                    "round_trip_latency_seconds",
-                    default=default_timing["round_trip_latency"],
-                ),
-                "preset_wait": config_value(
-                    config,
-                    *device_steering,
-                    "preset_wait_seconds",
-                    default=default_timing["preset_wait"],
-                ),
-                "snapshot_wait": config_value(
-                    config,
-                    *device_steering,
-                    "snapshot_wait_seconds",
-                    default=default_timing["snapshot_wait"],
-                ),
-                "measurement_wait": config_value(
-                    config,
-                    *device_steering,
-                    "measurement_wait_seconds",
-                    default=default_timing["measurement_wait"],
-                ),
-            }
-        )
-        self._refresh_backend_tooltip()
+        self.loading_controller.get_profile = get_device_profile
+        self.loading_controller.load_defaults()
 
     def _backend_check_enabled(self) -> bool:
         return backend_check_enabled()
@@ -1403,100 +1156,8 @@ class MainWindow(QMainWindow):
         )
 
     def load_assignments(self) -> None:
-        path = Path(self.input_path.text())
-        if (
-            not self._preset_load_discard_confirmed
-            and self._loaded_input_path
-            and str(path) != self._loaded_input_path
-            and self._preset_table_has_unsaved_changes()
-            and not self._prompt_save_or_discard_preset_table_changes(
-                "opening another preset or setlist file"
-            )
-        ):
-            self.input_path.setText(self._loaded_input_path)
-            return
-
-        self._discard_completed_export()
-        self.preset_snapshot_positions.clear()
-        self._recording_paths.clear()
-        self.preset_table_controller.clear_bad_lufs_highlights()
-        self._clear_normalization_focus()
-        self._reset_comparison_file_selection()
-        self._load_metadata()
-        is_single_preset = path.suffix.lower() == ".hlx"
-        self._show_loaded_preset_state(single_preset=is_single_preset)
-        self._set_preset_csv_buttons_enabled(False)
-        self.presets.updateGeometry()
-        self._schedule_resize_for_content()
-
-        if path.suffix.lower() == ".hlx":
-            try:
-                profile = get_device_profile(self.device.currentData())
-                handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
-                handler.validate_input(path)
-                assignments = handler.list_assignments(path)
-            except Exception as exc:  # noqa: BLE001
-                self._show_preset_empty_state()
-                self.presets.updateGeometry()
-                self._schedule_resize_for_content()
-                self.show_error(str(exc))
-                return
-
-            self._adjusted_presets.clear()
-            self._populate_single_preset_table(path, assignments[0] if assignments else None)
-            self._loaded_input_path = str(path)
-            self._set_active_file(path)
-            self._store_recent_file(path)
-            self._reset_preset_table_modified()
-            self._refresh_file_actions()
-            self._set_preset_csv_buttons_enabled(self.preset_table.rowCount() > 0)
-            self.preset_hint.setText(
-                "Enter the temporary Helix slot used during measurement in the Preset column."
-            )
-            QTimer.singleShot(0, self._fit_advanced_splitter_width)
-            self.presets.updateGeometry()
-            self._schedule_resize_for_content()
-            return
-
-        try:
-            profile = get_device_profile(self.device.currentData())
-            handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
-            handler.validate_input(path)
-            with self._sorting_paused():
-                self._adjusted_presets.clear()
-                self.preset_table.setRowCount(0)
-                for assignment in handler.list_assignments(path):
-                    row = self.preset_table.rowCount()
-                    self.preset_table.insertRow(row)
-                    selected = QTableWidgetItem()
-                    selected.setCheckState(Qt.CheckState.Checked)
-                    self.preset_table.setItem(row, 0, selected)
-                    self.preset_table.setItem(row, 1, QTableWidgetItem(assignment.device_patch))
-                    self.preset_table.setItem(row, 2, QTableWidgetItem(assignment.name))
-                    self.preset_table_controller.clear_preset_adjustments(row)
-                    self.preset_table_controller.set_snapshot_names(row, assignment.snapshot_names)
-                    self.preset_table_controller.set_snapshot_output_levels(
-                        row,
-                        getattr(assignment, "snapshot_output_levels", ()),
-                        getattr(assignment, "snapshot_output_paths", ()),
-                    )
-                self._refresh_preset_table_editable_flags()
-        except Exception as exc:  # noqa: BLE001
-            self._show_preset_empty_state()
-            self.presets.updateGeometry()
-            self._schedule_resize_for_content()
-            self.show_error(str(exc))
-            return
-
-        self._loaded_input_path = str(path)
-        self._set_active_file(path)
-        self._store_recent_file(path)
-        self._reset_preset_table_modified()
-        self._refresh_file_actions()
-        self.preset_hint.setText("Select the presets to normalize.")
-        self._set_preset_csv_buttons_enabled(self.preset_table.rowCount() > 0)
-        QTimer.singleShot(0, self._fit_advanced_splitter_width)
-        self._schedule_resize_for_content()
+        self.loading_controller.get_profile = get_device_profile
+        self.loading_controller.load_assignments()
 
     def _set_preset_csv_buttons_enabled(self, enabled: bool) -> None:
         if hasattr(self, "load_csv_button"):
@@ -1505,51 +1166,17 @@ class MainWindow(QMainWindow):
             self.save_csv_button.setEnabled(enabled)
 
     def _load_custom_adjustments(self, request: NormalizationRequest) -> CustomAdjustments:
-        if request.custom_adjustments_path is None:
-            return {}
-        return load_custom_adjustments_file(
-            request.custom_adjustments_path,
-            request.policy.snapshot_count,
-        )
+        return self.loading_controller.load_custom_adjustments(request)
 
     def _populate_single_preset_table(self, path: Path, assignment: object | None = None) -> None:
-        preset_name = str(getattr(assignment, "name", "") or path.stem)
-        snapshot_names = getattr(assignment, "snapshot_names", ())
-        if not isinstance(snapshot_names, tuple):
-            snapshot_names = tuple(snapshot_names)
-        snapshot_output_levels = getattr(assignment, "snapshot_output_levels", ())
-        snapshot_output_paths = getattr(assignment, "snapshot_output_paths", ())
-        with self._sorting_paused():
-            self.preset_table.setRowCount(0)
-            self.preset_table.insertRow(0)
-            selected = QTableWidgetItem()
-            selected.setCheckState(Qt.CheckState.Checked)
-            self.preset_table.setItem(0, 0, selected)
-            self.preset_table.setItem(0, 1, QTableWidgetItem())
-            self.preset_table.setItem(0, 2, QTableWidgetItem(preset_name))
-            self.preset_table_controller.clear_preset_adjustments(0)
-            self.preset_table_controller.set_snapshot_names(0, snapshot_names)
-            self.preset_table_controller.set_snapshot_output_levels(
-                0, snapshot_output_levels, snapshot_output_paths
-            )
-            self._refresh_preset_table_editable_flags()
+        self.loading_controller.populate_single_preset_table(path, assignment)
 
     def _load_metadata(self) -> None:
-        path = Path(self.input_path.text())
-        if not path.exists():
-            self._set_metadata({})
-            return
-
-        try:
-            profile = get_device_profile(self.device.currentData())
-            handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
-            handler.validate_input(path)
-            self._set_metadata(handler.metadata(path))
-        except Exception as exc:  # noqa: BLE001
-            self._set_metadata({"error": str(exc)})
+        self.loading_controller.get_profile = get_device_profile
+        self.loading_controller.load_metadata()
 
     def _set_metadata(self, metadata: dict[str, object]) -> None:
-        self.metadata_text.setPlainText(json.dumps(metadata, indent=2, ensure_ascii=False))
+        self.loading_controller.set_metadata(metadata)
 
     def start_normalization(self) -> None:
         self.normalization_controller.start_normalization()
@@ -2003,7 +1630,7 @@ class MainWindow(QMainWindow):
                     table_has_unsaved_changes=table_has_unsaved_changes,
                     make_active=make_active,
                 ),
-                _MainWindowSaveCallbacks(self),
+                MainWindowSaveCallbacks(self),
             )
         except SaveCancelled:
             return False
@@ -2077,61 +1704,63 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(active_file_title(path))
 
     def _refresh_file_actions(self) -> None:
-        has_file = bool(self.input_path.text().strip())
+        action_state = self._current_file_action_state()
+        self._apply_file_action_state(action_state)
+
+    def _current_file_action_state(self) -> FileActionState:
         has_loaded_file = bool(self._loaded_input_path)
-        has_preset_selection = (
-            self._has_optimization_preset_selection()
-            if hasattr(self, "determine_parameters_button")
-            else False
-        )
-        action_state = file_action_state(
-            has_file=has_file,
+        return file_action_state(
+            has_file=bool(self.input_path.text().strip()),
             has_loaded_file=has_loaded_file,
             preset_table_modified=self._preset_table_has_unsaved_changes(),
-            has_preset_selection=has_preset_selection,
+            has_preset_selection=self._current_optimization_preset_selection_state(),
             normalization_active=self.worker is not None,
             hardware_check_active=self.hardware_check_worker is not None,
             optimization_active=self.optimization_worker is not None,
             preflight_active=self.preflight_worker is not None,
         )
-        if hasattr(self, "save_action"):
-            self.save_action.setEnabled(action_state.save_enabled)
-        if hasattr(self, "save_as_action"):
-            self.save_as_action.setEnabled(action_state.save_as_enabled)
-        if hasattr(self, "save_measurement_action"):
-            self.save_measurement_action.setEnabled(action_state.save_measurement_enabled)
-        if hasattr(self, "start_button"):
-            self.start_button.setEnabled(action_state.start_enabled)
-        if hasattr(self, "determine_parameters_button"):
-            self.determine_parameters_button.setEnabled(action_state.determine_enabled)
-            if hasattr(self, "determine_parameters_hint"):
-                if action_state.determine_enabled:
-                    self.determine_parameters_hint.hide()
-                else:
-                    self.determine_parameters_hint.setText(action_state.determine_hint)
-                    self.determine_parameters_hint.show()
-        if hasattr(self, "record_output_button"):
-            self.record_output_button.setEnabled(action_state.record_output_enabled)
-        if hasattr(self, "play_recorded_output_button"):
-            self.play_recorded_output_button.setEnabled(action_state.play_recorded_output_enabled)
+
+    def _current_optimization_preset_selection_state(self) -> bool:
+        if not hasattr(self, "determine_parameters_button"):
+            return False
+        return self._has_optimization_preset_selection()
+
+    def _apply_file_action_state(self, action_state: FileActionState) -> None:
+        self._set_optional_widget_enabled("save_action", action_state.save_enabled)
+        self._set_optional_widget_enabled("save_as_action", action_state.save_as_enabled)
+        self._set_optional_widget_enabled(
+            "save_measurement_action",
+            action_state.save_measurement_enabled,
+        )
+        self._set_optional_widget_enabled("start_button", action_state.start_enabled)
+        self._refresh_determine_parameters_action(action_state)
+        self._set_optional_widget_enabled(
+            "record_output_button",
+            action_state.record_output_enabled,
+        )
+        self._set_optional_widget_enabled(
+            "play_recorded_output_button",
+            action_state.play_recorded_output_enabled,
+        )
         if hasattr(self, "diagnostics_panel"):
             self.diagnostics_panel.set_workflow_active(action_state.workflow_active)
 
-    def _determine_parameters_disabled_hint(
-        self,
-        has_loaded_file: bool,
-        has_preset_selection: bool,
-    ) -> str:
-        return file_action_state(
-            has_file=False,
-            has_loaded_file=has_loaded_file,
-            preset_table_modified=False,
-            has_preset_selection=has_preset_selection,
-            normalization_active=False,
-            hardware_check_active=False,
-            optimization_active=False,
-            preflight_active=False,
-        ).determine_hint
+    def _set_optional_widget_enabled(self, name: str, enabled: bool) -> None:
+        widget = getattr(self, name, None)
+        if widget is not None:
+            widget.setEnabled(enabled)
+
+    def _refresh_determine_parameters_action(self, action_state: FileActionState) -> None:
+        if not hasattr(self, "determine_parameters_button"):
+            return
+        self.determine_parameters_button.setEnabled(action_state.determine_enabled)
+        if not hasattr(self, "determine_parameters_hint"):
+            return
+        if action_state.determine_enabled:
+            self.determine_parameters_hint.hide()
+            return
+        self.determine_parameters_hint.setText(action_state.determine_hint)
+        self.determine_parameters_hint.show()
 
     def _prompt_save_before_normalization(self) -> bool:
         result = self._prompt_save_or_discard_preset_table_changes("starting normalization")

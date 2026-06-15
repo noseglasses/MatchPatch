@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from html import escape
-from pathlib import Path
 from typing import Sequence
 
 from PySide6.QtCore import Signal
@@ -22,7 +21,11 @@ from PySide6.QtWidgets import (
 )
 
 from matchpatch.diagnostics import DiagnosticCheck
-from matchpatch.gui.advanced_settings import PresetTableSelectionContext
+from matchpatch.gui.advanced_settings import (
+    PresetTableSelectionContext,
+    selected_candidate_rows,
+    selected_patch_snapshots,
+)
 from matchpatch.gui.help import HelpId
 from matchpatch.workflow import NormalizationRequest
 
@@ -241,68 +244,52 @@ def preset_table_selection_preflight_checks(
     if not has_unchecked_presets and not has_ignored_snapshots:
         return []
 
-    if Path(context.input_path).suffix.lower() == ".hlx":
-        candidate_rows = [0] if context.row_count else []
-    elif has_unchecked_presets:
-        candidate_rows = sorted(checked_rows)
-    else:
-        candidate_rows = list(range(context.row_count))
-
-    selected_patches: list[str] = []
-    preset_snapshots: list[tuple[str, tuple[int, ...]]] = []
-    for row in candidate_rows:
-        patch = context.patch_at_row(row)
-        if patch is None:
-            continue
-        patch = patch.strip().upper()
-        if not patch:
-            continue
-        selected_patches.append(patch)
-        measurable_snapshots = context.row_measured_snapshot_indexes(row)
-        snapshots = (
-            tuple(
-                snapshot
-                for snapshot in comparison_snapshot_plan.get(patch, ())
-                if snapshot in measurable_snapshots
-            )
-            if comparison_snapshot_plan is not None
-            else measurable_snapshots
-        )
-        if snapshots:
-            preset_snapshots.append((patch, snapshots))
+    candidate_rows = selected_candidate_rows(context, has_unchecked_presets, has_ignored_snapshots)
+    selected_patches, preset_snapshots = selected_patch_snapshots(
+        context, candidate_rows, comparison_snapshot_plan
+    )
     if not selected_patches:
         return []
 
-    checks = [
-        DiagnosticCheck(
-            "preset_set",
+    checks = [_preset_set_check(selected_patches)]
+    if has_ignored_snapshots:
+        checks.append(_snapshot_plan_check(selected_patches, preset_snapshots))
+    return checks
+
+
+def _preset_set_check(selected_patches: Sequence[str]) -> DiagnosticCheck:
+    return DiagnosticCheck(
+        "preset_set",
+        "pass",
+        (
+            f"Preset selection includes {len(selected_patches)} preset(s): "
+            f"{', '.join(selected_patches)}"
+        ),
+    )
+
+
+def _snapshot_plan_check(
+    selected_patches: Sequence[str],
+    preset_snapshots: Sequence[tuple[str, tuple[int, ...]]],
+) -> DiagnosticCheck:
+    snapshot_total = sum(len(snapshots) for _patch, snapshots in preset_snapshots)
+    if snapshot_total:
+        return DiagnosticCheck(
+            "snapshot_plan",
             "pass",
             (
-                f"Preset selection includes {len(selected_patches)} preset(s): "
-                f"{', '.join(selected_patches)}"
+                f"Per-snapshot selection includes {len(preset_snapshots)} preset(s) "
+                f"and {snapshot_total} snapshot(s)"
             ),
         )
-    ]
-    if has_ignored_snapshots:
-        snapshot_total = sum(len(snapshots) for _patch, snapshots in preset_snapshots)
-        snapshot_status = "pass" if snapshot_total else "warning"
-        snapshot_summary = (
-            f"Per-snapshot selection includes {len(preset_snapshots)} preset(s) "
-            f"and {snapshot_total} snapshot(s)"
-            if snapshot_total
-            else (
-                "Per-snapshot selection is configured but leaves no measurable "
-                f"snapshots across {len(selected_patches)} selected preset(s)"
-            )
-        )
-        checks.append(
-            DiagnosticCheck(
-                "snapshot_plan",
-                snapshot_status,
-                snapshot_summary,
-            )
-        )
-    return checks
+    return DiagnosticCheck(
+        "snapshot_plan",
+        "warning",
+        (
+            "Per-snapshot selection is configured but leaves no measurable "
+            f"snapshots across {len(selected_patches)} selected preset(s)"
+        ),
+    )
 
 
 def format_hardware_check_request_details(request: NormalizationRequest | None) -> str:

@@ -124,6 +124,67 @@ _FakePreflightWorker = FakePreflightWorker
 _FakeSaveChangesMessageBox = FakeSaveChangesMessageBox
 
 
+class ConfigExportFileDialog:
+    Option = QFileDialog.Option
+    AcceptMode = QFileDialog.AcceptMode
+    FileMode = QFileDialog.FileMode
+    DialogLabel = QFileDialog.DialogLabel
+    dialogs = []
+    selected_path = ""
+
+    def __init__(self, *args):
+        self.args = args
+        self.settings = []
+        self.dialogs.append(self)
+
+    def setOption(self, option):
+        self.settings.append(("option", option))
+
+    def setAcceptMode(self, mode):
+        self.settings.append(("accept_mode", mode))
+
+    def setFileMode(self, mode):
+        self.settings.append(("file_mode", mode))
+
+    def setNameFilter(self, file_filter):
+        self.settings.append(("name_filter", file_filter))
+
+    def selectFile(self, path):
+        self.settings.append(("select_file", path))
+
+    def setLabelText(self, label, text):
+        self.settings.append(("label", label, text))
+
+    def layout(self):
+        return None
+
+    def exec(self):
+        return True
+
+    def selectedFiles(self):
+        return [str(self.selected_path)]
+
+
+class ConfigExportCheckBox:
+    def __init__(self, *args):
+        self.args = args
+        self.checked = False
+
+    def setChecked(self, checked):
+        self.checked = checked
+
+    def isChecked(self):
+        return self.checked
+
+
+def install_config_export_dialog_fakes(monkeypatch, selected_path):
+    ConfigExportFileDialog.dialogs = []
+    ConfigExportFileDialog.selected_path = selected_path
+    monkeypatch.setattr(main_window, "QFileDialog", ConfigExportFileDialog)
+    monkeypatch.setattr(main_window, "QCheckBox", ConfigExportCheckBox)
+    return ConfigExportFileDialog.dialogs
+
+
 def _state(**overrides: object) -> GuiSettingsState:
     values = {
         "device": "helix",
@@ -620,60 +681,8 @@ def test_main_window_exports_default_config_when_requested(tmp_path, monkeypatch
 def test_config_export_dialog_defaults_to_default_config_path(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     selected_path = tmp_path / "saved.toml"
-    dialogs = []
     monkeypatch.setattr(main_window, "default_config_path", lambda: tmp_path / "config.toml")
-
-    class FileDialog:
-        Option = QFileDialog.Option
-        AcceptMode = QFileDialog.AcceptMode
-        FileMode = QFileDialog.FileMode
-        DialogLabel = QFileDialog.DialogLabel
-
-        def __init__(self, *args):
-            self.args = args
-            self.settings = []
-            dialogs.append(self)
-
-        def setOption(self, option):
-            self.settings.append(("option", option))
-
-        def setAcceptMode(self, mode):
-            self.settings.append(("accept_mode", mode))
-
-        def setFileMode(self, mode):
-            self.settings.append(("file_mode", mode))
-
-        def setNameFilter(self, file_filter):
-            self.settings.append(("name_filter", file_filter))
-
-        def selectFile(self, path):
-            self.settings.append(("select_file", path))
-
-        def setLabelText(self, label, text):
-            self.settings.append(("label", label, text))
-
-        def layout(self):
-            return None
-
-        def exec(self):
-            return True
-
-        def selectedFiles(self):
-            return [str(selected_path)]
-
-    class CheckBox:
-        def __init__(self, *args):
-            self.args = args
-            self.checked = False
-
-        def setChecked(self, checked):
-            self.checked = checked
-
-        def isChecked(self):
-            return self.checked
-
-    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
-    monkeypatch.setattr(main_window, "QCheckBox", CheckBox)
+    dialogs = install_config_export_dialog_fakes(monkeypatch, selected_path)
 
     assert window._choose_config_export_path() == (str(selected_path), False)
     assert dialogs[0].args[1] == "Export config"
