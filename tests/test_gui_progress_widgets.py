@@ -11,6 +11,7 @@ from matchpatch.progress import ProgressEvent
     [
         ("ready", "Ready"),
         ("starting", "Starting..."),
+        ("preflight_checks", "Running pre flight checks..."),
         ("preparing_measurement", "Preparing Measurement..."),
         ("waiting_for_measurement_import", "Waiting For Measurement Import..."),
         ("measuring", "Measuring..."),

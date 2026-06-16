@@ -16,9 +16,24 @@ from matchpatch.diagnostics import (
     write_diagnostic_bundle,
 )
 from matchpatch.gui.diagnostics_panel import preflight_checks_with_preset_table_selection
+from matchpatch.gui.hardware_checks import PreflightOverlay
 from matchpatch.gui.worker import PreflightWorker
 
 PROCESSING_DOT_RED = "#dc2626"
+
+
+def _show_preflight_overlay(window: object) -> None:
+    gui_window: Any = window
+    if not hasattr(gui_window, "preflight_overlay"):
+        gui_window.preflight_overlay = PreflightOverlay(gui_window)
+    target = gui_window.centralWidget() or gui_window
+    gui_window.preflight_overlay.show_over(target)
+
+
+def _hide_preflight_overlay(window: object) -> None:
+    gui_window: Any = window
+    if hasattr(gui_window, "preflight_overlay"):
+        gui_window.preflight_overlay.hide()
 
 
 class DiagnosticsWorkflowController:
@@ -129,8 +144,9 @@ class DiagnosticsWorkflowController:
         window.diagnostics_panel.set_preflight_running(True)
         window.start_button.setEnabled(False)
         window.determine_parameters_button.setEnabled(False)
-        window._set_phase("starting")
+        window._set_phase("preflight_checks")
         window._log("Preflight check started", "info")
+        _show_preflight_overlay(window)
         window._start_busy_phase()
         window.preflight_worker = self.worker_type(request, window)
         window.preflight_worker.completed.connect(window._preflight_completed)
@@ -142,6 +158,7 @@ class DiagnosticsWorkflowController:
     def preflight_completed(self, checks: Sequence[DiagnosticCheck]) -> None:
         window = self.window
         window._stop_busy_phase()
+        _hide_preflight_overlay(window)
         checks = window._preflight_checks_with_preset_table_selection(checks)
         failed_count = sum(1 for check in checks if check.status == "fail")
         warning_count = sum(1 for check in checks if check.status == "warning")
@@ -168,6 +185,7 @@ class DiagnosticsWorkflowController:
     def preflight_failed(self, detail: str) -> None:
         window = self.window
         window._stop_busy_phase(PROCESSING_DOT_RED)
+        _hide_preflight_overlay(window)
         window._set_phase("error")
         message = f"Preflight check failed: {detail}"
         window._log(message, "error")
@@ -176,6 +194,7 @@ class DiagnosticsWorkflowController:
     def preflight_finished(self) -> None:
         window = self.window
         window.preflight_worker = None
+        _hide_preflight_overlay(window)
         if hasattr(window, "diagnostics_panel"):
             window.diagnostics_panel.set_preflight_running(False)
         window._refresh_file_actions()

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from matchpatch.diagnostics import DiagnosticCheck
 from matchpatch.gui.hardware_checks import (
     HardwareCheckOverlay,
+    PreflightOverlay,
     backend_check_enabled,
     backend_check_required,
     completed_log_entries,
@@ -133,4 +134,22 @@ def test_hardware_check_overlay_positions_over_target(app) -> None:
 
     assert overlay.isVisible()
     assert overlay.geometry() == target.geometry()
+    parent.close()
+
+
+def test_preflight_overlay_positions_over_target_with_busy_indicator(app) -> None:
+    parent = QWidget()
+    target = QWidget(parent)
+    target.setGeometry(QRect(10, 20, 300, 200))
+    overlay = PreflightOverlay(parent)
+    parent.show()
+
+    overlay.show_over(target)
+    app.processEvents()
+
+    assert overlay.isVisible()
+    assert overlay.geometry() == target.geometry()
+    assert overlay.title.text() == "Running pre flight checks..."
+    assert overlay.spinner.minimum() == 0
+    assert overlay.spinner.maximum() == 0
     parent.close()

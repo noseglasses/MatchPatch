@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -64,6 +64,23 @@ def test_store_recent_file_moves_existing_path_to_front_and_truncates() -> None:
         "/tmp/6.hls",
         "/tmp/7.hls",
     ]
+
+
+def test_store_recent_file_keeps_posix_text_from_windows_path() -> None:
+    settings = QSettings()
+    settings.setValue(RECENT_FILES_SETTINGS_KEY, ["/tmp/0.hls", "/tmp/1.hls"])
+
+    assert store_recent_file(settings, PureWindowsPath("/tmp/1.hls")) == [
+        "/tmp/1.hls",
+        "/tmp/0.hls",
+    ]
+
+
+def test_store_recent_file_keeps_native_drive_path_text() -> None:
+    settings = QSettings()
+    path = PureWindowsPath("C:/Users/flo/AppData/Local/Temp/recent.hlx")
+
+    assert store_recent_file(settings, path) == [str(path)]
 
 
 def test_recent_file_items_format_filename_and_parent() -> None:

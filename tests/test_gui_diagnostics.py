@@ -387,6 +387,15 @@ def test_preflight_action_starts_worker_without_starting_normalization(
     assert _FakePreflightWorker.instances[0].started
     assert window.preflight_worker is _FakePreflightWorker.instances[0]
     assert window.worker is None
+    assert window.phase.text() == "Running pre flight checks..."
+    assert not window.phase_icon.pixmap().isNull()
+    assert not window.preflight_overlay.isHidden()
+    assert window.preflight_overlay.spinner.minimum() == 0
+    assert window.preflight_overlay.spinner.maximum() == 0
+
+    window._preflight_finished()
+
+    assert window.preflight_overlay.isHidden()
 
     window.preflight_worker = None
     window.close()

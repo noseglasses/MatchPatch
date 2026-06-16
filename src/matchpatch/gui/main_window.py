@@ -229,6 +229,7 @@ PROCESSING_DOT_RED = "#dc2626"
 PHASE_ICON = {
     "ready": QStyle.StandardPixmap.SP_DialogApplyButton,
     "starting": QStyle.StandardPixmap.SP_MediaPlay,
+    "preflight_checks": QStyle.StandardPixmap.SP_BrowserReload,
     "preparing_measurement": QStyle.StandardPixmap.SP_BrowserReload,
     "waiting_for_measurement_import": QStyle.StandardPixmap.SP_MediaPause,
     "measuring": QStyle.StandardPixmap.SP_ComputerIcon,

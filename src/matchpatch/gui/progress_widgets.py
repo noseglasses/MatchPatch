@@ -148,6 +148,7 @@ class MeasurementProgressPlan:
 
 IN_PROGRESS_PHASES = {
     "starting",
+    "preflight_checks",
     "preparing_measurement",
     "waiting_for_measurement_import",
     "measuring",
@@ -160,6 +161,8 @@ IN_PROGRESS_PHASES = {
 def phase_text(phase: str) -> str:
     if phase == "normalization_cancelled_by_user":
         return "Normalization cancelled by user"
+    if phase == "preflight_checks":
+        return "Running pre flight checks..."
     text = phase.replace("_", " ").title()
     return f"{text}..." if phase in IN_PROGRESS_PHASES else text
 

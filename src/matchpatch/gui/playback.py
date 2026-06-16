@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -21,11 +20,14 @@ WINDOWS_PLAYBACK_CODE = (
 )
 
 
-def _windows_playback_path(path: Path) -> str:
+def _windows_playback_path(path: PurePath) -> str:
     text = str(path)
-    if re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith("\\\\") or os.name == "nt":
+    posix_text = path.as_posix()
+    if text.startswith("\\\\"):
         return text
-    return wsl_path_to_windows(path)
+    if re.match(r"^[A-Za-z]:[\\/]", text) or re.match(r"^[A-Za-z]:/", posix_text):
+        return posix_text
+    return wsl_path_to_windows(Path(posix_text))
 
 
 class AudioPlaybackWorker(QThread):

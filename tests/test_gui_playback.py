@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -14,7 +14,13 @@ def test_windows_playback_path_keeps_native_windows_paths() -> None:
     assert playback._windows_playback_path(Path("C:/Recordings/take.wav")) == (
         "C:/Recordings/take.wav"
     )
+    assert playback._windows_playback_path(PureWindowsPath("C:/Recordings/take.wav")) == (
+        "C:/Recordings/take.wav"
+    )
     assert playback._windows_playback_path(Path("\\\\server\\share\\take.wav")) == (
+        "\\\\server\\share\\take.wav"
+    )
+    assert playback._windows_playback_path(PureWindowsPath("\\\\server\\share\\take.wav")) == (
         "\\\\server\\share\\take.wav"
     )
 
@@ -24,6 +30,7 @@ def test_windows_playback_path_converts_wsl_paths(monkeypatch) -> None:
     monkeypatch.setattr(playback, "wsl_path_to_windows", lambda path: converted)
 
     assert playback._windows_playback_path(Path("/tmp/take.wav")) == converted
+    assert playback._windows_playback_path(PureWindowsPath("/tmp/take.wav")) == converted
 
 
 def test_audio_playback_worker_emits_subprocess_error(monkeypatch, app) -> None:

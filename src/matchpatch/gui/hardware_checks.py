@@ -84,6 +84,59 @@ class HardwareCheckOverlay(QWidget):
         self.raise_()
 
 
+class PreflightOverlay(QWidget):
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("preflightOverlay")
+        self.setAutoFillBackground(True)
+        self.setStyleSheet(
+            "QWidget#preflightOverlay {"
+            "background-color: rgba(255, 255, 255, 180);"
+            "}"
+            "QWidget#preflightPanel {"
+            "background: #ffffff;"
+            "border: 1px solid #cbd5e1;"
+            "border-radius: 6px;"
+            "}"
+            "QLabel#preflightTitle {"
+            "font-weight: 600;"
+            "color: #0f172a;"
+            "}"
+        )
+        self.hide()
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.addStretch()
+
+        panel = QWidget(self)
+        panel.setObjectName("preflightPanel")
+        panel.setFixedWidth(300)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(20, 18, 20, 18)
+        panel_layout.setSpacing(12)
+
+        title = QLabel("Running pre flight checks...")
+        title.setObjectName("preflightTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        spinner = QProgressBar()
+        spinner.setRange(0, 0)
+        spinner.setTextVisible(False)
+        spinner.setFixedHeight(10)
+
+        self.title = title
+        self.spinner = spinner
+        panel_layout.addWidget(title)
+        panel_layout.addWidget(spinner)
+        outer.addWidget(panel, 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addStretch()
+
+    def show_over(self, target: QWidget) -> None:
+        self.setGeometry(target.geometry())
+        self.show()
+        self.raise_()
+
+
 def backend_check_enabled() -> bool:
     return os.getenv("QT_QPA_PLATFORM", "").lower() != "offscreen"
 
@@ -182,6 +235,7 @@ def _failure_popup_message(
 __all__ = [
     "HardwareCheckFailurePresentation",
     "HardwareCheckOverlay",
+    "PreflightOverlay",
     "backend_check_enabled",
     "backend_check_required",
     "completed_log_entries",

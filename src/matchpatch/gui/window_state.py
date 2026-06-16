@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
 from PySide6.QtCore import QSettings
 
@@ -50,8 +50,8 @@ def recent_file_paths(settings: QSettings) -> list[str]:
     return paths[:MAX_RECENT_FILES]
 
 
-def store_recent_file(settings: QSettings, path: Path) -> list[str]:
-    path_text = str(path)
+def store_recent_file(settings: QSettings, path: PurePath) -> list[str]:
+    path_text = _settings_path_text(path)
     recent = [path_text]
     recent.extend(existing for existing in recent_file_paths(settings) if existing != path_text)
     recent = recent[:MAX_RECENT_FILES]
@@ -64,9 +64,22 @@ def recent_file_items(settings: QSettings) -> list[RecentFileItem]:
 
 
 def recent_file_item(path_text: str) -> RecentFileItem:
-    path = Path(path_text)
+    path = _display_path(path_text)
     label = f"{path.name} - {path.parent}" if path.name else path_text
     return RecentFileItem(label=label, path=path_text)
+
+
+def _settings_path_text(path: PurePath) -> str:
+    text = str(path)
+    if path.drive or text.startswith("\\\\"):
+        return text
+    return path.as_posix()
+
+
+def _display_path(path_text: str) -> PurePosixPath | PureWindowsPath:
+    if "/" in path_text and "\\" not in path_text:
+        return PurePosixPath(path_text)
+    return PureWindowsPath(path_text)
 
 
 def active_file_title(path: Path) -> str:
