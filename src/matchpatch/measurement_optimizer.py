@@ -286,13 +286,11 @@ def optimize_timing_parameters(
     on_progress: ProgressCallback | None = None,
     parameters: tuple[TimingParameter, ...] = TIMING_PARAMETERS,
 ) -> tuple[ParameterOptimizationResult, ...]:
-    if stability_runs < 2:
-        raise ValueError("Stability runs must be at least 2")
-    if termination_tolerance_percent <= 0:
-        raise ValueError("Termination tolerance must be greater than zero")
-    if stability_tolerance_percent < 0:
-        raise ValueError("Stability tolerance must be zero or greater")
-
+    _validate_optimizer_settings(
+        stability_runs,
+        termination_tolerance_percent,
+        stability_tolerance_percent,
+    )
     results: list[ParameterOptimizationResult] = []
     values = _optimization_start_values(initial_values, parameters)
     ordered_parameters = _parameters_by_duration_impact(values, parameters)
@@ -309,143 +307,337 @@ def optimize_timing_parameters(
         stability_runs,
         stability_tolerance_percent,
     )
-    proven_stable_statistics = reference_statistics if reference_stable else None
+    proven_statistics = reference_statistics if reference_stable else None
 
     for parameter in ordered_parameters:
-        start = values[parameter.name]
-        low = parameter.lower_bound(values)
-        if start < low:
-            raise ValueError(f"{parameter.label} must be at least {low:g} s for optimization")
-        high = start
-        iterations = 0
-        best = high
-        best_statistics = proven_stable_statistics
-        tolerance = abs(start) * termination_tolerance_percent / 100.0
-        if tolerance == 0:
-            tolerance = termination_tolerance_percent / 1000.0
-
-        _emit(
+        proven_statistics = _optimize_parameter(
+            profile,
+            preset_id,
+            alternate_preset_id,
+            preset_label,
+            reference,
+            sample_rate,
+            backend_factory,
+            values,
+            analysis_options,
+            stability_runs,
+            termination_tolerance_percent,
+            stability_tolerance_percent,
+            reference_statistics,
+            proven_statistics,
+            parameter,
+            results,
             on_progress,
-            OptimizationProgress(
-                "parameter_started",
-                (
-                    f"Investigating {parameter.label} from {start:.6g} s "
-                    f"on preset {preset_label} using snapshots 1 and 2 "
-                    f"({stability_runs} stability runs)"
-                ),
-                parameter=parameter.name,
-                low=low,
-                high=high,
-                best=best,
-                iteration=iterations,
-                results=tuple(results),
-            ),
-        )
-
-        if proven_stable_statistics is not None:
-            stable = True
-            statistics = proven_stable_statistics
-        else:
-            stable = False
-            statistics = reference_statistics
-
-        latest_statistics = statistics
-        if not stable:
-            result = ParameterOptimizationResult(
-                parameter, high, False, iterations, latest_statistics
-            )
-            results.append(result)
-            _emit(
-                on_progress,
-                OptimizationProgress(
-                    "parameter_completed",
-                    f"{parameter.label} is unstable at the optimization start value",
-                    parameter=parameter.name,
-                    candidate=high,
-                    stable=False,
-                    low=low,
-                    high=high,
-                    best=best,
-                    iteration=iterations,
-                    statistics=latest_statistics,
-                    results=tuple(results),
-                ),
-            )
-            continue
-
-        while high - low > tolerance:
-            candidate = (low + high) / 2.0
-            candidate_values = {**values, parameter.name: candidate}
-            stable, statistics = _is_stable(
-                profile,
-                preset_id,
-                alternate_preset_id,
-                reference,
-                sample_rate,
-                backend_factory,
-                candidate_values,
-                analysis_options,
-                stability_runs,
-                stability_tolerance_percent,
-                reference_statistics,
-            )
-            latest_statistics = statistics
-            iterations += 1
-            if stable:
-                best = candidate
-                high = candidate
-                best_statistics = statistics
-            else:
-                low = candidate
-
-            _emit(
-                on_progress,
-                OptimizationProgress(
-                    "candidate_completed",
-                    (
-                        f"{parameter.label}: {candidate:.6g} s "
-                        f"{'stable' if stable else 'unstable'} after "
-                        f"{stability_runs} runs on preset {preset_label}, snapshots 1 and 2"
-                    ),
-                    parameter=parameter.name,
-                    candidate=candidate,
-                    stable=stable,
-                    low=low,
-                    high=high,
-                    best=best,
-                    iteration=iterations,
-                    statistics=latest_statistics,
-                    results=tuple(results),
-                ),
-            )
-
-        values[parameter.name] = best
-        proven_stable_statistics = best_statistics
-        result = ParameterOptimizationResult(parameter, best, True, iterations, best_statistics)
-        results.append(result)
-        _emit(
-            on_progress,
-            OptimizationProgress(
-                "parameter_completed",
-                (
-                    f"{parameter.label}: {best:.6g} s; applying this value "
-                    "to the remaining parameter checks"
-                ),
-                parameter=parameter.name,
-                candidate=best,
-                stable=True,
-                low=low,
-                high=high,
-                best=best,
-                iteration=iterations,
-                statistics=latest_statistics,
-                results=tuple(results),
-            ),
         )
 
     if any(not result.stable for result in results):
         return tuple(results)
 
+    _emit_final_stability_progress(on_progress, preset_label, proven_statistics, results)
+    if proven_statistics is None:
+        raise RuntimeError("Final stability check failed with optimized timing values")
+
+    return tuple(results)
+
+
+def _validate_optimizer_settings(
+    stability_runs: int,
+    termination_tolerance_percent: float,
+    stability_tolerance_percent: float,
+) -> None:
+    if stability_runs < 2:
+        raise ValueError("Stability runs must be at least 2")
+    if termination_tolerance_percent <= 0:
+        raise ValueError("Termination tolerance must be greater than zero")
+    if stability_tolerance_percent < 0:
+        raise ValueError("Stability tolerance must be zero or greater")
+
+
+def _optimize_parameter(
+    profile: DeviceProfile,
+    preset_id: int,
+    alternate_preset_id: int,
+    preset_label: str,
+    reference: np.ndarray,
+    sample_rate: int,
+    backend_factory: BackendFactory,
+    values: dict[str, float],
+    analysis_options: AnalysisOptions,
+    stability_runs: int,
+    termination_tolerance_percent: float,
+    stability_tolerance_percent: float,
+    reference_statistics: StabilityStatistics | None,
+    proven_statistics: StabilityStatistics | None,
+    parameter: TimingParameter,
+    results: list[ParameterOptimizationResult],
+    on_progress: ProgressCallback | None,
+) -> StabilityStatistics | None:
+    start = values[parameter.name]
+    low = parameter.lower_bound(values)
+    if start < low:
+        raise ValueError(f"{parameter.label} must be at least {low:g} s for optimization")
+    state = _initial_optimizer_bounds(start, low, termination_tolerance_percent, proven_statistics)
+    _emit_parameter_started(on_progress, parameter, state, preset_label, stability_runs, results)
+    if proven_statistics is None:
+        _append_unstable_start_result(parameter, state, reference_statistics, results, on_progress)
+        return None
+
+    state = _bisect_stable_delay(
+        profile,
+        preset_id,
+        alternate_preset_id,
+        preset_label,
+        reference,
+        sample_rate,
+        backend_factory,
+        values,
+        analysis_options,
+        stability_runs,
+        stability_tolerance_percent,
+        reference_statistics,
+        parameter,
+        state,
+        results,
+        on_progress,
+    )
+    values[parameter.name] = state["best"]
+    result = _build_optimization_result(parameter, state, state["best_statistics"])
+    results.append(result)
+    _emit_parameter_completed(on_progress, parameter, state, results)
+    return state["best_statistics"]
+
+
+def _initial_optimizer_bounds(
+    start: float,
+    low: float,
+    termination_tolerance_percent: float,
+    proven_statistics: StabilityStatistics | None,
+) -> dict[str, Any]:
+    tolerance = abs(start) * termination_tolerance_percent / 100.0
+    if tolerance == 0:
+        tolerance = termination_tolerance_percent / 1000.0
+    return {
+        "low": low,
+        "high": start,
+        "best": start,
+        "iterations": 0,
+        "tolerance": tolerance,
+        "latest_statistics": proven_statistics,
+        "best_statistics": proven_statistics,
+    }
+
+
+def _bisect_stable_delay(
+    profile: DeviceProfile,
+    preset_id: int,
+    alternate_preset_id: int,
+    preset_label: str,
+    reference: np.ndarray,
+    sample_rate: int,
+    backend_factory: BackendFactory,
+    values: dict[str, float],
+    analysis_options: AnalysisOptions,
+    stability_runs: int,
+    stability_tolerance_percent: float,
+    reference_statistics: StabilityStatistics | None,
+    parameter: TimingParameter,
+    state: dict[str, Any],
+    results: list[ParameterOptimizationResult],
+    on_progress: ProgressCallback | None,
+) -> dict[str, Any]:
+    while state["high"] - state["low"] > state["tolerance"]:
+        candidate = (state["low"] + state["high"]) / 2.0
+        stable, statistics = _run_stability_probe(
+            profile,
+            preset_id,
+            alternate_preset_id,
+            reference,
+            sample_rate,
+            backend_factory,
+            {**values, parameter.name: candidate},
+            analysis_options,
+            stability_runs,
+            stability_tolerance_percent,
+            reference_statistics,
+        )
+        state = _updated_optimizer_state(state, candidate, stable, statistics)
+        _emit_optimizer_progress(
+            on_progress, parameter, candidate, stable, state, preset_label, stability_runs, results
+        )
+    return state
+
+
+def _run_stability_probe(
+    profile: DeviceProfile,
+    preset_id: int,
+    alternate_preset_id: int,
+    reference: np.ndarray,
+    sample_rate: int,
+    backend_factory: BackendFactory,
+    values: dict[str, float],
+    analysis_options: AnalysisOptions,
+    stability_runs: int,
+    stability_tolerance_percent: float,
+    reference_statistics: StabilityStatistics | None,
+) -> tuple[bool, StabilityStatistics | None]:
+    return _is_stable(
+        profile,
+        preset_id,
+        alternate_preset_id,
+        reference,
+        sample_rate,
+        backend_factory,
+        values,
+        analysis_options,
+        stability_runs,
+        stability_tolerance_percent,
+        reference_statistics,
+    )
+
+
+def _updated_optimizer_state(
+    state: dict[str, Any],
+    candidate: float,
+    stable: bool,
+    statistics: StabilityStatistics | None,
+) -> dict[str, Any]:
+    state = {**state, "iterations": state["iterations"] + 1, "latest_statistics": statistics}
+    if stable:
+        return {**state, "best": candidate, "high": candidate, "best_statistics": statistics}
+    return {**state, "low": candidate}
+
+
+def _build_optimization_result(
+    parameter: TimingParameter,
+    state: dict[str, Any],
+    statistics: StabilityStatistics | None,
+) -> ParameterOptimizationResult:
+    return ParameterOptimizationResult(
+        parameter, state["best"], True, state["iterations"], statistics
+    )
+
+
+def _append_unstable_start_result(
+    parameter: TimingParameter,
+    state: dict[str, Any],
+    statistics: StabilityStatistics | None,
+    results: list[ParameterOptimizationResult],
+    on_progress: ProgressCallback | None,
+) -> None:
+    result = ParameterOptimizationResult(
+        parameter, state["high"], False, state["iterations"], statistics
+    )
+    results.append(result)
+    _emit(
+        on_progress,
+        OptimizationProgress(
+            "parameter_completed",
+            f"{parameter.label} is unstable at the optimization start value",
+            parameter=parameter.name,
+            candidate=state["high"],
+            stable=False,
+            low=state["low"],
+            high=state["high"],
+            best=state["best"],
+            iteration=state["iterations"],
+            statistics=statistics,
+            results=tuple(results),
+        ),
+    )
+
+
+def _emit_parameter_started(
+    on_progress: ProgressCallback | None,
+    parameter: TimingParameter,
+    state: dict[str, Any],
+    preset_label: str,
+    stability_runs: int,
+    results: list[ParameterOptimizationResult],
+) -> None:
+    _emit(
+        on_progress,
+        OptimizationProgress(
+            "parameter_started",
+            (
+                f"Investigating {parameter.label} from {state['high']:.6g} s "
+                f"on preset {preset_label} using snapshots 1 and 2 "
+                f"({stability_runs} stability runs)"
+            ),
+            parameter=parameter.name,
+            low=state["low"],
+            high=state["high"],
+            best=state["best"],
+            iteration=state["iterations"],
+            results=tuple(results),
+        ),
+    )
+
+
+def _emit_optimizer_progress(
+    on_progress: ProgressCallback | None,
+    parameter: TimingParameter,
+    candidate: float,
+    stable: bool,
+    state: dict[str, Any],
+    preset_label: str,
+    stability_runs: int,
+    results: list[ParameterOptimizationResult],
+) -> None:
+    _emit(
+        on_progress,
+        OptimizationProgress(
+            "candidate_completed",
+            (
+                f"{parameter.label}: {candidate:.6g} s "
+                f"{'stable' if stable else 'unstable'} after "
+                f"{stability_runs} runs on preset {preset_label}, snapshots 1 and 2"
+            ),
+            parameter=parameter.name,
+            candidate=candidate,
+            stable=stable,
+            low=state["low"],
+            high=state["high"],
+            best=state["best"],
+            iteration=state["iterations"],
+            statistics=state["latest_statistics"],
+            results=tuple(results),
+        ),
+    )
+
+
+def _emit_parameter_completed(
+    on_progress: ProgressCallback | None,
+    parameter: TimingParameter,
+    state: dict[str, Any],
+    results: list[ParameterOptimizationResult],
+) -> None:
+    _emit(
+        on_progress,
+        OptimizationProgress(
+            "parameter_completed",
+            (
+                f"{parameter.label}: {state['best']:.6g} s; applying this value "
+                "to the remaining parameter checks"
+            ),
+            parameter=parameter.name,
+            candidate=state["best"],
+            stable=True,
+            low=state["low"],
+            high=state["high"],
+            best=state["best"],
+            iteration=state["iterations"],
+            statistics=state["latest_statistics"],
+            results=tuple(results),
+        ),
+    )
+
+
+def _emit_final_stability_progress(
+    on_progress: ProgressCallback | None,
+    preset_label: str,
+    final_statistics: StabilityStatistics | None,
+    results: list[ParameterOptimizationResult],
+) -> None:
     _emit(
         on_progress,
         OptimizationProgress(
@@ -457,7 +649,6 @@ def optimize_timing_parameters(
             results=tuple(results),
         ),
     )
-    final_statistics = proven_stable_statistics
     final_stable = final_statistics is not None
     _emit(
         on_progress,
@@ -473,10 +664,6 @@ def optimize_timing_parameters(
             results=tuple(results),
         ),
     )
-    if not final_stable:
-        raise RuntimeError("Final stability check failed with optimized timing values")
-
-    return tuple(results)
 
 
 def optimization_results_toml(device: str, results: tuple[ParameterOptimizationResult, ...]) -> str:

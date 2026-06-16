@@ -70,19 +70,25 @@ def _about_icon_blue(size: int) -> QColor:
     return QColor(red_total // count, green_total // count, blue_total // count)
 
 
-def _question_mark_icon() -> QIcon:
-    pixmap = QPixmap(64, 64)
+def _question_mark_icon(size: int = 64) -> QIcon:
+    pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(_about_icon_blue(64))
-    painter.drawEllipse(4, 4, 56, 56)
+    painter.setBrush(_about_icon_blue(size))
+    margin = max(2, size // 16)
+    painter.drawEllipse(
+        margin,
+        margin,
+        size - (margin * 2),
+        size - (margin * 2),
+    )
     painter.setPen(QColor("#ffffff"))
     font = QFont()
     font.setBold(True)
-    font.setPointSize(40)
+    font.setPointSize(max(12, size - 24))
     painter.setFont(font)
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "?")
     painter.end()

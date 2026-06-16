@@ -20,9 +20,11 @@ Quality checks:
 ruff check .
 ruff format --check .
 ty check
+python scripts/check_maintainability.py
 ```
 
-Run them from the synced WSL env, or via the pre-push hook. GUI tests use PySide6
+Run them from the synced WSL env, or via the pre-push hook. The maintainability
+check enforces cyclomatic complexity and file size budgets. GUI tests use PySide6
 with offscreen Qt. Prefer focused tests in `tests/test_gui.py` for window/widget
 changes, and broaden only when behavior crosses workflows.
 

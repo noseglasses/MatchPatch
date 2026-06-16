@@ -45,6 +45,17 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: maintainability
+        name: Maintainability budgets
+        entry: >-
+          bash -c 'export UV_CACHE_DIR=/tmp/matchpatch-uv-cache;
+          export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl";
+          python3 scripts/run_hook_with_hint.py
+          --hint "UV_CACHE_DIR=/tmp/matchpatch-uv-cache UV_PROJECT_ENVIRONMENT=\"\${XDG_DATA_HOME:-\$HOME/.local/share}/matchpatch/.venv-wsl\" uv run --frozen --no-default-groups --group wsl --extra gui python scripts/check_maintainability.py"
+          -- uv run --frozen --no-default-groups --group wsl --extra gui python scripts/check_maintainability.py'
+        language: system
+        pass_filenames: false
+
       - id: ty
         name: ty
         entry: >-

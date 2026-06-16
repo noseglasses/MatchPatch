@@ -13,11 +13,12 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
 from matchpatch.gui import help as gui_help
-from matchpatch.gui import main_window
 from matchpatch.gui.help import GITHUB_DOCS_URL, HELP_TOPICS, HelpId
 from matchpatch.gui.main_window import (
     MEASUREMENT_TIMING_PRESETS,
     MainWindow,
+)
+from matchpatch.gui.measurement_optimization import (
     MeasurementOptimizationDialog,
     MeasurementOptimizationSettings,
     MeasurementOptimizationSetupDialog,
@@ -259,7 +260,7 @@ def test_f1_opens_focused_help_topic(monkeypatch, app) -> None:
     opened = []
     monkeypatch.setattr(gui_help, "open_help", lambda help_id: opened.append(help_id) or True)
     window = MainWindow()
-    monkeypatch.setattr(main_window.QApplication, "focusWidget", lambda: window.reference_di)
+    monkeypatch.setattr(QApplication, "focusWidget", lambda: window.reference_di)
 
     event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_F1, Qt.KeyboardModifier.NoModifier)
     window.keyPressEvent(event)

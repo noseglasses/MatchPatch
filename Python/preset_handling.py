@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import zlib
+from dataclasses import dataclass
 
 # =================================================
 # HELIX CONSTANTS
@@ -53,6 +54,18 @@ CREST_FACTOR_CORRECTION_RATIO = 0.4
 MAX_CREST_FACTOR_CORRECTION_DB = 3.0
 GAIN_ADJUSTMENT_DEADBAND_DB = 0.25
 HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
+
+
+@dataclass(frozen=True)
+class SnapshotGainContext:
+    preset_id: str
+    snapshot_index: int
+    snapshot_name: str
+    gain_delta: object
+    manual_delta: object
+    is_solo: bool
+    is_ignored: bool
+    snapshot: dict
 
 
 # =================================================
@@ -299,31 +312,45 @@ def canonical_snapshot_signal_content(preset, snapshot_index):
 
 
 def iter_snapshot_assigned_parameters(tone):
-    controller_root = tone.get("controller", {})
-    if not isinstance(controller_root, dict):
+    controller_root = _controller_root(tone)
+    if controller_root is None:
         return
 
+    for dsp_name, block_name, block_controller, block in _iter_controller_blocks(
+        tone, controller_root
+    ):
+        for parameter, assignment in block_controller.items():
+            if _is_snapshot_parameter_assignment(assignment, parameter, block):
+                yield str(dsp_name), str(block_name), str(parameter)
+
+
+def _controller_root(tone):
+    controller_root = tone.get("controller", {})
+    if not isinstance(controller_root, dict):
+        return None
+    return controller_root
+
+
+def _iter_controller_blocks(tone, controller_root):
     for dsp_name, dsp_controller in controller_root.items():
         if not isinstance(dsp_controller, dict):
             continue
-
         dsp = tone.get(dsp_name, {})
         if not isinstance(dsp, dict):
             continue
-
         for block_name, block_controller in dsp_controller.items():
             if not isinstance(block_controller, dict):
                 continue
-
             block = dsp.get(block_name, {})
             if not isinstance(block, dict):
                 continue
+            yield dsp_name, block_name, block_controller, block
 
-            for parameter, assignment in block_controller.items():
-                if not isinstance(assignment, dict):
-                    continue
-                if assignment.get("@controller") == 19 and parameter in block:
-                    yield str(dsp_name), str(block_name), str(parameter)
+
+def _is_snapshot_parameter_assignment(assignment, parameter, block):
+    return (
+        isinstance(assignment, dict) and assignment.get("@controller") == 19 and parameter in block
+    )
 
 
 def snapshot_assigned_parameter_values(tone, snapshot_index):
@@ -891,35 +918,46 @@ def load_custom_adjustments_file(filename, snapshot_count=4):
                 raise ValueError(
                     f"Line {line_number}: expected {expected_columns} columns, got {len(row)}"
                 )
-
-            helix_preset = row[0].strip().upper()
-            if not helix_preset:
-                raise ValueError(f"Line {line_number}: preset ID is empty")
+            helix_preset, snapshot_adjustments = _parse_custom_adjustment_row(row, line_number)
             if helix_preset in adjustments:
                 raise ValueError(f"Line {line_number}: duplicate preset ID {helix_preset!r}")
-
-            snapshot_adjustments = {}
-            for snapshot_index, cell in enumerate(row[1:]):
-                text = cell.strip()
-                if not text:
-                    continue
-                try:
-                    value = float(text)
-                except ValueError as exc:
-                    raise ValueError(
-                        f"Line {line_number}: snapshot {snapshot_index + 1} "
-                        f"custom adjustment is not a floating point number: {text!r}"
-                    ) from exc
-                if not math.isfinite(value):
-                    raise ValueError(
-                        f"Line {line_number}: snapshot {snapshot_index + 1} "
-                        f"custom adjustment is not finite: {text!r}"
-                    )
-                snapshot_adjustments[snapshot_index] = value
-
             adjustments[helix_preset] = snapshot_adjustments
 
     return adjustments
+
+
+def _parse_custom_adjustment_row(row, line_number):
+    helix_preset = row[0].strip().upper()
+    if not helix_preset:
+        raise ValueError(f"Line {line_number}: preset ID is empty")
+    return helix_preset, _parse_snapshot_adjustments(row[1:], line_number)
+
+
+def _parse_snapshot_adjustments(cells, line_number):
+    snapshot_adjustments = {}
+    for snapshot_index, cell in enumerate(cells):
+        text = cell.strip()
+        if not text:
+            continue
+        value = _parse_custom_adjustment_value(text, line_number, snapshot_index)
+        snapshot_adjustments[snapshot_index] = value
+    return snapshot_adjustments
+
+
+def _parse_custom_adjustment_value(text, line_number, snapshot_index):
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"Line {line_number}: snapshot {snapshot_index + 1} "
+            f"custom adjustment is not a floating point number: {text!r}"
+        ) from exc
+    if not math.isfinite(value):
+        raise ValueError(
+            f"Line {line_number}: snapshot {snapshot_index + 1} "
+            f"custom adjustment is not finite: {text!r}"
+        )
+    return value
 
 
 def normalize_single_preset_gain_deltas(gain_deltas):
@@ -1069,71 +1107,61 @@ def normalize_snapshot_assigned_parameters(data):
 
     for preset in data.get("presets", []):
         tone = preset.get("tone", {})
-        controller_root = tone.get("controller", {})
         current_snapshot = get_current_snapshot_index(tone)
-
-        if not isinstance(controller_root, dict):
-            continue
-
-        for dsp_name, dsp_controller in controller_root.items():
-            if not isinstance(dsp_controller, dict):
-                continue
-
-            dsp = tone.get(dsp_name, {})
-
-            if not isinstance(dsp, dict):
-                continue
-
-            for block_name, block_controller in dsp_controller.items():
-                if not isinstance(block_controller, dict):
-                    continue
-
-                block = dsp.get(block_name, {})
-
-                if not isinstance(block, dict):
-                    continue
-
-                for parameter, assignment in block_controller.items():
-                    if not isinstance(assignment, dict):
-                        continue
-
-                    if assignment.get("@controller") != 19:
-                        continue
-
-                    if parameter not in block:
-                        continue
-
-                    base_value = block[parameter]
-
-                    for snapshot_index in range(8):
-                        snapshot = tone.get(f"snapshot{snapshot_index}")
-
-                        if not isinstance(snapshot, dict):
-                            continue
-
-                        snapshot_controllers = snapshot.setdefault("controllers", {})
-                        dsp_snapshot = snapshot_controllers.setdefault(dsp_name, {})
-                        block_snapshot = dsp_snapshot.setdefault(block_name, {})
-
-                        if parameter not in block_snapshot:
-                            block_snapshot[parameter] = {"@fs_enabled": False, "@value": base_value}
-
-                    snapshot = tone.get(f"snapshot{current_snapshot}", {})
-                    snapshot_value = (
-                        snapshot.get("controllers", {})
-                        .get(dsp_name, {})
-                        .get(block_name, {})
-                        .get(parameter)
-                    )
-
-                    if isinstance(snapshot_value, dict):
-                        snapshot_value = snapshot_value.get("@value")
-
-                    if snapshot_value is not None and block.get(parameter) != snapshot_value:
-                        block[parameter] = snapshot_value
-                        changes += 1
+        for dsp_name, block_name, parameter, block in _iter_snapshot_parameter_values(tone):
+            snapshot_value = _resolve_snapshot_controller_value(
+                tone, current_snapshot, dsp_name, block_name, parameter
+            )
+            if _normalize_snapshot_parameter(block, parameter, snapshot_value):
+                changes += 1
 
     return changes
+
+
+def _iter_snapshot_parameter_values(tone, snapshot_count=8):
+    controller_root = _controller_root(tone)
+    if controller_root is None:
+        return
+    for dsp_name, block_name, block_controller, block in _iter_controller_blocks(
+        tone, controller_root
+    ):
+        for parameter, assignment in block_controller.items():
+            if not _is_snapshot_parameter_assignment(assignment, parameter, block):
+                continue
+            _ensure_snapshot_parameter_values(
+                tone, dsp_name, block_name, parameter, block, snapshot_count
+            )
+            yield dsp_name, block_name, parameter, block
+
+
+def _ensure_snapshot_parameter_values(tone, dsp_name, block_name, parameter, block, snapshot_count):
+    base_value = block[parameter]
+    for snapshot_index in range(snapshot_count):
+        snapshot = tone.get(f"snapshot{snapshot_index}")
+        if not isinstance(snapshot, dict):
+            continue
+        snapshot_controllers = snapshot.setdefault("controllers", {})
+        dsp_snapshot = snapshot_controllers.setdefault(dsp_name, {})
+        block_snapshot = dsp_snapshot.setdefault(block_name, {})
+        if parameter not in block_snapshot:
+            block_snapshot[parameter] = {"@fs_enabled": False, "@value": base_value}
+
+
+def _resolve_snapshot_controller_value(tone, snapshot, dsp_name, block_name, parameter):
+    snapshot_data = tone.get(f"snapshot{snapshot}", {})
+    snapshot_value = (
+        snapshot_data.get("controllers", {}).get(dsp_name, {}).get(block_name, {}).get(parameter)
+    )
+    if isinstance(snapshot_value, dict):
+        return snapshot_value.get("@value")
+    return snapshot_value
+
+
+def _normalize_snapshot_parameter(block, parameter, snapshot_value):
+    if snapshot_value is None or block.get(parameter) == snapshot_value:
+        return False
+    block[parameter] = snapshot_value
+    return True
 
 
 def adjust_snapshot_gains(
@@ -1147,181 +1175,237 @@ def adjust_snapshot_gains(
     gain_deadband_db=GAIN_ADJUSTMENT_DEADBAND_DB,
     manual_gain_deltas=None,
 ):
-
     changes = 0
     solo_pattern = re.compile(normalize_regex_pattern(solo_regex))
     ignore_snapshot_pattern = re.compile(normalize_regex_pattern(ignore_snapshot_regex))
 
-    presets = data.get("presets", [])
-
-    for preset_index, preset in enumerate(presets):
-        if is_default_preset(preset):
-            continue
-
-        helix_preset = preset_index_to_helix(preset_index)
-
-        if helix_preset not in gain_deltas:
-            continue
-
+    for preset_index, helix_preset, preset in _iter_adjustable_presets(data, gain_deltas):
         tone = preset.get("tone", {})
         snapshot_gain_deltas = gain_deltas[helix_preset]
-
-        # -----------------------------------------
-        # find active output blocks
-        # -----------------------------------------
-
-        gain_outputs = get_gain_outputs(preset)
-
-        if not gain_outputs:
-            print(f"[GAIN] {helix_preset}: no active output block found")
+        output_base_gains = _prepare_gain_outputs(preset_index, preset, tone)
+        if output_base_gains is None:
             continue
+        _ensure_gain_controllers(tone, output_base_gains)
 
-        output_base_gains = []
-
-        for dsp_name, output_name, output_block in gain_outputs:
-            normalize_adjusted_output_to_xlr(
-                preset_index, preset, dsp_name, output_name, output_block
+        for context in _iter_snapshot_gain_contexts(
+            tone,
+            helix_preset,
+            snapshot_gain_deltas,
+            snapshot_count,
+            manual_gain_deltas,
+            solo_pattern,
+            ignore_snapshot_pattern,
+        ):
+            result = _apply_snapshot_gain_delta(
+                context,
+                output_base_gains,
+                ignore_bad_lufs,
+                solo_gain_bump_db,
+                gain_deadband_db,
             )
+            _log_snapshot_gain_decision(context, result)
+            changes += result.get("changes", 0)
 
-            base_gain = float(output_block["gain"])
-            output_base_gains.append((dsp_name, output_name, output_block, base_gain))
-
-            ensure_snapshot_output_gain_values(tone, dsp_name, output_name, base_gain)
-
-        # -----------------------------------------
-        # ensure snapshot controllers exist
-        # -----------------------------------------
-
-        controller_root = tone.setdefault("controller", {})
-
-        for dsp_name, output_name, _, _ in output_base_gains:
-            dsp_controller = controller_root.setdefault(dsp_name, {})
-            output_controller = dsp_controller.setdefault(output_name, {})
-
-            if "gain" not in output_controller:
-                output_controller["gain"] = {
-                    "@controller": 19,
-                    "@max": 20.0,
-                    "@min": -120.0,
-                    "@snapshot_disable": False,
-                }
-
-        # -----------------------------------------
-        # process measured view snapshots only
-        # -----------------------------------------
-
-        for snapshot_index in range(snapshot_count):
-            snapshot_key = f"snapshot{snapshot_index}"
-            snapshot = tone.get(snapshot_key)
-
-            if not isinstance(snapshot, dict):
-                continue
-
-            if snapshot_index not in snapshot_gain_deltas:
-                continue
-
-            snapshot_name = snapshot.get("@name", f"Snapshot {snapshot_index + 1}")
-
-            is_solo = solo_pattern.search(snapshot_name) is not None
-            is_ignored = ignore_snapshot_pattern.search(snapshot_name) is not None
-
-            manual_delta = (manual_gain_deltas or {}).get(helix_preset, {}).get(str(snapshot_index))
-            gain_delta = snapshot_gain_deltas[snapshot_index]
-            marker = " (S)" if is_solo else ""
-
-            if is_ignored:
-                print(f"[GAIN] {helix_preset} {snapshot_name}{marker} | ignored by snapshot regex")
-                continue
-
-            if manual_delta is not None:
-                gain_delta = float(manual_delta)
-                if not math.isfinite(gain_delta):
-                    raise ValueError(
-                        f"Invalid manual gain delta for {helix_preset} snapshot "
-                        f"{snapshot_index + 1}: {manual_delta!r}"
-                    )
-            elif gain_delta is None:
-                print(
-                    f"[GAIN] {helix_preset} {snapshot_name}{marker} | "
-                    "measurement unavailable (Missing LUFS or crest factor in analysis CSV)"
-                )
-                continue
-
-            if is_solo and manual_delta is None:
-                gain_delta += solo_gain_bump_db
-
-            output_gain_changes = []
-
-            for dsp_name, output_name, _, base_gain in output_base_gains:
-                current_gain = get_snapshot_output_gain(snapshot, dsp_name, output_name, base_gain)
-                new_gain = round(current_gain + gain_delta, 2)
-                output_gain_changes.append((dsp_name, output_name, current_gain, new_gain))
-
-            delta_text = f"Delta: {gain_delta:+g} dB"
-
-            if abs(gain_delta) <= gain_deadband_db:
-                gain_text = ", ".join(
-                    f"{dsp_name}.{output_name} {current_gain:.1f} dB"
-                    for dsp_name, output_name, current_gain, _ in output_gain_changes
-                )
-                print(
-                    f"[GAIN] "
-                    f"{helix_preset} "
-                    f"{snapshot_name}{marker} | "
-                    f"stable at {gain_text} "
-                    f"({delta_text})"
-                )
-                continue
-
-            bad_gain_message = None
-            for dsp_name, output_name, _, new_gain in output_gain_changes:
-                if new_gain >= -120.0 and new_gain <= 20.0:
-                    continue
-
-                bad_gain_message = (
-                    f"Implausible output gain "
-                    f"{new_gain} dB for "
-                    f"{helix_preset} {snapshot_name} {dsp_name}.{output_name}. "
-                    "This usually means the "
-                    "measurement recorded silence."
-                )
-                break
-
-            if bad_gain_message is not None:
-                if not ignore_bad_lufs:
-                    raise ValueError(bad_gain_message)
-
-                print(
-                    f"[GAIN] {helix_preset} {snapshot_name}{marker} | "
-                    f"measurement unavailable ({bad_gain_message})"
-                )
-                continue
-
-            snapshot_controllers = snapshot.setdefault("controllers", {})
-
-            for dsp_name, output_name, _, new_gain in output_gain_changes:
-                dsp_snapshot = snapshot_controllers.setdefault(dsp_name, {})
-                output_snapshot = dsp_snapshot.setdefault(output_name, {})
-                output_snapshot["gain"] = {"@fs_enabled": False, "@value": new_gain}
-                changes += 1
-
-            gain_text = ", ".join(
-                f"{dsp_name}.{output_name} {current_gain:.1f} dB -> {new_gain:.1f} dB"
-                for dsp_name, output_name, current_gain, new_gain in output_gain_changes
-            )
-
-            print(f"[GAIN] {helix_preset} {snapshot_name}{marker} | {gain_text} ({delta_text})")
-
-        for dsp_name, output_name, output_block, base_gain in output_base_gains:
-            if sync_output_gain_to_current_snapshot(
-                tone, dsp_name, output_name, output_block, base_gain
-            ):
-                print(
-                    f"[GAIN] {helix_preset}: synchronized "
-                    f"{dsp_name}.{output_name} gain to the current snapshot"
-                )
+        _sync_output_gains_to_current_snapshot(helix_preset, tone, output_base_gains)
 
     return changes
+
+
+def _iter_adjustable_presets(data, gain_deltas):
+    for preset_index, preset in enumerate(data.get("presets", [])):
+        if is_default_preset(preset):
+            continue
+        helix_preset = preset_index_to_helix(preset_index)
+        if helix_preset in gain_deltas:
+            yield preset_index, helix_preset, preset
+
+
+def _prepare_gain_outputs(preset_index, preset, tone):
+    gain_outputs = get_gain_outputs(preset)
+    helix_preset = preset_index_to_helix(preset_index)
+    if not gain_outputs:
+        print(f"[GAIN] {helix_preset}: no active output block found")
+        return None
+
+    output_base_gains = []
+    for dsp_name, output_name, output_block in gain_outputs:
+        normalize_adjusted_output_to_xlr(preset_index, preset, dsp_name, output_name, output_block)
+        base_gain = float(output_block["gain"])
+        output_base_gains.append((dsp_name, output_name, output_block, base_gain))
+        ensure_snapshot_output_gain_values(tone, dsp_name, output_name, base_gain)
+    return output_base_gains
+
+
+def _ensure_gain_controllers(tone, output_base_gains):
+    controller_root = tone.setdefault("controller", {})
+    for dsp_name, output_name, _, _ in output_base_gains:
+        output_controller = controller_root.setdefault(dsp_name, {}).setdefault(output_name, {})
+        if "gain" not in output_controller:
+            output_controller["gain"] = {
+                "@controller": 19,
+                "@max": 20.0,
+                "@min": -120.0,
+                "@snapshot_disable": False,
+            }
+
+
+def _iter_snapshot_gain_contexts(
+    tone,
+    helix_preset,
+    snapshot_gain_deltas,
+    snapshot_count,
+    manual_gain_deltas,
+    solo_pattern,
+    ignore_snapshot_pattern,
+):
+    for snapshot_index in range(snapshot_count):
+        snapshot = tone.get(f"snapshot{snapshot_index}")
+        if not isinstance(snapshot, dict) or snapshot_index not in snapshot_gain_deltas:
+            continue
+        snapshot_name = snapshot.get("@name", f"Snapshot {snapshot_index + 1}")
+        yield SnapshotGainContext(
+            preset_id=helix_preset,
+            snapshot_index=snapshot_index,
+            snapshot_name=snapshot_name,
+            gain_delta=snapshot_gain_deltas[snapshot_index],
+            manual_delta=(manual_gain_deltas or {}).get(helix_preset, {}).get(str(snapshot_index)),
+            is_solo=solo_pattern.search(snapshot_name) is not None,
+            is_ignored=ignore_snapshot_pattern.search(snapshot_name) is not None,
+            snapshot=snapshot,
+        )
+
+
+def _apply_snapshot_gain_delta(
+    context,
+    output_base_gains,
+    ignore_bad_lufs,
+    solo_gain_bump_db,
+    gain_deadband_db,
+):
+    gain_delta = context.gain_delta
+    if context.is_ignored:
+        return {"kind": "ignored"}
+
+    if context.manual_delta is not None:
+        gain_delta = _validated_manual_gain_delta(context)
+    elif gain_delta is None:
+        return {"kind": "missing"}
+
+    if context.is_solo and context.manual_delta is None:
+        gain_delta += solo_gain_bump_db
+
+    output_gain_changes = _snapshot_output_gain_changes(context, output_base_gains, gain_delta)
+    if abs(gain_delta) <= gain_deadband_db:
+        return {"kind": "stable", "gain_delta": gain_delta, "output_changes": output_gain_changes}
+
+    bad_gain_message = _bad_output_gain_message(context, output_gain_changes)
+    if bad_gain_message is not None:
+        if not ignore_bad_lufs:
+            raise ValueError(bad_gain_message)
+        return {"kind": "bad_gain", "message": bad_gain_message}
+
+    return _write_snapshot_gain_changes(context, output_gain_changes, gain_delta)
+
+
+def _validated_manual_gain_delta(context):
+    gain_delta = float(context.manual_delta)
+    if not math.isfinite(gain_delta):
+        raise ValueError(
+            f"Invalid manual gain delta for {context.preset_id} snapshot "
+            f"{context.snapshot_index + 1}: {context.manual_delta!r}"
+        )
+    return gain_delta
+
+
+def _snapshot_output_gain_changes(context, output_base_gains, gain_delta):
+    output_gain_changes = []
+    for dsp_name, output_name, _, base_gain in output_base_gains:
+        current_gain = get_snapshot_output_gain(context.snapshot, dsp_name, output_name, base_gain)
+        new_gain = round(current_gain + gain_delta, 2)
+        output_gain_changes.append((dsp_name, output_name, current_gain, new_gain))
+    return output_gain_changes
+
+
+def _bad_output_gain_message(context, output_gain_changes):
+    for dsp_name, output_name, _, new_gain in output_gain_changes:
+        if -120.0 <= new_gain <= 20.0:
+            continue
+        return (
+            f"Implausible output gain "
+            f"{new_gain} dB for "
+            f"{context.preset_id} {context.snapshot_name} {dsp_name}.{output_name}. "
+            "This usually means the "
+            "measurement recorded silence."
+        )
+    return None
+
+
+def _write_snapshot_gain_changes(context, output_gain_changes, gain_delta):
+    snapshot_controllers = context.snapshot.setdefault("controllers", {})
+    for dsp_name, output_name, _, new_gain in output_gain_changes:
+        output_snapshot = snapshot_controllers.setdefault(dsp_name, {}).setdefault(output_name, {})
+        output_snapshot["gain"] = {"@fs_enabled": False, "@value": new_gain}
+    return {
+        "kind": "applied",
+        "gain_delta": gain_delta,
+        "output_changes": output_gain_changes,
+        "changes": len(output_gain_changes),
+    }
+
+
+def _log_snapshot_gain_decision(context, result):
+    marker = " (S)" if context.is_solo else ""
+    if result["kind"] == "ignored":
+        print(
+            f"[GAIN] {context.preset_id} {context.snapshot_name}{marker} | ignored by snapshot regex"
+        )
+        return
+    if result["kind"] == "missing":
+        print(
+            f"[GAIN] {context.preset_id} {context.snapshot_name}{marker} | "
+            "measurement unavailable (Missing LUFS or crest factor in analysis CSV)"
+        )
+        return
+    if result["kind"] == "bad_gain":
+        print(
+            f"[GAIN] {context.preset_id} {context.snapshot_name}{marker} | "
+            f"measurement unavailable ({result['message']})"
+        )
+        return
+
+    delta_text = f"Delta: {result['gain_delta']:+g} dB"
+    if result["kind"] == "stable":
+        gain_text = ", ".join(
+            f"{dsp_name}.{output_name} {current_gain:.1f} dB"
+            for dsp_name, output_name, current_gain, _ in result["output_changes"]
+        )
+        print(
+            f"[GAIN] "
+            f"{context.preset_id} "
+            f"{context.snapshot_name}{marker} | "
+            f"stable at {gain_text} "
+            f"({delta_text})"
+        )
+        return
+
+    gain_text = ", ".join(
+        f"{dsp_name}.{output_name} {current_gain:.1f} dB -> {new_gain:.1f} dB"
+        for dsp_name, output_name, current_gain, new_gain in result["output_changes"]
+    )
+    print(
+        f"[GAIN] {context.preset_id} {context.snapshot_name}{marker} | {gain_text} ({delta_text})"
+    )
+
+
+def _sync_output_gains_to_current_snapshot(helix_preset, tone, output_base_gains):
+    for dsp_name, output_name, output_block, base_gain in output_base_gains:
+        if sync_output_gain_to_current_snapshot(
+            tone, dsp_name, output_name, output_block, base_gain
+        ):
+            print(
+                f"[GAIN] {helix_preset}: synchronized "
+                f"{dsp_name}.{output_name} gain to the current snapshot"
+            )
 
 
 # =================================================
@@ -1370,6 +1454,64 @@ def normalize_adjusted_output_to_xlr(preset_index, preset, dsp_name, output_name
     return 1
 
 
+def _convert_input_block(input_block, mode):
+    current_input = input_block.get("@input")
+    if mode == "measurement" and current_input == INPUT_MULTI:
+        input_block["@input"] = INPUT_USB_3_4
+        return 1
+    if mode == "stage" and current_input == INPUT_USB_3_4:
+        input_block["@input"] = INPUT_MULTI
+        return 1
+    return 0
+
+
+def _convert_output_block(preset_index, preset, dsp_name, output_name, output_block, mode):
+    current_output = output_block.get("@output")
+    if mode == "measurement":
+        return _convert_measurement_output(
+            preset_index, preset, dsp_name, output_name, output_block, current_output
+        )
+    if mode == "stage" and current_output == OUTPUT_USB_1_2:
+        output_block["@output"] = OUTPUT_XLR
+        return 1
+    return 0
+
+
+def _convert_measurement_output(
+    preset_index, preset, dsp_name, output_name, output_block, current_output
+):
+    if current_output == OUTPUT_USB_1_2:
+        return 0
+    if current_output != OUTPUT_XLR:
+        warn_non_xlr_output_conversion(preset_index, preset, dsp_name, output_name, current_output)
+    output_block["@output"] = OUTPUT_USB_1_2
+    return 1
+
+
+def _convert_preset_io(preset_index, preset, mode):
+    input_changes = 0
+    output_changes = 0
+    tone = preset.get("tone", {})
+
+    for dsp_name in ["dsp0", "dsp1"]:
+        dsp = tone.get(dsp_name)
+        if not isinstance(dsp, dict):
+            continue
+        for input_name in ["inputA", "inputB"]:
+            input_block = dsp.get(input_name)
+            if isinstance(input_block, dict):
+                input_changes += _convert_input_block(input_block, mode)
+
+    normalize_snapshot_assigned_parameters({"presets": [preset]})
+
+    for dsp_name, output_name, output_block in get_final_output_blocks(preset):
+        output_changes += _convert_output_block(
+            preset_index, preset, dsp_name, output_name, output_block, mode
+        )
+
+    return input_changes, output_changes
+
+
 def convert_json_text(text, mode):
     data = json.loads(text)
     input_changes = 0
@@ -1378,52 +1520,9 @@ def convert_json_text(text, mode):
     for preset_index, preset in enumerate(data.get("presets", [])):
         if is_default_preset(preset):
             continue
-
-        tone = preset.get("tone", {})
-
-        for dsp_name in ["dsp0", "dsp1"]:
-            dsp = tone.get(dsp_name)
-
-            if not isinstance(dsp, dict):
-                continue
-
-            for input_name in ["inputA", "inputB"]:
-                input_block = dsp.get(input_name)
-
-                if not isinstance(input_block, dict):
-                    continue
-
-                current_input = input_block.get("@input")
-
-                if mode == "measurement" and current_input == INPUT_MULTI:
-                    input_block["@input"] = INPUT_USB_3_4
-                    input_changes += 1
-
-                elif mode == "stage" and current_input == INPUT_USB_3_4:
-                    input_block["@input"] = INPUT_MULTI
-                    input_changes += 1
-
-        normalize_snapshot_assigned_parameters({"presets": [preset]})
-
-        for dsp_name, output_name, output_block in get_final_output_blocks(preset):
-            current_output = output_block.get("@output")
-
-            if mode == "measurement":
-                if current_output == OUTPUT_USB_1_2:
-                    continue
-
-                if current_output != OUTPUT_XLR:
-                    warn_non_xlr_output_conversion(
-                        preset_index, preset, dsp_name, output_name, current_output
-                    )
-
-                output_block["@output"] = OUTPUT_USB_1_2
-                output_changes += 1
-
-            elif mode == "stage":
-                if current_output == OUTPUT_USB_1_2:
-                    output_block["@output"] = OUTPUT_XLR
-                    output_changes += 1
+        preset_input_changes, preset_output_changes = _convert_preset_io(preset_index, preset, mode)
+        input_changes += preset_input_changes
+        output_changes += preset_output_changes
 
     return (json.dumps(data, indent=1), input_changes, output_changes)
 
@@ -1589,8 +1688,7 @@ def save_output(modified_json_text, output_filename, original_hls_text=None):
 # =================================================
 
 
-def main():
-
+def _build_parser():
     parser = argparse.ArgumentParser(description=("Line 6 Helix HLS/HLX/JSON Utility"))
 
     parser.add_argument("-i", "--input", required=True, help="Input file (.hls, .hlx, or .json)")
@@ -1701,122 +1799,152 @@ def main():
         ),
     )
 
-    args = parser.parse_args()
+    return parser
+
+
+def _load_input_text(args):
+    input_filetype = get_filetype(args.input)
+    if args.snapshot_count < 1 or args.snapshot_count > 8:
+        raise ValueError("Snapshot count must be between 1 and 8")
+    json_text, original_hls_text = load_input(args.input)
+    return input_filetype, json_text, original_hls_text
+
+
+def _run_query_command(args, json_text, original_hls_text):
+    if args.list_presets:
+        data = json.loads(json_text)
+        json.dump(extract_preset_assignments(data), sys.stdout, indent=2, ensure_ascii=False)
+    elif args.metadata:
+        metadata = extract_metadata(args.input, json_text, original_hls_text)
+        json.dump(metadata, sys.stdout, indent=2, ensure_ascii=False)
+    elif args.diff_presets:
+        json.dump(extract_diff_preset_ids(args.input, args.diff_presets), sys.stdout, indent=2)
+    elif args.diff_snapshots:
+        diff_snapshots = extract_diff_snapshot_ids(
+            args.input,
+            args.diff_snapshots,
+            args.snapshot_count,
+        )
+        json.dump(diff_snapshots, sys.stdout, indent=2)
+    else:
+        return False
+    print()
+    return True
+
+
+def _require_output_for_mutating_command(args):
+    if not args.output:
+        raise ValueError(
+            "Output file is required unless --list-presets, --metadata, "
+            "--diff-presets, or --diff-snapshots is used"
+        )
+    require_compatible_output_path(args.input, args.output)
+
+
+def _conversion_mode(args):
+    return "measurement" if args.measurement else "stage" if args.stage else "adjust-gain"
+
+
+def _convert_if_needed(args, json_text, mode):
+    if args.measurement or args.stage:
+        return convert_json_text(json_text, mode)
+    return json_text, 0, 0
+
+
+def _apply_manual_adjustments_if_needed(args, modified_json_text):
+    if not args.manual_adjustments:
+        return modified_json_text, {}
+    with open(args.manual_adjustments, "r", encoding="utf-8") as f:
+        manual_adjustments = json.load(f)
+    data = json.loads(modified_json_text)
+    apply_manual_adjustments(data, manual_adjustments)
+    return json.dumps(data), manual_adjustments
+
+
+def _load_gain_deltas_for_command(args, input_filetype):
+    if not args.adjust_gain:
+        return None
+    if not args.lufs_analysis_file:
+        raise ValueError("Adjust gain mode requires -g lufs_analysis.csv")
+    custom_adjustments = _load_custom_adjustments_for_command(args)
+    gain_deltas = load_lufs_analysis_file(
+        args.lufs_analysis_file,
+        args.target_lufs,
+        args.snapshot_count,
+        args.crest_factor_reference_db,
+        args.crest_factor_correction_ratio,
+        args.max_crest_factor_correction_db,
+        custom_adjustments,
+    )
+    return (
+        normalize_single_preset_gain_deltas(gain_deltas) if input_filetype == "hlx" else gain_deltas
+    )
+
+
+def _load_custom_adjustments_for_command(args):
+    if not args.custom_adjustments_file:
+        return None
+    return load_custom_adjustments_file(args.custom_adjustments_file, args.snapshot_count)
+
+
+def _run_preset_handling_command(args, json_text, input_filetype):
+    mode = _conversion_mode(args)
+    modified_json_text, input_changes, output_changes = _convert_if_needed(args, json_text, mode)
+    modified_json_text, manual_adjustments = _apply_manual_adjustments_if_needed(
+        args, modified_json_text
+    )
+    gain_deltas = _load_gain_deltas_for_command(args, input_filetype)
+    modified_json_text, snapshot_changes, gain_changes = process_json_structure(
+        modified_json_text,
+        gain_deltas,
+        args.measurement or args.stage or args.adjust_gain,
+        args.ignore_bad_lufs,
+        args.snapshot_count,
+        args.solo_regex,
+        args.ignore_snapshot_regex,
+        args.solo_gain_bump_db,
+        args.gain_deadband_db,
+        manual_adjustments.get("gain_deltas"),
+    )
+    return modified_json_text, mode, input_changes, output_changes, snapshot_changes, gain_changes
+
+
+def _write_output(args, modified_json_text, original_hls_text):
+    save_output(modified_json_text, args.output, original_hls_text)
+
+
+def _print_processing_summary(
+    args, mode, input_changes, output_changes, snapshot_changes, gain_changes
+):
+    print()
+    print("[OK] Processing complete")
+    print()
+    print(f"Mode   : {mode}")
+    print(f"Input  : {args.input}")
+    print(f"Output : {args.output}")
+    if args.lufs_analysis_file:
+        print(f"LUFSCSV: {args.lufs_analysis_file}")
+    print()
+    print(f"Input replacements : {input_changes}")
+    print(f"Output replacements: {output_changes}")
+    print(f"Snapshot assignments: {snapshot_changes}")
+    print(f"Gain adjustments    : {gain_changes}")
+    print()
+
+
+def main():
+    args = _build_parser().parse_args()
 
     try:
-        input_filetype = get_filetype(args.input)
-
-        if args.snapshot_count < 1 or args.snapshot_count > 8:
-            raise ValueError("Snapshot count must be between 1 and 8")
-
-        json_text, original_hls_text = load_input(args.input)
-
-        if args.list_presets:
-            data = json.loads(json_text)
-            assignments = extract_preset_assignments(data)
-
-            json.dump(assignments, sys.stdout, indent=2, ensure_ascii=False)
-
-            print()
-
+        input_filetype, json_text, original_hls_text = _load_input_text(args)
+        if _run_query_command(args, json_text, original_hls_text):
             return
-
-        if args.metadata:
-            metadata = extract_metadata(args.input, json_text, original_hls_text)
-
-            json.dump(metadata, sys.stdout, indent=2, ensure_ascii=False)
-
-            print()
-
-            return
-
-        if args.diff_presets:
-            diff_ids = extract_diff_preset_ids(args.input, args.diff_presets)
-
-            json.dump(diff_ids, sys.stdout, indent=2)
-
-            print()
-
-            return
-
-        if args.diff_snapshots:
-            diff_snapshots = extract_diff_snapshot_ids(
-                args.input,
-                args.diff_snapshots,
-                args.snapshot_count,
-            )
-
-            json.dump(diff_snapshots, sys.stdout, indent=2)
-
-            print()
-
-            return
-
-        if not args.output:
-            raise ValueError(
-                "Output file is required unless --list-presets, --metadata, "
-                "--diff-presets, or --diff-snapshots is used"
-            )
-
-        require_compatible_output_path(args.input, args.output)
-
-        mode = "measurement" if args.measurement else "stage" if args.stage else "adjust-gain"
-
-        modified_json_text = json_text
-        input_changes = 0
-        output_changes = 0
-
-        if args.measurement or args.stage:
-            (modified_json_text, input_changes, output_changes) = convert_json_text(json_text, mode)
-
-        manual_adjustments = {}
-        if args.manual_adjustments:
-            with open(args.manual_adjustments, "r", encoding="utf-8") as f:
-                manual_adjustments = json.load(f)
-            data = json.loads(modified_json_text)
-            apply_manual_adjustments(data, manual_adjustments)
-            modified_json_text = json.dumps(data)
-
-        gain_deltas = None
-
-        if args.adjust_gain:
-            if not args.lufs_analysis_file:
-                raise ValueError("Adjust gain mode requires -g lufs_analysis.csv")
-
-            custom_adjustments = None
-            if args.custom_adjustments_file:
-                custom_adjustments = load_custom_adjustments_file(
-                    args.custom_adjustments_file,
-                    args.snapshot_count,
-                )
-
-            gain_deltas = load_lufs_analysis_file(
-                args.lufs_analysis_file,
-                args.target_lufs,
-                args.snapshot_count,
-                args.crest_factor_reference_db,
-                args.crest_factor_correction_ratio,
-                args.max_crest_factor_correction_db,
-                custom_adjustments,
-            )
-
-            if input_filetype == "hlx":
-                gain_deltas = normalize_single_preset_gain_deltas(gain_deltas)
-
-        (modified_json_text, snapshot_changes, gain_changes) = process_json_structure(
-            modified_json_text,
-            gain_deltas,
-            args.measurement or args.stage or args.adjust_gain,
-            args.ignore_bad_lufs,
-            args.snapshot_count,
-            args.solo_regex,
-            args.ignore_snapshot_regex,
-            args.solo_gain_bump_db,
-            args.gain_deadband_db,
-            manual_adjustments.get("gain_deltas"),
+        _require_output_for_mutating_command(args)
+        result = _run_preset_handling_command(args, json_text, input_filetype)
+        modified_json_text, mode, input_changes, output_changes, snapshot_changes, gain_changes = (
+            result
         )
-
-        save_output(modified_json_text, args.output, original_hls_text)
+        _write_output(args, modified_json_text, original_hls_text)
 
     except Exception as e:
         print()
@@ -1825,28 +1953,9 @@ def main():
 
         sys.exit(1)
 
-    print()
-    print("[OK] Processing complete")
-    print()
-
-    print(f"Mode   : {mode}")
-    print(f"Input  : {args.input}")
-    print(f"Output : {args.output}")
-
-    if args.lufs_analysis_file:
-        print(f"LUFSCSV: {args.lufs_analysis_file}")
-
-    print()
-
-    print(f"Input replacements : {input_changes}")
-
-    print(f"Output replacements: {output_changes}")
-
-    print(f"Snapshot assignments: {snapshot_changes}")
-
-    print(f"Gain adjustments    : {gain_changes}")
-
-    print()
+    _print_processing_summary(
+        args, mode, input_changes, output_changes, snapshot_changes, gain_changes
+    )
 
 
 if __name__ == "__main__":

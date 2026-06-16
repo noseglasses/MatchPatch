@@ -9,15 +9,16 @@ import re
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
 import soundfile as sf
 
-from matchpatch.analysis import AnalysisOptions, analyze_audio
+from matchpatch.analysis import AnalysisOptions, AudioMeasurements, analyze_audio
 from matchpatch.config import (
+    Config,
     config_value,
     load_config,
 )
@@ -29,6 +30,7 @@ from matchpatch.devices.base import (
     AudioRouting,
     DeviceController,
     DeviceProfile,
+    PatchFileHandler,
     SteeringOptions,
     validate_snapshot_count,
 )
@@ -55,6 +57,16 @@ if TYPE_CHECKING:
 SnapshotPlan = dict[str, tuple[int, ...]]
 SnapshotResult = tuple[float, float] | None
 SNAPSHOT_SKIP_SENTINEL = "SKIP"
+
+
+@dataclass(frozen=True)
+class MeasurementTarget:
+    preset_id: int
+    device_patch: str
+    preset_index: int
+    preset_total: int
+    snapshot_total: int
+    snapshots: tuple[int, ...]
 
 
 class HardwareDiagnosticError(RuntimeError, ValueError):
@@ -285,170 +297,290 @@ def measure_presets(
         writer = csv.DictWriter(csv_file, fieldnames=csv_fields(measured_snapshots))
         writer.writeheader()
 
-        for preset_index, preset_id in enumerate(preset_ids, start=1):
-            device_patch = handler.format_patch_id(preset_id)
-            _emit_progress(
-                on_progress,
-                ProgressEvent(
-                    "preset_started",
-                    preset_id=preset_id,
-                    device_patch=device_patch,
-                    preset_index=preset_index,
-                    preset_total=len(preset_ids),
-                    snapshot_total=measured_snapshots,
-                ),
-            )
-
-            if log_output:
-                print(f"[MEASURE] {profile.name}:{device_patch}", flush=True)
-
+        for target in _iter_measurement_targets(
+            handler,
+            preset_ids,
+            snapshot_plan,
+            measured_snapshots,
+        ):
+            _emit_preset_started(on_progress, target)
+            _log_preset_started(profile, target, log_output)
             try:
-                backend.activate_preset(preset_id)
-                snapshots_to_measure = _snapshots_to_measure(
-                    snapshot_plan,
-                    device_patch,
-                    measured_snapshots,
-                )
-                results: dict[int, SnapshotResult] = {}
-
-                for snapshot in snapshots_to_measure:
-                    _emit_progress(
+                backend.activate_preset(target.preset_id)
+                results = {
+                    snapshot: _measure_snapshot_target(
+                        profile,
+                        backend,
+                        target,
+                        snapshot,
+                        reference,
+                        sample_rate,
+                        analysis_options,
+                        reference_lufs,
                         on_progress,
-                        ProgressEvent(
-                            "snapshot_started",
-                            preset_id=preset_id,
-                            device_patch=device_patch,
-                            preset_index=preset_index,
-                            preset_total=len(preset_ids),
-                            snapshot=snapshot,
-                            snapshot_total=measured_snapshots,
-                        ),
+                        log_output,
+                        play_recorded_output,
+                        recorded_output_dir,
                     )
-                    try:
-                        backend.reapply_snapshot(snapshot)
-                        recorded = backend.record(reference)
-                        recorded_path = _recorded_output_path(
-                            recorded_output_dir,
-                            device_patch,
-                            snapshot,
-                        )
-                        if recorded_path is not None:
-                            recorded_path.parent.mkdir(parents=True, exist_ok=True)
-                            sf.write(recorded_path, recorded, sample_rate)
-                            _emit_progress(
-                                on_progress,
-                                ProgressEvent(
-                                    "snapshot_recorded",
-                                    preset_id=preset_id,
-                                    device_patch=device_patch,
-                                    preset_index=preset_index,
-                                    preset_total=len(preset_ids),
-                                    snapshot=snapshot,
-                                    snapshot_total=measured_snapshots,
-                                    path=str(recorded_path),
-                                ),
-                            )
-                        if _playback_enabled(play_recorded_output):
-                            _play_audio(recorded, sample_rate)
-                        values = analyze_audio(recorded, sample_rate, analysis_options)
-                    except Exception as exc:  # noqa: BLE001
-                        results[snapshot] = None
-                        _emit_progress(
-                            on_progress,
-                            ProgressEvent(
-                                "snapshot_failed",
-                                message=str(exc),
-                                preset_id=preset_id,
-                                device_patch=device_patch,
-                                preset_index=preset_index,
-                                preset_total=len(preset_ids),
-                                snapshot=snapshot,
-                                snapshot_total=measured_snapshots,
-                            ),
-                        )
-                        if log_output:
-                            print(
-                                f"[ERROR] {profile.name}:{device_patch} snapshot {snapshot}: {exc}",
-                                file=sys.stderr,
-                                flush=True,
-                            )
-                        continue
-
-                    results[snapshot] = (values.short_term_lufs, values.crest_factor_db)
-                    _emit_progress(
-                        on_progress,
-                        ProgressEvent(
-                            "snapshot_completed",
-                            preset_id=preset_id,
-                            device_patch=device_patch,
-                            preset_index=preset_index,
-                            preset_total=len(preset_ids),
-                            snapshot=snapshot,
-                            snapshot_total=measured_snapshots,
-                            reference_lufs=reference_lufs,
-                            lufs=values.short_term_lufs,
-                            crest_factor_db=values.crest_factor_db,
-                        ),
-                    )
-
-                    if log_output:
-                        print(
-                            f"  snapshot {snapshot}: "
-                            f"{values.short_term_lufs:.3f} LUFS, "
-                            f"{values.crest_factor_db:.3f} dB crest",
-                            flush=True,
-                        )
-
-                append_result_row(
-                    writer,
-                    preset_id,
-                    device_patch,
-                    measured_snapshots,
-                    results,
-                )
+                    for snapshot in target.snapshots
+                }
+                _write_measurement_row(writer, target, results)
 
             except Exception as exc:
-                _emit_progress(
-                    on_progress,
-                    ProgressEvent(
-                        "preset_failed",
-                        message=str(exc),
-                        preset_id=preset_id,
-                        device_patch=device_patch,
-                        preset_index=preset_index,
-                        preset_total=len(preset_ids),
-                        snapshot_total=measured_snapshots,
-                    ),
-                )
-
-                if log_output:
-                    print(
-                        f"[ERROR] {profile.name}:{device_patch}: {exc}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                append_result_row(
-                    writer,
-                    preset_id,
-                    device_patch,
-                    measured_snapshots,
-                    None,
-                )
+                _emit_preset_failure(profile, target, exc, on_progress, log_output)
+                _write_measurement_row(writer, target, None)
 
             csv_file.flush()
-            _emit_progress(
-                on_progress,
-                ProgressEvent(
-                    "preset_completed",
-                    preset_id=preset_id,
-                    device_patch=device_patch,
-                    preset_index=preset_index,
-                    preset_total=len(preset_ids),
-                    snapshot_total=measured_snapshots,
-                ),
-            )
+            _emit_preset_completed(on_progress, target)
 
     _emit_progress(on_progress, ProgressEvent("measurement_completed"))
+
+
+def _iter_measurement_targets(
+    handler: PatchFileHandler,
+    preset_ids: list[int],
+    snapshot_plan: SnapshotPlan | None,
+    snapshot_count: int,
+) -> tuple[MeasurementTarget, ...]:
+    return tuple(
+        MeasurementTarget(
+            preset_id=preset_id,
+            device_patch=device_patch,
+            preset_index=preset_index,
+            preset_total=len(preset_ids),
+            snapshot_total=snapshot_count,
+            snapshots=_snapshots_to_measure(
+                snapshot_plan,
+                device_patch,
+                snapshot_count,
+            ),
+        )
+        for preset_index, preset_id in enumerate(preset_ids, start=1)
+        for device_patch in (handler.format_patch_id(preset_id),)
+    )
+
+
+def _measure_snapshot_target(
+    profile: DeviceProfile,
+    backend: MeasurementBackend,
+    target: MeasurementTarget,
+    snapshot: int,
+    reference: np.ndarray,
+    sample_rate: int,
+    analysis_options: AnalysisOptions,
+    reference_lufs: float,
+    on_progress: Callable[[ProgressEvent], None] | None,
+    log_output: bool,
+    play_recorded_output: bool | PlaybackEnabled,
+    recorded_output_dir: Path | None,
+) -> SnapshotResult:
+    _emit_snapshot_started(on_progress, target, snapshot)
+    try:
+        values = _record_and_analyze_snapshot(
+            backend,
+            target,
+            snapshot,
+            reference,
+            sample_rate,
+            analysis_options,
+            on_progress,
+            play_recorded_output,
+            recorded_output_dir,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _emit_measurement_failure(profile, target, snapshot, exc, on_progress, log_output)
+        return None
+
+    _emit_snapshot_completed(on_progress, target, snapshot, reference_lufs, values)
+    _log_snapshot_completed(snapshot, values, log_output)
+    return values.short_term_lufs, values.crest_factor_db
+
+
+def _record_and_analyze_snapshot(
+    backend: MeasurementBackend,
+    target: MeasurementTarget,
+    snapshot: int,
+    reference: np.ndarray,
+    sample_rate: int,
+    analysis_options: AnalysisOptions,
+    on_progress: Callable[[ProgressEvent], None] | None,
+    play_recorded_output: bool | PlaybackEnabled,
+    recorded_output_dir: Path | None,
+) -> AudioMeasurements:
+    backend.reapply_snapshot(snapshot)
+    recorded = backend.record(reference)
+    _write_recorded_snapshot(
+        recorded, recorded_output_dir, target, snapshot, sample_rate, on_progress
+    )
+    if _playback_enabled(play_recorded_output):
+        _play_audio(recorded, sample_rate)
+    return analyze_audio(recorded, sample_rate, analysis_options)
+
+
+def _write_recorded_snapshot(
+    recorded: np.ndarray,
+    recorded_output_dir: Path | None,
+    target: MeasurementTarget,
+    snapshot: int,
+    sample_rate: int,
+    on_progress: Callable[[ProgressEvent], None] | None,
+) -> None:
+    recorded_path = _recorded_output_path(recorded_output_dir, target.device_patch, snapshot)
+    if recorded_path is None:
+        return
+    recorded_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(recorded_path, recorded, sample_rate)
+    _emit_progress(
+        on_progress,
+        ProgressEvent(
+            "snapshot_recorded",
+            preset_id=target.preset_id,
+            device_patch=target.device_patch,
+            preset_index=target.preset_index,
+            preset_total=target.preset_total,
+            snapshot=snapshot,
+            snapshot_total=target.snapshot_total,
+            path=str(recorded_path),
+        ),
+    )
+
+
+def _write_measurement_row(
+    writer: csv.DictWriter,
+    target: MeasurementTarget,
+    results: dict[int, SnapshotResult] | None,
+) -> None:
+    append_result_row(
+        writer,
+        target.preset_id,
+        target.device_patch,
+        target.snapshot_total,
+        results,
+    )
+
+
+def _emit_preset_started(
+    on_progress: Callable[[ProgressEvent], None] | None,
+    target: MeasurementTarget,
+) -> None:
+    _emit_progress(on_progress, _target_event("preset_started", target))
+
+
+def _emit_preset_completed(
+    on_progress: Callable[[ProgressEvent], None] | None,
+    target: MeasurementTarget,
+) -> None:
+    _emit_progress(on_progress, _target_event("preset_completed", target))
+
+
+def _emit_snapshot_started(
+    on_progress: Callable[[ProgressEvent], None] | None,
+    target: MeasurementTarget,
+    snapshot: int,
+) -> None:
+    _emit_progress(on_progress, _target_event("snapshot_started", target, snapshot=snapshot))
+
+
+def _emit_snapshot_completed(
+    on_progress: Callable[[ProgressEvent], None] | None,
+    target: MeasurementTarget,
+    snapshot: int,
+    reference_lufs: float,
+    values: AudioMeasurements,
+) -> None:
+    _emit_progress(
+        on_progress,
+        _target_event(
+            "snapshot_completed",
+            target,
+            snapshot=snapshot,
+            reference_lufs=reference_lufs,
+            lufs=values.short_term_lufs,
+            crest_factor_db=values.crest_factor_db,
+        ),
+    )
+
+
+def _emit_measurement_failure(
+    profile: DeviceProfile,
+    target: MeasurementTarget,
+    snapshot: int,
+    exc: Exception,
+    on_progress: Callable[[ProgressEvent], None] | None,
+    log_output: bool,
+) -> None:
+    _emit_progress(
+        on_progress,
+        _target_event("snapshot_failed", target, message=str(exc), snapshot=snapshot),
+    )
+    if log_output:
+        print(
+            f"[ERROR] {profile.name}:{target.device_patch} snapshot {snapshot}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def _emit_preset_failure(
+    profile: DeviceProfile,
+    target: MeasurementTarget,
+    exc: Exception,
+    on_progress: Callable[[ProgressEvent], None] | None,
+    log_output: bool,
+) -> None:
+    _emit_progress(on_progress, _target_event("preset_failed", target, message=str(exc)))
+    if log_output:
+        print(
+            f"[ERROR] {profile.name}:{target.device_patch}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def _target_event(
+    kind: str,
+    target: MeasurementTarget,
+    *,
+    message: str | None = None,
+    snapshot: int | None = None,
+    reference_lufs: float | None = None,
+    lufs: float | None = None,
+    crest_factor_db: float | None = None,
+    path: str | None = None,
+) -> ProgressEvent:
+    return ProgressEvent(
+        kind,
+        message=message,
+        preset_id=target.preset_id,
+        device_patch=target.device_patch,
+        preset_index=target.preset_index,
+        preset_total=target.preset_total,
+        snapshot=snapshot,
+        snapshot_total=target.snapshot_total,
+        reference_lufs=reference_lufs,
+        lufs=lufs,
+        crest_factor_db=crest_factor_db,
+        path=path,
+    )
+
+
+def _log_preset_started(
+    profile: DeviceProfile,
+    target: MeasurementTarget,
+    log_output: bool,
+) -> None:
+    if log_output:
+        print(f"[MEASURE] {profile.name}:{target.device_patch}", flush=True)
+
+
+def _log_snapshot_completed(snapshot: int, values: AudioMeasurements, log_output: bool) -> None:
+    if log_output:
+        print(
+            f"  snapshot {snapshot}: "
+            f"{values.short_term_lufs:.3f} LUFS, "
+            f"{values.crest_factor_db:.3f} dB crest",
+            flush=True,
+        )
 
 
 def _snapshots_to_measure(
@@ -1100,134 +1232,158 @@ def add_hardware_arguments(parser: argparse.ArgumentParser) -> None:
 def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     config = load_config(args.config)
     profile = get_device_profile(args.device)
-    default_audio = profile.default_audio_routing()
-    default_steering = profile.default_steering_options()
-    device_audio = ("devices", args.device, "audio")
-    device_steering = ("devices", args.device, "steering")
+    _apply_backend_config(args, config)
+    _apply_audio_config(args, config, profile)
+    _apply_timing_config(args, config, profile)
+    _apply_optimization_config(args, config)
+    if args.snapshot_count is not None:
+        validate_snapshot_count(profile, args.snapshot_count)
+    args.analysis_options = _analysis_options_from_config(args, config)
+    return args
 
-    def float_config_value(value: object | None, default: float) -> float:
-        if value is None:
-            return default
-        return float(cast(Any, value))
 
+def _apply_backend_config(args: argparse.Namespace, config: Config) -> None:
     args.backend = getattr(args, "backend", None) or config_value(
         config, "normalize", "backend", default="hardware"
     )
-    args.audio_device = (
-        args.audio_device
-        if args.audio_device is not None
-        else config_value(config, *device_audio, "device", default=default_audio.device)
+
+
+def _apply_audio_config(
+    args: argparse.Namespace,
+    config: Config,
+    profile: DeviceProfile,
+) -> None:
+    default_audio = profile.default_audio_routing()
+    device_audio = ("devices", args.device, "audio")
+    args.audio_device = _arg_or_config(
+        args,
+        "audio_device",
+        config,
+        *device_audio,
+        "device",
+        default=default_audio.device,
     )
-    args.sample_rate = (
-        args.sample_rate
-        if args.sample_rate is not None
-        else config_value(config, *device_audio, "sample_rate", default=default_audio.sample_rate)
+    args.sample_rate = _arg_or_config(
+        args,
+        "sample_rate",
+        config,
+        *device_audio,
+        "sample_rate",
+        default=default_audio.sample_rate,
+    )
+    _apply_mapping_config(args, config, device_audio, default_audio)
+    args.blocksize = _arg_or_config(
+        args, "blocksize", config, *device_audio, "blocksize", default=0
     )
 
+
+def _apply_mapping_config(
+    args: argparse.Namespace,
+    config: Config,
+    device_audio: tuple[str, str, str],
+    default_audio: AudioRouting,
+) -> None:
     for name in ("input_mapping", "output_mapping"):
-        value = getattr(args, name)
-
-        if value is None:
-            value = config_value(config, *device_audio, name, default=getattr(default_audio, name))
-
+        value = _arg_or_config(
+            args,
+            name,
+            config,
+            *device_audio,
+            name,
+            default=getattr(default_audio, name),
+        )
         if value is not None:
             setattr(args, name, parse_config_mapping(value))
 
-    args.blocksize = (
-        args.blocksize
-        if args.blocksize is not None
-        else config_value(config, *device_audio, "blocksize", default=0)
-    )
-    args.steering_output = (
-        args.steering_output
-        if args.steering_output is not None
-        else config_value(config, *device_steering, "output", default=default_steering.output)
-    )
-    args.steering_channel = (
-        args.steering_channel
-        if args.steering_channel is not None
-        else config_value(config, *device_steering, "channel", default=default_steering.channel)
-    )
-    args.preset_wait = (
-        args.preset_wait
-        if args.preset_wait is not None
-        else config_value(
-            config,
-            *device_steering,
-            "preset_wait_seconds",
-            default=default_steering.preset_wait_seconds,
-        )
-    )
-    args.snapshot_wait = (
-        args.snapshot_wait
-        if args.snapshot_wait is not None
-        else config_value(
-            config,
-            *device_steering,
-            "snapshot_wait_seconds",
-            default=default_steering.snapshot_wait_seconds,
-        )
-    )
-    args.measurement_wait = (
-        args.measurement_wait
-        if args.measurement_wait is not None
-        else config_value(
-            config,
-            *device_steering,
+
+def _apply_timing_config(
+    args: argparse.Namespace,
+    config: Config,
+    profile: DeviceProfile,
+) -> None:
+    default_steering = profile.default_steering_options()
+    device_steering = ("devices", args.device, "steering")
+    for attr, key, default in (
+        ("steering_output", "output", default_steering.output),
+        ("steering_channel", "channel", default_steering.channel),
+        ("preset_wait", "preset_wait_seconds", default_steering.preset_wait_seconds),
+        ("snapshot_wait", "snapshot_wait_seconds", default_steering.snapshot_wait_seconds),
+        (
+            "measurement_wait",
             "measurement_wait_seconds",
-            default=default_steering.measurement_wait_seconds,
+            default_steering.measurement_wait_seconds,
+        ),
+    ):
+        setattr(
+            args, attr, _arg_or_config(args, attr, config, *device_steering, key, default=default)
         )
-    )
-    args.pre_roll = (
-        getattr(args, "pre_roll", None)
-        if getattr(args, "pre_roll", None) is not None
-        else config_value(config, "analysis", "pre_roll_seconds", default=0.2)
-    )
-    args.post_roll = (
-        getattr(args, "post_roll", None)
-        if getattr(args, "post_roll", None) is not None
-        else config_value(config, "analysis", "post_roll_seconds", default=0.1)
-    )
-    args.round_trip_latency = (
-        getattr(args, "round_trip_latency", None)
-        if getattr(args, "round_trip_latency", None) is not None
-        else config_value(config, "analysis", "round_trip_latency_seconds", default=0.02)
-    )
-    args.snapshot_count = (
-        getattr(args, "snapshot_count", None)
-        if getattr(args, "snapshot_count", None) is not None
-        else config_value(config, "policy", "measured_snapshots")
-    )
-    args.stability_tolerance = (
-        getattr(args, "stability_tolerance", None)
-        if getattr(args, "stability_tolerance", None) is not None
-        else config_value(config, "measurement", "stability_tolerance_percent", default=2.0)
+    for attr, key, default in (
+        ("pre_roll", "pre_roll_seconds", 0.2),
+        ("post_roll", "post_roll_seconds", 0.1),
+        ("round_trip_latency", "round_trip_latency_seconds", 0.02),
+    ):
+        setattr(args, attr, _arg_or_config(args, attr, config, "analysis", key, default=default))
+    args.snapshot_count = _arg_or_config(
+        args, "snapshot_count", config, "policy", "measured_snapshots"
     )
 
-    if args.snapshot_count is not None:
-        validate_snapshot_count(profile, args.snapshot_count)
 
-    args.analysis_options = AnalysisOptions(
-        window_seconds=float_config_value(
-            getattr(args, "analysis_window", None)
-            if getattr(args, "analysis_window", None) is not None
-            else config_value(config, "analysis", "window_seconds", default=3.0),
+def _apply_optimization_config(args: argparse.Namespace, config: Config) -> None:
+    args.stability_tolerance = _arg_or_config(
+        args,
+        "stability_tolerance",
+        config,
+        "measurement",
+        "stability_tolerance_percent",
+        default=2.0,
+    )
+
+
+def _analysis_options_from_config(args: argparse.Namespace, config: Config) -> AnalysisOptions:
+    return AnalysisOptions(
+        window_seconds=_float_config_value(
+            _arg_or_config(
+                args, "analysis_window", config, "analysis", "window_seconds", default=3.0
+            ),
             3.0,
         ),
-        interval_seconds=float_config_value(
-            getattr(args, "analysis_interval", None)
-            if getattr(args, "analysis_interval", None) is not None
-            else config_value(config, "analysis", "interval_seconds", default=0.1),
+        interval_seconds=_float_config_value(
+            _arg_or_config(
+                args, "analysis_interval", config, "analysis", "interval_seconds", default=0.1
+            ),
             0.1,
         ),
-        minimum_valid_lufs=float_config_value(
-            getattr(args, "minimum_valid_lufs", None)
-            if getattr(args, "minimum_valid_lufs", None) is not None
-            else config_value(config, "analysis", "minimum_valid_lufs", default=-100.0),
+        minimum_valid_lufs=_float_config_value(
+            _arg_or_config(
+                args,
+                "minimum_valid_lufs",
+                config,
+                "analysis",
+                "minimum_valid_lufs",
+                default=-100.0,
+            ),
             -100.0,
         ),
     )
-    return args
+
+
+def _arg_or_config(
+    args: argparse.Namespace,
+    attr: str,
+    config: Config,
+    *path: str,
+    default: object | None = None,
+) -> object:
+    value = getattr(args, attr, None)
+    if value is not None:
+        return value
+    return config_value(config, *path, default=default)
+
+
+def _float_config_value(value: object | None, default: float) -> float:
+    if value is None:
+        return default
+    return float(cast(Any, value))
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -1321,39 +1477,67 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args() if argv is None else parse_args(argv)
+    _run_measure_command(args, _request_from_measure_args(args))
 
+
+def _request_from_measure_args(args: argparse.Namespace) -> argparse.Namespace:
+    if getattr(args, "backend", None) == "helix":
+        args.backend = "hardware"
+    return args
+
+
+def _run_measure_command(
+    args: argparse.Namespace,
+    request: argparse.Namespace,
+) -> None:
     if args.command == "devices":
         list_devices()
     elif args.command == "check-hardware":
-        if getattr(args, "diagnostics_json", False):
-            preflight = collect_hardware_preflight(args)
-            checks = [preflight_check_to_diagnostic(check) for check in preflight.checks]
-            print(
-                json.dumps([diagnostic_check_to_dict(check) for check in checks], sort_keys=True),
-                flush=True,
-            )
-            if any(check.status == "fail" for check in checks):
-                raise SystemExit(1)
-            return
-        try:
-            check_hardware(args)
-        except Exception as exc:  # noqa: BLE001
-            print(str(exc), file=sys.stderr)
-            raise SystemExit(1) from None
-        else:
-            print("Hardware available")
+        profile = get_device_profile(request.device) if hasattr(request, "device") else None
+        _run_check_hardware_command(request, profile)
     elif args.command == "measure":
-        if args.backend == "helix":
-            args.backend = "hardware"
-        if getattr(args, "progress_jsonl", False):
-            args.on_progress = lambda event: print(event.to_json(), flush=True)
-        measure(args)
+        _run_measure_subcommand(request)
     else:
-        if args.backend == "helix":
-            args.backend = "hardware"
-        if getattr(args, "progress_jsonl", False):
-            args.on_optimization_progress = lambda event: print(event.to_json(), flush=True)
-        optimize_measurement_timing(args)
+        _run_optimize_subcommand(request)
+
+
+def _run_check_hardware_command(
+    args: argparse.Namespace,
+    profile: DeviceProfile | None,  # noqa: ARG001
+) -> None:
+    if getattr(args, "diagnostics_json", False):
+        checks = _hardware_diagnostic_checks(args)
+        print(
+            json.dumps([diagnostic_check_to_dict(check) for check in checks], sort_keys=True),
+            flush=True,
+        )
+        if any(check.status == "fail" for check in checks):
+            raise SystemExit(1)
+        return
+    try:
+        check_hardware(args)
+    except Exception as exc:  # noqa: BLE001
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from None
+    else:
+        print("Hardware available")
+
+
+def _hardware_diagnostic_checks(args: argparse.Namespace) -> list[DiagnosticCheck]:
+    preflight = collect_hardware_preflight(args)
+    return [preflight_check_to_diagnostic(check) for check in preflight.checks]
+
+
+def _run_measure_subcommand(args: argparse.Namespace) -> None:
+    if getattr(args, "progress_jsonl", False):
+        args.on_progress = lambda event: print(event.to_json(), flush=True)
+    measure(args)
+
+
+def _run_optimize_subcommand(args: argparse.Namespace) -> None:
+    if getattr(args, "progress_jsonl", False):
+        args.on_optimization_progress = lambda event: print(event.to_json(), flush=True)
+    optimize_measurement_timing(args)
 
 
 if __name__ == "__main__":  # pragma: no cover - module entry point
