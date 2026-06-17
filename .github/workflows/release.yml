@@ -63,7 +63,7 @@ jobs:
           test -f installer-payload/docs_html/index.html
 
       - name: Upload installer docs payload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: matchpatch-docs-html-${{ github.ref_name }}
           path: installer-payload/
@@ -107,7 +107,7 @@ jobs:
         run: scripts\test-windows-installer.cmd
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: matchpatch-installer-${{ github.ref_name }}
           path: ${{ steps.version.outputs.installer }}

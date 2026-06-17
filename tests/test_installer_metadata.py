@@ -203,7 +203,7 @@ def test_release_workflow_publishes_windows_installer() -> None:
     assert "contents: write" in release_workflow
     assert "scripts\\test-windows-installer.cmd" in release_workflow
     assert "MatchPatch-Setup-$version.exe" in release_workflow
-    assert "actions/upload-artifact@v4" in release_workflow
+    assert "actions/upload-artifact@v7" in release_workflow
     assert "gh release create $tag" in release_workflow
     assert "gh release upload $tag $installer --clobber" in release_workflow
     assert release_workflow.count("GITHUB_REF_NAME") >= 2
