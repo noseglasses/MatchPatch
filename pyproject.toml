@@ -36,6 +36,11 @@ Repository = "https://github.com/noseglasses/MatchPatch.git"
 matchpatch = "matchpatch.cli:main"
 matchpatch-gui = "matchpatch.gui.app:main"
 
+[project.entry-points."matchpatch.devices"]
+# Third-party packages can register device profiles here, for example:
+# my-device = "my_package.matchpatch_plugin:DeviceProfile"
+# Built-in profiles are registered directly in matchpatch.devices.registry.
+
 [dependency-groups]
 docs = [
     "furo>=2024.8.6",
