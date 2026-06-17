@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import csv
+import importlib.util
 import io
 import json
 import runpy
@@ -11,14 +12,19 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import TracebackType
+from typing import Any
 
 from matchpatch.devices.base import (
     AudioRouting,
     DeviceController,
+    DeviceFileKind,
     DeviceProfile,
+    DeviceTerminology,
+    FileOperationCapabilities,
+    NamingRules,
     NormalizationPolicy,
     PatchAssignment,
     PatchFileAdjustments,
@@ -145,6 +151,7 @@ class HelixPatchFileHandler(PatchFileHandler):
                     tuple(float(level) for level in levels)
                     for levels in assignment.get("snapshot_output_levels", ())
                 ),
+                original_filename=input_path.name if input_path.suffix.lower() == ".hlx" else None,
             )
             for assignment in json.loads(completed.stdout)
         ]
@@ -155,6 +162,67 @@ class HelixPatchFileHandler(PatchFileHandler):
         if not isinstance(metadata, dict):
             raise ValueError("Helix metadata output must be a JSON object")
         return metadata
+
+    def file_capabilities(self) -> FileOperationCapabilities:
+        return FileOperationCapabilities(
+            reads_preset_files=True,
+            writes_preset_files=True,
+            reads_setlist_files=True,
+            writes_setlist_files=True,
+            joins_presets_to_setlist=True,
+            splits_setlist_to_presets=True,
+            exports_selected_setlist_slots=True,
+        )
+
+    def file_kind(self, path: Path) -> DeviceFileKind:
+        suffix = path.suffix.lower()
+        if suffix == ".hlx":
+            return "preset"
+        if suffix == ".hls":
+            return "setlist"
+        return "unknown"
+
+    def join_preset_files(
+        self,
+        preset_paths: list[Path],
+        output_path: Path,
+        *,
+        slot_ids: list[int] | None = None,
+    ) -> None:
+        if self.file_kind(output_path) != "setlist":
+            raise ValueError(f"Helix join output must be an .hls file: {output_path}")
+        args: list[object] = ["--join-presets", *preset_paths, "-o", output_path]
+        if slot_ids is not None:
+            args.extend(
+                ["--slot-ids", ",".join(self.format_patch_id(slot_id) for slot_id in slot_ids)]
+            )
+        self._run(*args)
+
+    def split_setlist_file(
+        self,
+        input_path: Path,
+        output_dir: Path,
+        *,
+        selected_ids: list[int] | None = None,
+        original_filenames: Mapping[int, str] | None = None,
+    ) -> list[Path]:
+        if self.file_kind(input_path) != "setlist":
+            raise ValueError(f"Helix split input must be an .hls file: {input_path}")
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        file_ops = _load_helix_file_ops(self.script)
+        split_presets = file_ops.split_setlist_to_preset_data(
+            input_path,
+            selected_ids=selected_ids,
+            original_filenames=original_filenames,
+        )
+        created_paths = []
+        for filename, hlx_data in split_presets:
+            output_path = output_dir / Path(filename).name
+            with output_path.open("w", encoding="utf-8") as preset_file:
+                json.dump(hlx_data, preset_file, indent=1)
+            created_paths.append(output_path)
+        return created_paths
 
     def diff_preset_ids(self, input_path: Path, previous_input_path: Path) -> list[int]:
         if previous_input_path.suffix.lower() != input_path.suffix.lower():
@@ -467,6 +535,29 @@ class HelixDeviceProfile(DeviceProfile):
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
         return HelixPatchFileHandler(project_dir)
 
+    def terminology(self) -> DeviceTerminology:
+        return DeviceTerminology(
+            device="Helix", preset="preset", snapshot="snapshot", setlist="setlist"
+        )
+
+    def file_capabilities(self) -> FileOperationCapabilities:
+        return FileOperationCapabilities(
+            reads_preset_files=True,
+            writes_preset_files=True,
+            reads_setlist_files=True,
+            writes_setlist_files=True,
+            joins_presets_to_setlist=True,
+            splits_setlist_to_presets=True,
+            exports_selected_setlist_slots=True,
+        )
+
+    def naming_rules(self) -> NamingRules:
+        return NamingRules(
+            preset_name_max_length=self.preset_name_max_length,
+            snapshot_name_max_length=self.snapshot_name_max_length,
+            allowed_name_pattern=r"^[ -~]*$",
+        )
+
     def format_patch_id(self, preset_id: int) -> str:
         zero_based = preset_id - 1
         return f"{zero_based // 4 + 1:02d}{'ABCD'[zero_based % 4]}"
@@ -500,3 +591,20 @@ def _error_details(exc: subprocess.CalledProcessError) -> str:
         return "\n".join(errors)
 
     return lines[-1].strip() if lines else ""
+
+
+def _load_helix_file_ops(script: Path) -> Any:  # noqa: ANN401
+    module_path = script.with_name("helix_file_ops.py")
+    module_name = "_matchpatch_helix_file_ops"
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load Helix file operations helper: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module

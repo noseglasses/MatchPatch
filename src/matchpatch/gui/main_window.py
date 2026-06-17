@@ -9,7 +9,7 @@ import tempfile
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence, cast
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -70,15 +70,14 @@ from matchpatch.diagnostics import (
     write_diagnostic_bundle,
 )
 from matchpatch.gui import diagnostics_panel as gui_diagnostics
+from matchpatch.gui import file_operations_workflow, window_layout, window_state
 from matchpatch.gui import help as gui_help
-from matchpatch.gui import window_layout, window_state
 from matchpatch.gui.advanced_settings import (
     GuiSettingsBinder,
     PresetTableSelectionContext,
-    append_optional_argument,
     diagnostic_request,
 )
-from matchpatch.gui.device_panels import HelixSettingsPanel
+from matchpatch.gui.device_panels import create_settings_panel
 from matchpatch.gui.diagnostics_panel import (
     preset_table_selection_preflight_checks,
 )
@@ -159,6 +158,7 @@ from matchpatch.gui.table_legend import build_preset_table_legend_dialog
 from matchpatch.gui.table_roles import (
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_PRESET,
+    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
     PRESET_TABLE_ATTENTION_ROLE,
     PRESET_TABLE_CSV_DELIMITER,
@@ -263,7 +263,7 @@ class MainWindow(QMainWindow):
         self.completed_request: NormalizationRequest | None = None
         self.completed_result: NormalizationResult | None = None
         self._last_hardware_diagnostic_checks: list[DiagnosticCheck] = []
-        self.device_panels: dict[str, HelixSettingsPanel] = {}
+        self.device_panels: dict[str, Any] = {}
         self.snapshot_count = 4
         self.preset_snapshot_positions: dict[str, int] = {}
         self._adjusted_presets: set[str] = set()
@@ -322,7 +322,12 @@ class MainWindow(QMainWindow):
         self._record_off_icon = _record_icon(recording=False)
         self._ignore_reason_icons = {
             reason: _ignore_reason_icon(reason)
-            for reason in (IGNORE_REASON_PRESET, IGNORE_REASON_COMPARISON, IGNORE_REASON_REGEX)
+            for reason in (
+                IGNORE_REASON_PRESET,
+                IGNORE_REASON_COMPARISON,
+                IGNORE_REASON_REGEX,
+                IGNORE_REASON_PRESET_REGEX,
+            )
         }
         self._startup_resize_done = False
         self.settings = QSettings()
@@ -330,7 +335,6 @@ class MainWindow(QMainWindow):
         self.input_path = QLineEdit()
         self.output_path = QLineEdit()
         self.backend = QComboBox()
-        self.backend.addItems(["hardware", "loopback", "simulated"])
         self.backend.currentTextChanged.connect(self.backend_changed)
         self._build_toolbar()
         content = QWidget()
@@ -665,10 +669,11 @@ class MainWindow(QMainWindow):
     def _populate_devices(self) -> None:
         for profile in list_device_profiles():
             self.device.addItem(profile.display_name, profile.name)
-            if profile.name == "helix":
-                panel = HelixSettingsPanel(self.backend)
+            panel = create_settings_panel(profile, self.backend)
+            if panel is not None:
                 self.device_panels[profile.name] = panel
                 self.device_stack.addWidget(panel)
+        self.loading_controller.refresh_backend_choices()
 
     def browse_input(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1714,17 +1719,13 @@ class MainWindow(QMainWindow):
             has_file=bool(self.input_path.text().strip()),
             has_loaded_file=has_loaded_file,
             preset_table_modified=self._preset_table_has_unsaved_changes(),
-            has_preset_selection=self._current_optimization_preset_selection_state(),
+            has_preset_selection=hasattr(self, "determine_parameters_button")
+            and self._has_optimization_preset_selection(),
             normalization_active=self.worker is not None,
             hardware_check_active=self.hardware_check_worker is not None,
             optimization_active=self.optimization_worker is not None,
             preflight_active=self.preflight_worker is not None,
         )
-
-    def _current_optimization_preset_selection_state(self) -> bool:
-        if not hasattr(self, "determine_parameters_button"):
-            return False
-        return self._has_optimization_preset_selection()
 
     def _apply_file_action_state(self, action_state: FileActionState) -> None:
         self._set_optional_widget_enabled("save_action", action_state.save_enabled)
@@ -1732,6 +1733,12 @@ class MainWindow(QMainWindow):
         self._set_optional_widget_enabled(
             "save_measurement_action",
             action_state.save_measurement_enabled,
+        )
+        file_operations_workflow.apply_file_operation_action_state(
+            cast(file_operations_workflow.FileOperationWindow, self),
+            action_state,
+            get_profile=get_device_profile,
+            project_dir=Path(__file__).resolve().parents[3],
         )
         self._set_optional_widget_enabled("start_button", action_state.start_enabled)
         self._refresh_determine_parameters_action(action_state)
@@ -2333,6 +2340,11 @@ class MainWindow(QMainWindow):
             return
         self.preset_table_controller.refresh_all_snapshot_names()
 
+    def _refresh_all_preset_names(self) -> None:
+        if not hasattr(self, "preset_table"):
+            return
+        self.preset_table_controller.refresh_all_preset_names()
+
     def _refresh_snapshot_name_cell_widget(self, item: QTableWidgetItem) -> None:
         refresh_snapshot_name_cell_widget(
             item,
@@ -2485,7 +2497,3 @@ class MainWindow(QMainWindow):
 
     def _preset_table_content_signature(self) -> tuple[tuple[str, ...], ...]:
         return self.preset_table_controller.preset_table_content_signature()
-
-
-def _append_optional_argument(argv: list[str], name: str, value: object) -> None:
-    append_optional_argument(argv, name, value)

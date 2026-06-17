@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from matchpatch.devices.base import DeviceProfile
+
 
 class HelixSettingsPanel(QWidget):
     def __init__(self, backend_selector: QWidget | None = None) -> None:
@@ -113,3 +115,12 @@ def _label(text: str, tooltip: str) -> QLabel:
     label = QLabel(text)
     label.setToolTip(tooltip)
     return label
+
+
+def create_settings_panel(
+    profile: DeviceProfile,
+    backend_selector: QWidget,
+) -> QWidget | None:
+    if profile.name == "helix":
+        return HelixSettingsPanel(backend_selector)
+    return None

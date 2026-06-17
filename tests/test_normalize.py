@@ -268,6 +268,7 @@ measurement_wait_seconds = 0.7
 measured_snapshots = 3
 solo_marker = "lead"
 ignore_snapshot_regex = "^Init$"
+ignore_preset_regex = "^Empty"
 solo_gain_bump_db = 4.0
 crest_factor_reference_db = 11.0
 crest_factor_correction_ratio = 0.5
@@ -315,6 +316,7 @@ round_trip_latency_seconds = 0.03
     assert args.policy.snapshot_count == 3
     assert args.policy.solo_regex == "lead"
     assert args.policy.ignore_snapshot_regex == "^Init$"
+    assert args.policy.ignore_preset_regex == "^Empty"
     assert args.analysis_options.window_seconds == 2.0
     assert args.pre_roll == 1.5
     assert args.post_roll == 2.0
@@ -365,6 +367,28 @@ def test_apply_config_uses_device_timing_defaults_when_config_is_silent() -> Non
     assert args.preset_wait == 0.5
     assert args.snapshot_wait == 0.2
     assert args.measurement_wait == 0.1
+
+
+def test_apply_config_validates_backend_against_selected_profile(monkeypatch) -> None:
+    class OfflineProfile(FakeProfile):
+        display_name = "Offline Processor"
+
+        def measurement_backends(self) -> tuple[str, ...]:
+            return ("offline",)
+
+    monkeypatch.setattr(
+        normalize, "get_device_profile", lambda device: OfflineProfile(FakeHandler())
+    )
+
+    args = normalize.apply_config(
+        normalize.parse_args(["--device", "fake", "-i", "input.hls", "--backend", "offline"])
+    )
+    assert args.backend == "offline"
+
+    with pytest.raises(ValueError, match="Backend 'hardware' is not supported"):
+        normalize.apply_config(
+            normalize.parse_args(["--device", "fake", "-i", "input.hls", "--backend", "hardware"])
+        )
 
 
 def test_configured_windows_python_frozen_windows_ignores_stale_worker_config(
@@ -432,6 +456,40 @@ def test_apply_config_rejects_invalid_ignore_snapshot_regex(tmp_path) -> None:
     config_path.write_text("[policy]\nignore_snapshot_regex = '('\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Invalid ignore snapshot regex"):
+        normalize.apply_config(
+            normalize.parse_args(
+                ["--config", str(config_path), "--device", "helix", "-i", "input.hls"]
+            )
+        )
+
+
+def test_apply_config_cli_ignore_preset_regex_overrides_toml(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[policy]\nignore_preset_regex = '^Empty$'\n", encoding="utf-8")
+
+    args = normalize.apply_config(
+        normalize.parse_args(
+            [
+                "--config",
+                str(config_path),
+                "--device",
+                "helix",
+                "-i",
+                "input.hls",
+                "--ignore-preset-regex",
+                "^Init",
+            ]
+        )
+    )
+
+    assert args.policy.ignore_preset_regex == "^Init"
+
+
+def test_apply_config_rejects_invalid_ignore_preset_regex(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[policy]\nignore_preset_regex = '('\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid ignore preset regex"):
         normalize.apply_config(
             normalize.parse_args(
                 ["--config", str(config_path), "--device", "helix", "-i", "input.hls"]

@@ -141,6 +141,13 @@ class MainWindowPresetTableCallbacks(PresetTableCallbacks):
             return False
         return ignore_pattern.search(name) is not None
 
+    def is_ignored_preset_name(self, name: str) -> bool:
+        try:
+            pattern = re.compile(normalize_regex_pattern(self._window.ignore_preset_regex.text()))
+        except re.error:
+            return False
+        return bool(pattern.pattern) and pattern.search(name) is not None
+
     def refresh_measurement_time_estimate(self) -> None:
         self._window._refresh_measurement_time_estimate()
 

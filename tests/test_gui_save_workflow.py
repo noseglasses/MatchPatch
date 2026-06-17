@@ -53,10 +53,15 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from matchpatch.devices.base import NormalizationPolicy, PatchFileAdjustments
+from matchpatch.devices.base import (
+    FileOperationCapabilities,
+    NormalizationPolicy,
+    PatchFileAdjustments,
+)
 from matchpatch.diagnostics import DiagnosticCheck
 from matchpatch.gui import (
     advanced_settings,
+    file_operations_workflow,
     icons,
     loudness_widgets,
     main_window,
@@ -357,6 +362,187 @@ def test_save_measurement_file_honors_cancelled_overwrite(tmp_path) -> None:
 
     assert handler.validated == [(input_path, output_path)]
     assert handler.measurements == []
+
+
+class _FileOperationHandler:
+    def __init__(
+        self,
+        *,
+        capabilities: FileOperationCapabilities,
+        file_kind: str = "setlist",
+    ) -> None:
+        self._capabilities = capabilities
+        self._file_kind = file_kind
+
+    def file_capabilities(self) -> FileOperationCapabilities:
+        return self._capabilities
+
+    def file_kind(self, path: Path) -> str:
+        return self._file_kind
+
+    @staticmethod
+    def parse_patch_set(patch: str) -> list[int]:
+        return {"01A": [1], "02B": [6], "03C": [11]}[patch]
+
+
+class _FileOperationProfile:
+    def __init__(self, handler: _FileOperationHandler) -> None:
+        self.handler = handler
+
+    def create_patch_file_handler(self, project_dir: Path) -> _FileOperationHandler:
+        return self.handler
+
+
+def test_file_operation_actions_are_gated_by_capabilities_and_active_kind(
+    monkeypatch,
+    app,
+    tmp_path,
+) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hls"
+    input_path.write_text("{}", encoding="utf-8")
+    window.input_path.setText(str(input_path))
+    window._loaded_input_path = str(input_path)
+    capabilities = FileOperationCapabilities(
+        joins_presets_to_setlist=True,
+        splits_setlist_to_presets=True,
+    )
+    handler = _FileOperationHandler(capabilities=capabilities, file_kind="setlist")
+    monkeypatch.setattr(
+        main_window, "get_device_profile", lambda device: _FileOperationProfile(handler)
+    )
+
+    window._refresh_file_actions()
+
+    assert window.join_preset_files_action.isEnabled()
+    assert window.split_setlist_action.isEnabled()
+
+    handler._file_kind = "preset"
+    window._refresh_file_actions()
+
+    assert window.join_preset_files_action.isEnabled()
+    assert not window.split_setlist_action.isEnabled()
+
+    handler._capabilities = FileOperationCapabilities()
+    window._refresh_file_actions()
+
+    assert not window.join_preset_files_action.isEnabled()
+    assert not window.split_setlist_action.isEnabled()
+    window.close()
+
+
+def test_join_preset_files_action_calls_workflow_and_opens_output(
+    monkeypatch,
+    app,
+    tmp_path,
+) -> None:
+    window = MainWindow()
+    preset_paths = [tmp_path / "lead.hlx", tmp_path / "rhythm.hlx"]
+    output_path = tmp_path / "joined.hls"
+    opened_paths: list[str] = []
+    calls = []
+    monkeypatch.setattr(
+        file_operations_workflow, "choose_join_preset_paths", lambda parent: preset_paths
+    )
+    monkeypatch.setattr(
+        file_operations_workflow, "choose_join_output_path", lambda parent: output_path
+    )
+    monkeypatch.setattr(window, "_open_input_path", opened_paths.append)
+
+    def join_preset_files(device, selected_preset_paths, selected_output_path):
+        calls.append((device, selected_preset_paths, selected_output_path))
+        return file_operations_workflow.file_operations.JoinPresetFilesResult(
+            output_path=selected_output_path
+        )
+
+    monkeypatch.setattr(
+        file_operations_workflow.file_operations,
+        "join_preset_files",
+        join_preset_files,
+    )
+
+    assert file_operations_workflow.join_preset_files(window)
+
+    assert calls == [("helix", preset_paths, output_path)]
+    assert opened_paths == [str(output_path)]
+    window.close()
+
+
+def test_split_setlist_action_passes_selected_ids_and_original_filename_map(
+    monkeypatch,
+    app,
+    tmp_path,
+) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hls"
+    output_dir = tmp_path / "split"
+    created_paths = [output_dir / "rhythm.hlx"]
+    window.input_path.setText(str(input_path))
+    window._loaded_input_path = str(input_path)
+    window.preset_table.setRowCount(0)
+    for row, patch in enumerate(("01A", "02B", "03C")):
+        window.preset_table.insertRow(row)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(patch))
+        window.preset_table.setItem(row, 2, QTableWidgetItem(f"Preset {patch}"))
+        window.preset_table.setItem(row, 3, QTableWidgetItem("Snap"))
+    window.preset_table_controller.set_preset_original_filename(0, "lead.hlx")
+    window.preset_table_controller.set_preset_original_filename(1, "rhythm.hlx")
+    window.preset_table.selectRow(1)
+    handler = _FileOperationHandler(
+        capabilities=FileOperationCapabilities(splits_setlist_to_presets=True),
+    )
+    monkeypatch.setattr(
+        main_window, "get_device_profile", lambda device: _FileOperationProfile(handler)
+    )
+    monkeypatch.setattr(
+        file_operations_workflow, "choose_split_output_dir", lambda parent: output_dir
+    )
+    calls = []
+
+    def split_setlist_file(
+        device,
+        selected_input_path,
+        selected_output_dir,
+        *,
+        selected_ids=None,
+        original_filenames=None,
+    ):
+        calls.append(
+            (
+                device,
+                selected_input_path,
+                selected_output_dir,
+                selected_ids,
+                original_filenames,
+            )
+        )
+        return file_operations_workflow.file_operations.SplitSetlistFileResult(
+            created_paths=created_paths
+        )
+
+    monkeypatch.setattr(
+        file_operations_workflow.file_operations,
+        "split_setlist_file",
+        split_setlist_file,
+    )
+
+    assert file_operations_workflow.split_setlist(
+        window,
+        get_profile=main_window.get_device_profile,
+        project_dir=Path(main_window.__file__).resolve().parents[3],
+    )
+
+    assert calls == [
+        (
+            "helix",
+            input_path,
+            output_dir,
+            [6],
+            {1: "lead.hlx", 6: "rhythm.hlx"},
+        )
+    ]
+    assert any(str(created_paths[0].resolve()) in entry[2] for entry in window.log_entries)
+    window.close()
 
 
 def test_completion_enables_save_and_shows_success_popup(tmp_path, monkeypatch, app) -> None:

@@ -41,7 +41,7 @@ from matchpatch.gui.main_window import MainWindow
 from matchpatch.gui.preset_table import (
     ContentHeightTableWidget,
 )
-from matchpatch.gui.table_roles import PRESET_TABLE_ATTENTION_ROLE
+from matchpatch.gui.table_roles import PRESET_ORIGINAL_FILENAME_ROLE, PRESET_TABLE_ATTENTION_ROLE
 from matchpatch.gui.worker import NormalizationWorker
 from matchpatch.normalize import DEFAULT_REFERENCE_DI, DEFAULT_WINDOWS_PYTHON
 from matchpatch.progress import ProgressEvent
@@ -230,6 +230,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.custom_adjustments_path)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.reference_di)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.keep_temp)
+
     assert window.advanced_tabs.widget(2).isAncestorOf(window.measurement_parameter_preset)
     assert window.advanced_tabs.widget(2).isAncestorOf(window.apply_measurement_parameters_button)
     assert window.advanced_tabs.widget(2).isAncestorOf(window.pre_roll)
@@ -354,11 +355,13 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
         "Save",
         "Save As",
         "Save Measurement File",
+        "Join Preset Files",
+        "Split Setlist",
         "Help",
         "About",
     ]
     assert toolbar.actions().index(window.normalization_separator_action) == (
-        toolbar.actions().index(window.save_measurement_action) + 1
+        toolbar.actions().index(window.split_setlist_action) + 1
     )
     assert toolbar.actions().index(window.save_measurement_action) == (
         toolbar.actions().index(window.save_as_action) + 1
@@ -510,6 +513,48 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.save_csv_button.width() == window.save_csv_button.height()
     assert window.snapshot_count_input.value() == 4
     assert window.snapshot_count_input.maximum() == 8
+
+    window.close()
+
+
+def test_main_window_lists_device_without_settings_panel(monkeypatch, app) -> None:
+    helix = main_window.get_device_profile("helix")
+    fake = SimpleNamespace(
+        name="fake",
+        display_name="Fake Device",
+        measurement_backends=lambda: ("offline",),
+        default_audio_routing=lambda: SimpleNamespace(
+            device=None,
+            sample_rate=48000,
+            input_mapping="1,2",
+            output_mapping="1,2",
+        ),
+        default_steering_options=lambda: SimpleNamespace(
+            output=None,
+            channel=0,
+            preset_wait_seconds=0.0,
+            snapshot_wait_seconds=0.0,
+            measurement_wait_seconds=0.0,
+        ),
+    )
+    monkeypatch.setattr(main_window, "list_device_profiles", lambda: [helix, fake])
+    monkeypatch.setattr(
+        "matchpatch.normalize.get_device_profile",
+        lambda name: fake if name == "fake" else helix,
+    )
+
+    window = MainWindow()
+    window.loading_controller.get_profile = lambda name: fake if name == "fake" else helix
+    fake_index = window.device.findData("fake")
+
+    assert fake_index >= 0
+    assert "fake" not in window.device_panels
+
+    window.device.setCurrentIndex(fake_index)
+    app.processEvents()
+
+    assert window.device.currentData() == "fake"
+    assert window.backend.currentText() == "offline"
 
     window.close()
 
@@ -722,6 +767,7 @@ def test_single_preset_load_displays_presets_panel_with_instruction_label(monkey
     assert window.preset_table.rowCount() == 1
     assert window.preset_table.item(0, 1).text() == ""
     assert window.preset_table.item(0, 2).text() == "Lead"
+    assert window.preset_table.item(0, 2).data(PRESET_ORIGINAL_FILENAME_ROLE) == "example.hlx"
     assert window.preset_table.item(0, 3).text() == "Clean"
     assert window.preset_table.item(0, 4).text() == "0.0"
     assert window.preset_table.item(0, 6).text() == "Solo"
@@ -785,7 +831,14 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
 
         @staticmethod
         def list_assignments(path):
-            return []
+            return [
+                SimpleNamespace(
+                    device_patch="01A",
+                    name="Lead",
+                    snapshot_names=("Verse",),
+                    original_filename="lead.hlx",
+                )
+            ]
 
         @staticmethod
         def metadata(path):
@@ -804,6 +857,7 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
     assert not window.preset_advanced_splitter.isHidden()
     assert not window.preset_table.isHidden()
     assert not window.preset_table.isColumnHidden(0)
+    assert window.preset_table.item(0, 2).data(PRESET_ORIGINAL_FILENAME_ROLE) == "lead.hlx"
     assert not window.preset_csv_controls.isHidden()
     assert window.preset_hint.text() == "Select the presets to normalize."
     assert '"file_type": "hls"' in window.metadata_text.toPlainText()

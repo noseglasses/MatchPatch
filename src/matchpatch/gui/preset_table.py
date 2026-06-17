@@ -52,6 +52,7 @@ from matchpatch.gui.table_roles import (
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_LABELS,
     IGNORE_REASON_PRESET,
+    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
     IGNORED_SNAPSHOT_REASONS_ROLE,
     IGNORED_SNAPSHOT_ROLE,
@@ -60,6 +61,7 @@ from matchpatch.gui.table_roles import (
     NORMALIZATION_FOCUS_ROLE,
     OUTPUT_LEVEL_MAX_DB,
     OUTPUT_LEVEL_MIN_DB,
+    PRESET_ORIGINAL_FILENAME_ROLE,
     PRESET_TABLE_ATTENTION_ROLE,
     PROCESSED_SNAPSHOT_ROLE,
     RECORDED_OUTPUT_PATH_ROLE,
@@ -138,6 +140,8 @@ class PresetTableCallbacks(Protocol):
 
     def is_ignored_snapshot_name(self, name: str) -> bool: ...
 
+    def is_ignored_preset_name(self, name: str) -> bool: ...
+
     def refresh_measurement_time_estimate(self) -> None: ...
 
     def refresh_preset_item_background(self, item: QTableWidgetItem) -> None: ...
@@ -201,6 +205,72 @@ class PresetTableController:
         if Path(self.callbacks.input_path_text()).suffix.lower() == ".hlx":
             return self.row_has_measured_snapshots(0)
         return any(self.row_has_measured_snapshots(row) for row in self.checked_preset_rows())
+
+    def set_preset_original_filename(self, row: int, filename: str | None) -> None:
+        item = self.table.item(row, 2)
+        if item is None:
+            return
+        item.setData(PRESET_ORIGINAL_FILENAME_ROLE, filename or None)
+
+    def preset_original_filename(self, row: int) -> str | None:
+        item = self.table.item(row, 2)
+        if item is None:
+            return None
+        filename = item.data(PRESET_ORIGINAL_FILENAME_ROLE)
+        return filename if isinstance(filename, str) and filename else None
+
+    def original_filename_map(
+        self,
+        parse_patch_set: Callable[[str], list[int]] | None = None,
+    ) -> dict[int, str]:
+        filenames: dict[int, str] = {}
+        for row in range(self.table.rowCount()):
+            filename = self.preset_original_filename(row)
+            if filename is None:
+                continue
+            preset_id = self._preset_id_for_row(row, parse_patch_set)
+            if preset_id is not None:
+                filenames[preset_id] = filename
+        return filenames
+
+    def preset_ids_for_rows(
+        self,
+        rows: list[int],
+        parse_patch_set: Callable[[str], list[int]],
+    ) -> list[int]:
+        preset_ids = []
+        for row in rows:
+            preset_id = self._preset_id_for_row(row, parse_patch_set)
+            if preset_id is not None:
+                preset_ids.append(preset_id)
+        return preset_ids
+
+    def selected_rows_or_all_measurable_rows(self) -> list[int]:
+        selected_rows = sorted(
+            {index.row() for index in self.table.selectionModel().selectedIndexes()}
+        )
+        rows = selected_rows or list(range(self.table.rowCount()))
+        return [row for row in rows if self.row_has_measured_snapshots(row)]
+
+    def _preset_id_for_row(
+        self,
+        row: int,
+        parse_patch_set: Callable[[str], list[int]] | None,
+    ) -> int | None:
+        patch_item = self.table.item(row, 1)
+        patch = patch_item.text().strip() if patch_item is not None else ""
+        if not patch:
+            return None
+        if parse_patch_set is None:
+            try:
+                return int(patch)
+            except ValueError:
+                return None
+        try:
+            preset_ids = parse_patch_set(patch)
+        except ValueError:
+            return None
+        return preset_ids[0] if len(preset_ids) == 1 else None
 
     def preset_selection_state(self) -> _PresetSelectionState:
         checked_patches: set[str] = set()
@@ -759,6 +829,8 @@ class PresetTableController:
         elif self.manual_adjustments_enabled() and is_manual_adjustment_column(item.column()):
             if self._handle_manual_adjustment_item_change(item):
                 self.mark_preset_table_modified()
+        if item.column() == 2:
+            self.refresh_preset_name(item.row())
 
     def _consume_attention_marker(self, item: QTableWidgetItem) -> None:
         if not item.data(PRESET_TABLE_ATTENTION_ROLE):
@@ -1195,6 +1267,15 @@ class PresetTableController:
         for snapshot_index in range(self.callbacks.snapshot_count()):
             self.set_snapshot_ignore_reason(row, snapshot_index, IGNORE_REASON_PRESET, active)
 
+    def set_preset_name_ignore_reason(self, row: int, active: bool) -> None:
+        for snapshot_index in range(self.callbacks.snapshot_count()):
+            self.set_snapshot_ignore_reason(
+                row,
+                snapshot_index,
+                IGNORE_REASON_PRESET_REGEX,
+                active,
+            )
+
     def set_comparison_ignore_plan(
         self,
         changed_by_patch: Mapping[str, tuple[int, ...]],
@@ -1282,6 +1363,15 @@ class PresetTableController:
     def refresh_all_snapshot_names(self) -> None:
         for row in range(self.table.rowCount()):
             self.refresh_snapshot_names(row)
+
+    def refresh_preset_name(self, row: int) -> None:
+        item = self.table.item(row, 2)
+        name = item.text() if item is not None else ""
+        self.set_preset_name_ignore_reason(row, self.callbacks.is_ignored_preset_name(name))
+
+    def refresh_all_preset_names(self) -> None:
+        for row in range(self.table.rowCount()):
+            self.refresh_preset_name(row)
 
     def set_snapshot_output_levels(
         self,

@@ -953,6 +953,61 @@ def test_check_hardware_parse_args_accepts_diagnostic_timing_flags(monkeypatch) 
     assert args.round_trip_latency == 0.001
 
 
+def test_worker_parse_args_validates_backend_against_selected_profile(monkeypatch) -> None:
+    profile = SimpleNamespace(
+        display_name="Offline Processor",
+        measurement_backends=lambda: ("offline",),
+        default_audio_routing=lambda: AudioRouting(None, 48000, (1, 2), (1, 2)),
+        default_steering_options=lambda: SteeringOptions(None, 0, 0.0, 0.0, 0.0),
+    )
+    monkeypatch.setattr("matchpatch.measure.get_device_profile", lambda device: profile)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "measure",
+            "measure",
+            "--device",
+            "offline",
+            "--preset-ids",
+            "1",
+            "--csv",
+            "out.csv",
+            "--reference-di",
+            "ref.wav",
+            "--backend",
+            "offline",
+        ],
+    )
+    args = parse_args()
+    assert args.backend == "offline"
+
+    with pytest.raises(NotImplementedError, match="offline measurement backend"):
+        measure(args)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "measure",
+            "measure",
+            "--device",
+            "offline",
+            "--preset-ids",
+            "1",
+            "--csv",
+            "out.csv",
+            "--reference-di",
+            "ref.wav",
+            "--backend",
+            "hardware",
+        ],
+    )
+    with pytest.raises(ValueError, match="Backend 'hardware' is not supported"):
+        parse_args()
+
+
 def test_worker_main_dispatches_devices_and_legacy_helix_backend(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr("matchpatch.measure.list_devices", lambda: calls.append("devices"))

@@ -55,7 +55,7 @@ def run_preflight_checks(
     checks.append(_output_mode_check(handler, request))
     checks.append(_reference_di_check(request.reference_di))
     checks.append(_custom_adjustments_check(request))
-    checks.append(_backend_check(request.backend))
+    checks.append(_backend_check(request.backend, profile))
     checks.extend(
         _backend_specific_checks(
             request,
@@ -183,13 +183,19 @@ def _custom_adjustments_check(request: NormalizationRequest) -> DiagnosticCheck:
     return DiagnosticCheck("custom_adjustments", "pass", "Custom adjustments file parses")
 
 
-def _backend_check(backend: str) -> DiagnosticCheck:
-    if backend in {"hardware", "loopback", "simulated"}:
+def _backend_check(backend: str, profile: DeviceProfile | None) -> DiagnosticCheck:
+    supported_backends = (
+        profile.measurement_backends()
+        if profile is not None and hasattr(profile, "measurement_backends")
+        else ("hardware", "loopback", "simulated")
+    )
+    if backend in supported_backends:
         return DiagnosticCheck("backend", "pass", f"Backend is valid: {backend}")
+    supported = ", ".join(supported_backends)
     return DiagnosticCheck(
         "backend",
         "fail",
-        f"Backend must be one of hardware, loopback, or simulated: {backend}",
+        f"Backend must be one of {supported}: {backend}",
     )
 
 

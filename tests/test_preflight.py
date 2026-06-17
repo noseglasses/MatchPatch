@@ -27,11 +27,16 @@ class FakeHandler:
             raise ValueError(self.output_error)
 
 
-def _profile(handler: FakeHandler | None = None) -> SimpleNamespace:
+def _profile(
+    handler: FakeHandler | None = None,
+    *,
+    backends: tuple[str, ...] = ("hardware", "loopback", "simulated"),
+) -> SimpleNamespace:
     handler = handler or FakeHandler()
     return SimpleNamespace(
         display_name="Fake Device",
         create_patch_file_handler=lambda project_dir: handler,
+        measurement_backends=lambda: backends,
     )
 
 
@@ -63,6 +68,26 @@ def test_loopback_preflight_skips_hardware(tmp_path: Path) -> None:
 
     assert hardware.status == "skip"
     assert "loopback" in hardware.summary
+
+
+def test_preflight_validates_backend_against_selected_profile(tmp_path: Path) -> None:
+    checks = run_preflight_checks(
+        _request(tmp_path, backend="offline"),
+        get_profile=lambda device: _profile(backends=("offline",)),
+    )
+
+    backend = next(check for check in checks if check.name == "backend")
+    assert backend.status == "pass"
+    assert backend.summary == "Backend is valid: offline"
+
+    checks = run_preflight_checks(
+        _request(tmp_path, backend="hardware"),
+        get_profile=lambda device: _profile(backends=("offline",)),
+    )
+
+    backend = next(check for check in checks if check.name == "backend")
+    assert backend.status == "fail"
+    assert backend.summary == "Backend must be one of offline: hardware"
 
 
 def test_missing_input_returns_failed_check(tmp_path: Path) -> None:

@@ -59,6 +59,7 @@ def test_effective_config_from_request_is_json_ready(tmp_path: Path) -> None:
             snapshot_count=3,
             solo_regex="solo",
             ignore_snapshot_regex="skip",
+            ignore_preset_regex="empty",
             solo_gain_bump_db=2.0,
         ),
         analysis_options=AnalysisOptions(
@@ -75,6 +76,7 @@ def test_effective_config_from_request_is_json_ready(tmp_path: Path) -> None:
     assert payload["custom_adjustments_path"] == str(tmp_path / "custom.csv")
     assert payload["policy"]["snapshot_count"] == 3
     assert payload["policy"]["solo_regex"] == "solo"
+    assert payload["policy"]["ignore_preset_regex"] == "empty"
     assert payload["analysis_options"]["window_seconds"] == 2.5
     assert payload["snapshot_plan"] == [{"patch": "01A", "snapshots": [1, 3]}]
     json.dumps(payload)

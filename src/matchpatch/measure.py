@@ -747,6 +747,7 @@ def resolve_steering_options(
 
 def measure(args: argparse.Namespace) -> None:
     profile = get_device_profile(args.device)
+    _raise_unimplemented_backend(args.backend)
     defaults = profile.default_audio_routing()
     sample_rate = args.sample_rate if args.sample_rate is not None else defaults.sample_rate
     on_progress = getattr(args, "on_progress", None)
@@ -853,6 +854,7 @@ def measure(args: argparse.Namespace) -> None:
 
 def optimize_measurement_timing(args: argparse.Namespace) -> None:
     profile = get_device_profile(args.device)
+    _raise_unimplemented_backend(args.backend)
     defaults = profile.default_audio_routing()
     sample_rate = args.sample_rate if args.sample_rate is not None else defaults.sample_rate
     reference = load_reference_audio(Path(args.reference_di), sample_rate)
@@ -1232,7 +1234,7 @@ def add_hardware_arguments(parser: argparse.ArgumentParser) -> None:
 def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     config = load_config(args.config)
     profile = get_device_profile(args.device)
-    _apply_backend_config(args, config)
+    _apply_backend_config(args, config, profile)
     _apply_audio_config(args, config, profile)
     _apply_timing_config(args, config, profile)
     _apply_optimization_config(args, config)
@@ -1242,10 +1244,28 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
-def _apply_backend_config(args: argparse.Namespace, config: Config) -> None:
+def _apply_backend_config(
+    args: argparse.Namespace,
+    config: Config,
+    profile: DeviceProfile,
+) -> None:
     args.backend = getattr(args, "backend", None) or config_value(
         config, "normalize", "backend", default="hardware"
     )
+    if args.backend == "helix":
+        args.backend = "hardware"
+    supported_backends = profile.measurement_backends()
+    if args.backend not in supported_backends:
+        supported = ", ".join(supported_backends)
+        raise ValueError(
+            f"Backend {args.backend!r} is not supported by {profile.display_name}; "
+            f"choose one of: {supported}"
+        )
+
+
+def _raise_unimplemented_backend(backend: str) -> None:
+    if backend == "offline":
+        raise NotImplementedError("The offline measurement backend is not implemented yet")
 
 
 def _apply_audio_config(
@@ -1415,7 +1435,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     measure_parser.add_argument("--reference-di", required=True)
     measure_parser.add_argument(
         "--backend",
-        choices=["hardware", "loopback", "simulated", "helix"],
         help="Use hardware, empty-patch loopback, or a stateful processor simulation",
     )
     measure_parser.add_argument(
@@ -1446,7 +1465,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     optimize_parser.add_argument("--reference-di", required=True)
     optimize_parser.add_argument(
         "--backend",
-        choices=["hardware", "loopback", "simulated", "helix"],
     )
     optimize_parser.add_argument("--stability-runs", type=int, default=3)
     optimize_parser.add_argument("--termination-tolerance", type=float, default=10.0)

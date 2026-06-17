@@ -3,11 +3,62 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Literal, Self
+
+DeviceFileKind = Literal["preset", "setlist", "unknown"]
+
+
+@dataclass(frozen=True)
+class DeviceTerminology:
+    device: str = "device"
+    preset: str = "preset"
+    snapshot: str = "snapshot"
+    setlist: str = "setlist"
+
+
+@dataclass(frozen=True)
+class FileOperationCapabilities:
+    reads_preset_files: bool = False
+    writes_preset_files: bool = False
+    reads_setlist_files: bool = False
+    writes_setlist_files: bool = False
+    joins_presets_to_setlist: bool = False
+    splits_setlist_to_presets: bool = False
+    replaces_setlist_slots: bool = False
+    exports_selected_setlist_slots: bool = False
+
+
+@dataclass(frozen=True)
+class MeasurementBackendCapabilities:
+    hardware: bool = True
+    loopback: bool = True
+    simulated: bool = True
+    offline: bool = False
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(
+            name for name in ("hardware", "loopback", "simulated", "offline") if getattr(self, name)
+        )
+
+
+@dataclass(frozen=True)
+class NamingRules:
+    preset_name_max_length: int | None = None
+    snapshot_name_max_length: int | None = None
+    allowed_name_pattern: str | None = None
+
+
+@dataclass(frozen=True)
+class PresetFileRecord:
+    path: Path
+    slot_id: int | None
+    device_patch: str | None
+    name: str
+    original_filename: str | None = None
 
 
 @dataclass(frozen=True)
@@ -18,6 +69,7 @@ class PatchAssignment:
     snapshot_names: tuple[str, ...] = ()
     snapshot_output_levels: tuple[tuple[float, ...], ...] = ()
     snapshot_output_paths: tuple[str, ...] = ()
+    original_filename: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +101,7 @@ class NormalizationPolicy:
     snapshot_count: int = 4
     solo_regex: str = r"(?i)\bsolo\b"
     ignore_snapshot_regex: str = r"(?i)^SNAPSHOT [1-9]\d*$"
+    ignore_preset_regex: str = ""
     solo_gain_bump_db: float = 3.0
     crest_factor_reference_db: float = 12.0
     crest_factor_correction_ratio: float = 0.4
@@ -102,6 +155,61 @@ class PatchFileHandler(ABC):
     def metadata(self, input_path: Path) -> dict[str, object]:
         """Extract displayable metadata from a patch file."""
         return {}
+
+    def file_capabilities(self) -> FileOperationCapabilities:
+        """Describe device file operations supported by this handler."""
+        return FileOperationCapabilities()
+
+    def file_kind(self, path: Path) -> DeviceFileKind:
+        """Classify a path as a device preset file, setlist file, or unknown."""
+        return "unknown"
+
+    def join_preset_files(
+        self,
+        preset_paths: list[Path],
+        output_path: Path,
+        *,
+        slot_ids: list[int] | None = None,
+    ) -> None:
+        """Join individual preset files into a setlist file when supported."""
+        raise NotImplementedError("Joining preset files is not supported for this device")
+
+    def split_setlist_file(
+        self,
+        input_path: Path,
+        output_dir: Path,
+        *,
+        selected_ids: list[int] | None = None,
+        original_filenames: Mapping[int, str] | None = None,
+    ) -> list[Path]:
+        """Split a setlist file into individual preset files when supported."""
+        raise NotImplementedError("Splitting setlist files is not supported for this device")
+
+    def suggest_preset_filename(
+        self,
+        assignment: PatchAssignment,
+        used_names: set[str],
+    ) -> str:
+        """Suggest a unique filename for exporting an individual preset."""
+        original = assignment.original_filename
+        if original:
+            candidate = Path(original).name
+        else:
+            stem = "".join(
+                char if char.isalnum() or char in "._- " else "_" for char in assignment.name
+            )
+            candidate = (stem.strip(" .") or self.format_patch_id(assignment.id)) + ".preset"
+
+        path = Path(candidate)
+        stem = path.stem or self.format_patch_id(assignment.id)
+        suffix = path.suffix or ".preset"
+        unique = stem + suffix
+        counter = 2
+        while unique.casefold() in used_names:
+            unique = f"{stem}-{self.format_patch_id(assignment.id)}-{counter}{suffix}"
+            counter += 1
+        used_names.add(unique.casefold())
+        return unique
 
     def diff_preset_ids(self, input_path: Path, previous_input_path: Path) -> list[int]:
         """List presets whose loudness-affecting content differs between two patch files."""
@@ -170,6 +278,21 @@ class DeviceProfile(ABC):
     @abstractmethod
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
         """Create the device-specific patch-file adapter."""
+
+    def terminology(self) -> DeviceTerminology:
+        return DeviceTerminology()
+
+    def file_capabilities(self) -> FileOperationCapabilities:
+        return FileOperationCapabilities()
+
+    def measurement_backends(self) -> tuple[str, ...]:
+        return MeasurementBackendCapabilities().names()
+
+    def naming_rules(self) -> NamingRules:
+        return NamingRules(
+            preset_name_max_length=getattr(self, "preset_name_max_length", None),
+            snapshot_name_max_length=getattr(self, "snapshot_name_max_length", None),
+        )
 
     def format_patch_id(self, preset_id: int) -> str:
         """Format a numeric preset ID for device-facing status text."""

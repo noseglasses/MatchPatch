@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Protocol, cast
 
 from PySide6.QtCore import (
@@ -48,7 +49,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from matchpatch.devices import get_device_profile
 from matchpatch.devices.base import NormalizationPolicy
+from matchpatch.gui import file_operations_workflow
 from matchpatch.gui.diagnostics_panel import DiagnosticsPanel
 from matchpatch.gui.dialogs import ASSETS_DIR
 from matchpatch.gui.help import HelpId
@@ -208,6 +211,36 @@ def build_toolbar(window: MainWindowLike) -> None:
     window.save_measurement_action.triggered.connect(window.save_measurement_file)
     toolbar.addAction(window.save_measurement_action)
 
+    window.join_preset_files_action = QAction(
+        window.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder),
+        "Join Preset Files",
+        object_parent,
+    )
+    window.join_preset_files_action.setToolTip("Join multiple preset files into a setlist.")
+    window.join_preset_files_action.setProperty("help_id", HelpId.OPEN_FILES)
+    window.join_preset_files_action.triggered.connect(
+        lambda: file_operations_workflow.join_preset_files(
+            cast(file_operations_workflow.FileOperationWindow, window)
+        )
+    )
+    toolbar.addAction(window.join_preset_files_action)
+
+    window.split_setlist_action = QAction(
+        window.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon),
+        "Split Setlist",
+        object_parent,
+    )
+    window.split_setlist_action.setToolTip("Export setlist presets as individual preset files.")
+    window.split_setlist_action.setProperty("help_id", HelpId.OPEN_FILES)
+    window.split_setlist_action.triggered.connect(
+        lambda: file_operations_workflow.split_setlist(
+            cast(file_operations_workflow.FileOperationWindow, window),
+            get_profile=get_device_profile,
+            project_dir=Path(__file__).resolve().parents[3],
+        )
+    )
+    toolbar.addAction(window.split_setlist_action)
+
     window.normalization_separator_action = toolbar.addSeparator()
     window.start_button = QToolButton(parent)
     window.start_button.setIcon(_normalization_icon())
@@ -311,6 +344,8 @@ def build_toolbar(window: MainWindowLike) -> None:
         window.save_action,
         window.save_as_action,
         window.save_measurement_action,
+        window.join_preset_files_action,
+        window.split_setlist_action,
         window.help_action,
         window.about_action,
     ):
@@ -943,6 +978,14 @@ def build_lufs(window: MainWindowLike) -> QWidget:
     )
     window.ignore_snapshot_regex.textChanged.connect(window._refresh_all_snapshot_names)
     window.ignore_snapshot_regex.textChanged.connect(window._refresh_measurement_time_estimate)
+    window.ignore_preset_regex = QLineEdit(NormalizationPolicy().ignore_preset_regex)
+    window.ignore_preset_regex.setProperty("help_id", HelpId.SNAPSHOTS_SOLOS_IGNORED)
+    window.ignore_preset_regex.setMaximumWidth(260)
+    window.ignore_preset_regex.setToolTip(
+        "Regular expression used to identify presets skipped during normalization."
+    )
+    window.ignore_preset_regex.textChanged.connect(window._refresh_all_preset_names)
+    window.ignore_preset_regex.textChanged.connect(window._refresh_measurement_time_estimate)
     snapshot_regexes = QGroupBox("Snapshot name regex")
     snapshot_regex_layout = QFormLayout(snapshot_regexes)
     snapshot_regex_layout.setContentsMargins(8, 8, 8, 8)
@@ -951,6 +994,10 @@ def build_lufs(window: MainWindowLike) -> QWidget:
     snapshot_regex_layout.addRow(
         _label("Ignored", window.ignore_snapshot_regex.toolTip()),
         window.ignore_snapshot_regex,
+    )
+    snapshot_regex_layout.addRow(
+        _label("Ignored presets", window.ignore_preset_regex.toolTip()),
+        window.ignore_preset_regex,
     )
     form.addRow(snapshot_regexes)
     return content

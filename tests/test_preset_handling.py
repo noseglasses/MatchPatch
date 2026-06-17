@@ -21,6 +21,39 @@ def _load_legacy_module() -> ModuleType:
     return module
 
 
+def _preset(name: str) -> dict:
+    return {
+        "meta": {"name": name},
+        "tone": {
+            "dsp0": {
+                "inputA": {"@input": 1},
+                "block0": {},
+                "outputA": {"@output": 6, "gain": 0.0},
+            },
+            "snapshot0": {"@name": "Snapshot 1"},
+        },
+    }
+
+
+def _hls_text(data: dict) -> str:
+    raw = json.dumps(data, indent=1).encode("utf-8")
+    wrapper = {
+        "compression": {
+            "crc32": binascii.crc32(raw) & 0xFFFFFFFF,
+            "decompressed_size": len(raw),
+            "type": "zlib",
+        },
+        "encoded_data": base64.b64encode(zlib.compress(raw, level=9)).decode("ascii"),
+    }
+    return json.dumps(wrapper)
+
+
+def _decoded_hls_data(hls_text: str) -> dict:
+    wrapper = json.loads(hls_text)
+    raw = zlib.decompress(base64.b64decode(wrapper["encoded_data"]))
+    return json.loads(raw)
+
+
 def test_lufs_error_sentinel_is_retained_per_snapshot(tmp_path) -> None:
     module = _load_legacy_module()
     csv_path = tmp_path / "analysis.csv"
@@ -314,3 +347,93 @@ def test_save_output_packs_crc32_for_encoded_data(tmp_path) -> None:
 
     assert wrapper["compression"]["crc32"] == binascii.crc32(raw) & 0xFFFFFFFF
     assert wrapper["compression"]["decompressed_size"] == len(raw)
+
+
+def test_join_preset_files_to_setlist_contains_joined_presets(tmp_path) -> None:
+    module = _load_legacy_module()
+    first_path = tmp_path / "first.hlx"
+    second_path = tmp_path / "second.hlx"
+    first_path.write_text(json.dumps(_preset("First")), encoding="utf-8")
+    second_path.write_text(json.dumps({"data": _preset("Second"), "meta": {"app": "HX Edit"}}))
+
+    hls_text, metadata = module.join_preset_files_to_setlist([first_path, second_path])
+
+    data = _decoded_hls_data(hls_text)
+    assert [preset["meta"]["name"] for preset in data["presets"]] == ["First", "Second"]
+    assert metadata["source_filenames"] == {"01A": "first.hlx", "01B": "second.hlx"}
+
+
+def test_join_preset_files_to_setlist_uses_slot_ids(tmp_path) -> None:
+    module = _load_legacy_module()
+    preset_path = tmp_path / "lead.hlx"
+    preset_path.write_text(json.dumps(_preset("Lead")), encoding="utf-8")
+
+    hls_text, _ = module.join_preset_files_to_setlist([preset_path], slot_ids=["01B"])
+
+    data = _decoded_hls_data(hls_text)
+    assert module.is_default_preset(data["presets"][0])
+    assert data["presets"][1]["meta"]["name"] == "Lead"
+
+
+def test_split_setlist_to_preset_data_skips_empty_presets(tmp_path) -> None:
+    module = _load_legacy_module()
+    setlist_path = tmp_path / "setlist.hls"
+    setlist_path.write_text(
+        _hls_text({"presets": [_preset("Lead"), {"meta": {"name": "Empty"}, "tone": {}}]}),
+        encoding="utf-8",
+    )
+
+    split_presets = module.split_setlist_to_preset_data(setlist_path)
+
+    assert split_presets == [("Lead.hlx", _preset("Lead"))]
+
+
+def test_split_setlist_reuses_original_filename_when_supplied(tmp_path) -> None:
+    module = _load_legacy_module()
+    setlist_path = tmp_path / "setlist.hls"
+    setlist_path.write_text(_hls_text({"presets": [_preset("Lead")]}), encoding="utf-8")
+
+    split_presets = module.split_setlist_to_preset_data(
+        setlist_path, original_filenames={"01A": "Original Lead.hlx"}
+    )
+
+    assert split_presets[0][0] == "Original Lead.hlx"
+
+
+def test_split_setlist_synthesizes_safe_filename_from_preset_name(tmp_path) -> None:
+    module = _load_legacy_module()
+    setlist_path = tmp_path / "setlist.hls"
+    setlist_path.write_text(_hls_text({"presets": [_preset('Lead: / "A"')]}), encoding="utf-8")
+
+    split_presets = module.split_setlist_to_preset_data(setlist_path)
+
+    assert split_presets[0][0] == "Lead A.hlx"
+
+
+def test_split_setlist_disambiguates_duplicate_synthesized_names(tmp_path) -> None:
+    module = _load_legacy_module()
+    setlist_path = tmp_path / "setlist.hls"
+    setlist_path.write_text(
+        _hls_text({"presets": [_preset("Lead"), _preset("Lead")]}),
+        encoding="utf-8",
+    )
+
+    split_presets = module.split_setlist_to_preset_data(setlist_path)
+
+    assert [filename for filename, _ in split_presets] == ["Lead 01A.hlx", "Lead 01B.hlx"]
+
+
+def test_load_and_rebuild_hlx_preserves_wrapper_shape(tmp_path) -> None:
+    module = _load_legacy_module()
+    hlx_path = tmp_path / "wrapped.hlx"
+    hlx_path.write_text(
+        json.dumps({"data": _preset("Wrapped"), "meta": {"app": "HX Edit"}}),
+        encoding="utf-8",
+    )
+
+    preset, wrapper = module.load_preset_file(hlx_path)
+    preset["meta"]["name"] = "Renamed"
+    rebuilt = module.rebuild_hlx_data(wrapper, preset)
+
+    assert rebuilt["data"]["meta"]["name"] == "Renamed"
+    assert rebuilt["meta"] == {"app": "HX Edit"}

@@ -122,10 +122,12 @@ from matchpatch.gui.table_roles import (
     IGNORED_SNAPSHOT_ROLE,
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_PRESET,
+    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
     MANUAL_NAME_MODIFIED_ROLE,
     MEASURED_ADJUSTMENT_ROLE,
     NORMALIZATION_FOCUS_ROLE,
+    PRESET_ORIGINAL_FILENAME_ROLE,
     PROCESSED_SNAPSHOT_ROLE,
     RECORDED_OUTPUT_PATH_ROLE,
 )
@@ -356,6 +358,31 @@ def test_preset_table_controller_builds_adjustment_payload(app) -> None:
     assert adjustments.preset_names["01A"] == "Preset 01A"
     assert adjustments.snapshot_names["01A"] == {0: "Snap", 1: "Snap"}
     assert adjustments.gain_deltas["01A"] == {0: 1.5}
+    table.close()
+
+
+def test_preset_table_controller_tracks_original_filenames(app) -> None:
+    table, callbacks = _controller_table()
+    controller = PresetTableController(table, callbacks, set())
+
+    controller.set_preset_original_filename(0, "lead.hlx")
+    controller.set_preset_original_filename(1, "")
+
+    assert controller.preset_original_filename(0) == "lead.hlx"
+    assert controller.preset_original_filename(1) is None
+    assert table.item(0, 2).data(PRESET_ORIGINAL_FILENAME_ROLE) == "lead.hlx"
+    assert controller.original_filename_map(lambda patch: {"01A": [1], "02B": [6]}[patch]) == {
+        1: "lead.hlx"
+    }
+
+    table.item(1, 1).setText("06B")
+    controller.set_preset_original_filename(1, "rhythm.hlx")
+    assert controller.preset_ids_for_rows(
+        [0, 1], lambda patch: {"01A": [1], "06B": [22]}[patch]
+    ) == [
+        1,
+        22,
+    ]
     table.close()
 
 
@@ -803,6 +830,48 @@ def test_ignore_snapshot_regex_marks_and_skips_default_snapshots(monkeypatch, ap
     assert adjustment.text() == "-"
     assert adjustment.data(ADJUSTMENT_VALUE_ROLE) is None
     assert 0 not in window._table_adjustments().gain_deltas["01A"]
+
+    window.close()
+
+
+def test_ignore_preset_regex_marks_and_skips_matching_preset(monkeypatch, app) -> None:
+    window = MainWindow()
+    _mock_single_hlx_handler(
+        monkeypatch,
+        name="Init Tone",
+        snapshot_names=("Verse", "Chorus"),
+        snapshot_output_levels=((0.0,), (0.0,)),
+    )
+    window.ignore_preset_regex.setText("^Init")
+    window.input_path.setText("/tmp/example.hlx")
+    window.load_assignments()
+    window.preset_table.item(0, 1).setText("01A")
+    selected = window.preset_table.item(0, 0)
+    assert selected is not None
+    selected.setCheckState(Qt.CheckState.Checked)
+
+    for snapshot in range(2):
+        item = window.preset_table.item(0, snapshot_name_column(snapshot))
+        assert item.data(IGNORED_SNAPSHOT_REASONS_ROLE) == (IGNORE_REASON_PRESET_REGEX,)
+
+    assert window._row_measured_snapshot_indexes(0) == ()
+
+    selected.setCheckState(Qt.CheckState.Unchecked)
+    name = window.preset_table.item(0, snapshot_name_column(0))
+    assert name.data(IGNORED_SNAPSHOT_REASONS_ROLE) == (
+        IGNORE_REASON_PRESET_REGEX,
+        IGNORE_REASON_PRESET,
+    )
+
+    window.ignore_preset_regex.setText("^Other")
+
+    assert name.data(IGNORED_SNAPSHOT_REASONS_ROLE) == (IGNORE_REASON_PRESET,)
+    assert window._row_measured_snapshot_indexes(0) == ()
+
+    selected.setCheckState(Qt.CheckState.Checked)
+
+    assert name.data(IGNORED_SNAPSHOT_ROLE) is None
+    assert window._row_measured_snapshot_indexes(0) == (1, 2, 3, 4)
 
     window.close()
 

@@ -121,6 +121,18 @@ def _normalization_policy(config: Config, args: argparse.Namespace) -> Normaliza
                 ),
             )
         ),
+        ignore_preset_regex=normalize_regex_pattern(
+            cast(
+                str,
+                prefer(
+                    args.ignore_preset_regex,
+                    config,
+                    "policy",
+                    "ignore_preset_regex",
+                    default=NormalizationPolicy().ignore_preset_regex,
+                ),
+            )
+        ),
         solo_gain_bump_db=cast(
             float,
             prefer(args.solo_gain_bump_db, config, "policy", "solo_gain_bump_db", default=3.0),
@@ -146,6 +158,22 @@ def _normalization_policy(config: Config, args: argparse.Namespace) -> Normaliza
         re.compile(policy.ignore_snapshot_regex)
     except re.error as exc:
         raise ValueError(f"Invalid ignore snapshot regex: {exc}") from exc
+    try:
+        re.compile(policy.ignore_preset_regex)
+    except re.error as exc:
+        raise ValueError(f"Invalid ignore preset regex: {exc}") from exc
+
+    supported_backends = (
+        profile.measurement_backends()
+        if hasattr(profile, "measurement_backends")
+        else ("hardware", "loopback", "simulated")
+    )
+    if args.backend not in supported_backends:
+        supported = ", ".join(supported_backends)
+        raise ValueError(
+            f"Backend {args.backend!r} is not supported by {profile.display_name}; "
+            f"choose one of: {supported}"
+        )
 
     return policy
 
@@ -927,12 +955,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--target-lufs", type=float)
     parser.add_argument("--solo-regex")
     parser.add_argument("--ignore-snapshot-regex")
+    parser.add_argument("--ignore-preset-regex")
     parser.add_argument("--solo-gain-bump-db", type=float)
     parser.add_argument("--snapshot-count", type=int)
-    parser.add_argument(
-        "--backend",
-        choices=["hardware", "loopback", "simulated"],
-    )
+    parser.add_argument("--backend")
     parser.add_argument(
         "--windows-python",
     )

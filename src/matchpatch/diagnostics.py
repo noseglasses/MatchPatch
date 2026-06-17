@@ -463,6 +463,7 @@ def normalization_policy_to_dict(policy: NormalizationPolicy) -> dict[str, Any]:
         "snapshot_count": policy.snapshot_count,
         "solo_regex": policy.solo_regex,
         "ignore_snapshot_regex": policy.ignore_snapshot_regex,
+        "ignore_preset_regex": policy.ignore_preset_regex,
         "solo_gain_bump_db": policy.solo_gain_bump_db,
         "crest_factor_reference_db": policy.crest_factor_reference_db,
         "crest_factor_correction_ratio": policy.crest_factor_correction_ratio,
