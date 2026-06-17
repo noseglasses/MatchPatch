@@ -7,7 +7,7 @@ from pathlib import Path
 
 from matchpatch.custom_adjustments import load_custom_adjustments_file
 from matchpatch.devices import get_device_profile
-from matchpatch.devices.base import DeviceProfile, PatchFileHandler
+from matchpatch.devices.base import DeviceProfile, DiagnosticsContext, PatchFileHandler
 from matchpatch.diagnostics import DiagnosticCheck, effective_config_from_request
 from matchpatch.normalize import collect_windows_hardware_diagnostics
 from matchpatch.workflow import PROJECT_DIR, NormalizationRequest
@@ -56,6 +56,7 @@ def run_preflight_checks(
     checks.append(_reference_di_check(request.reference_di))
     checks.append(_custom_adjustments_check(request))
     checks.append(_backend_check(request.backend, profile))
+    checks.extend(_device_diagnostic_checks(request, profile, handler))
     checks.extend(
         _backend_specific_checks(
             request,
@@ -197,6 +198,39 @@ def _backend_check(backend: str, profile: DeviceProfile | None) -> DiagnosticChe
         "fail",
         f"Backend must be one of {supported}: {backend}",
     )
+
+
+def _device_diagnostic_checks(
+    request: NormalizationRequest,
+    profile: DeviceProfile | None,
+    handler: PatchFileHandler | None,
+) -> list[DiagnosticCheck]:
+    if profile is None or handler is None:
+        return []
+    try:
+        provider_factory = getattr(profile, "diagnostics_provider", None)
+        if provider_factory is None:
+            return []
+        provider = provider_factory()
+        if provider is None:
+            return []
+        context = DiagnosticsContext(
+            request=request,
+            profile=profile,
+            handler=handler,
+            resolved_settings=request.device_settings or {},
+            project_dir=PROJECT_DIR,
+        )
+        return list(provider.run_checks(context))
+    except Exception as exc:  # noqa: BLE001
+        return [
+            DiagnosticCheck(
+                "device_diagnostics",
+                "fail",
+                "Device diagnostics provider failed",
+                str(exc),
+            )
+        ]
 
 
 def _backend_specific_checks(

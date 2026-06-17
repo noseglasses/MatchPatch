@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from matchpatch.devices.base import (
+    DeviceFileType,
     FileOperationCapabilities,
     NormalizationPolicy,
     PatchFileAdjustments,
@@ -442,10 +443,14 @@ def test_join_preset_files_action_calls_workflow_and_opens_output(
     opened_paths: list[str] = []
     calls = []
     monkeypatch.setattr(
-        file_operations_workflow, "choose_join_preset_paths", lambda parent: preset_paths
+        file_operations_workflow,
+        "choose_join_preset_paths",
+        lambda parent, file_types=(): preset_paths,
     )
     monkeypatch.setattr(
-        file_operations_workflow, "choose_join_output_path", lambda parent: output_path
+        file_operations_workflow,
+        "choose_join_output_path",
+        lambda parent, file_types=(): output_path,
     )
     monkeypatch.setattr(window, "_open_input_path", opened_paths.append)
 
@@ -465,6 +470,88 @@ def test_join_preset_files_action_calls_workflow_and_opens_output(
 
     assert calls == [("helix", preset_paths, output_path)]
     assert opened_paths == [str(output_path)]
+    window.close()
+
+
+def test_input_browse_uses_device_file_type_filter(monkeypatch, app) -> None:
+    window = MainWindow()
+    filters = []
+
+    class Handler:
+        @staticmethod
+        def file_types():
+            return (
+                DeviceFileType("setlist", (".setlist",), "Fake setlist"),
+                DeviceFileType("preset", (".preset",), "Fake preset"),
+            )
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    monkeypatch.setattr(
+        main_window.file_type_filters,
+        "get_device_profile",
+        lambda device: Profile(),
+    )
+
+    def get_open_file_name(*args, **kwargs):
+        filters.append(kwargs["filter"])
+        return "", ""
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", get_open_file_name)
+
+    window.browse_input()
+
+    assert filters == ["Patches (*.setlist *.preset)"]
+    window.close()
+
+
+def test_join_dialogs_use_device_file_type_filters(monkeypatch, app, tmp_path) -> None:
+    window = MainWindow()
+    preset_paths = [tmp_path / "lead.preset"]
+    output_path = tmp_path / "joined"
+    filters = []
+
+    class Handler:
+        @staticmethod
+        def file_types():
+            return (
+                DeviceFileType("setlist", (".setlist",), "Fake setlist"),
+                DeviceFileType("preset", (".preset",), "Fake preset"),
+            )
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    monkeypatch.setattr(file_operations_workflow, "get_device_profile", lambda device: Profile())
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileNames",
+        lambda *args, **kwargs: filters.append(kwargs["filter"]) or ([str(preset_paths[0])], ""),
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: filters.append(kwargs["filter"]) or (str(output_path), ""),
+    )
+    monkeypatch.setattr(window, "_open_input_path", lambda path: None)
+    monkeypatch.setattr(
+        file_operations_workflow.file_operations,
+        "join_preset_files",
+        lambda device, selected_preset_paths, selected_output_path: (
+            file_operations_workflow.file_operations.JoinPresetFilesResult(
+                output_path=selected_output_path
+            )
+        ),
+    )
+
+    assert file_operations_workflow.join_preset_files(window)
+
+    assert filters == ["Preset files (*.preset)", "Setlist files (*.setlist)"]
     window.close()
 
 

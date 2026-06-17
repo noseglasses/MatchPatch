@@ -70,7 +70,7 @@ from matchpatch.diagnostics import (
     write_diagnostic_bundle,
 )
 from matchpatch.gui import diagnostics_panel as gui_diagnostics
-from matchpatch.gui import file_operations_workflow, window_layout, window_state
+from matchpatch.gui import file_operations_workflow, file_type_filters, window_layout, window_state
 from matchpatch.gui import help as gui_help
 from matchpatch.gui.advanced_settings import (
     GuiSettingsBinder,
@@ -114,6 +114,11 @@ from matchpatch.gui.measurement_optimization import (
 )
 from matchpatch.gui.measurement_optimization import (
     _optimization_progress_event_total as _optimization_progress_event_total,
+)
+from matchpatch.gui.name_rules import (
+    device_name_max_length,
+    validate_preset_name_for_device,
+    validate_subdivision_name_for_device,
 )
 from matchpatch.gui.normalization_workflow import NormalizationWorkflowController
 from matchpatch.gui.optimization_workflow import MeasurementOptimizationWorkflowController
@@ -677,7 +682,9 @@ class MainWindow(QMainWindow):
 
     def browse_input(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose patch file", filter="Patches (*.hls *.hlx)"
+            self,
+            "Choose patch file",
+            filter=file_type_filters.open_patch_filter_for_device(self.device.currentData()),
         )
         self._open_input_path(path)
 
@@ -742,12 +749,10 @@ class MainWindow(QMainWindow):
 
     def _choose_save_as_path(self, *, accept_label: str = "Save as") -> Path | None:
         suffix = Path(self.input_path.text()).suffix.lower()
-        if suffix not in {".hls", ".hlx"}:
+        file_filter = file_type_filters.helix_save_file_filter(self.device.currentData(), suffix)
+        if file_filter is None:
             self.show_error("Open a Helix .hls or .hlx file before saving")
             return None
-        file_filter = (
-            f"Helix {suffix} (*{suffix})" if suffix in {".hls", ".hlx"} else "Patches (*.hls *.hlx)"
-        )
         dialog = QFileDialog(self, "Save Helix file as")
         dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
@@ -766,10 +771,10 @@ class MainWindow(QMainWindow):
     def _choose_measurement_save_path(self) -> Path | None:
         input_path = Path(self.input_path.text())
         suffix = input_path.suffix.lower()
-        if suffix not in {".hls", ".hlx"}:
+        file_filter = file_type_filters.helix_save_file_filter(self.device.currentData(), suffix)
+        if file_filter is None:
             self.show_error("Open a Helix .hls or .hlx file before saving a measurement file")
             return None
-        file_filter = f"Helix {suffix} (*{suffix})"
         suggested_path = input_path.with_name(input_path.stem + "_measurement" + suffix)
         dialog = QFileDialog(self, "Save measurement file")
         dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
@@ -897,10 +902,10 @@ class MainWindow(QMainWindow):
         )
 
     def _validate_preset_table_csv_preset_name(self, name: str) -> None:
-        self._validate_helix_name(name, self._preset_name_max_length())
+        validate_preset_name_for_device(self.device.currentData(), name)
 
     def _validate_preset_table_csv_snapshot_name(self, name: str) -> None:
-        self._validate_helix_name(name, self._snapshot_name_max_length())
+        validate_subdivision_name_for_device(self.device.currentData(), name)
 
     def _is_solo_snapshot_name(self, name: str) -> bool:
         try:
@@ -2362,14 +2367,7 @@ class MainWindow(QMainWindow):
 
     def _current_profile_name_max_length(self, attribute: str) -> int | None:
         device = self.device.currentData() if hasattr(self, "device") else None
-        if not device:
-            return None
-        try:
-            profile = get_device_profile(device)
-        except ValueError:
-            return None
-        value = getattr(profile, attribute, None)
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
+        return device_name_max_length(device, attribute)
 
     @staticmethod
     def _sanitize_helix_name(name: str, max_length: int | None = None) -> str:

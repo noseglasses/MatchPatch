@@ -6,6 +6,7 @@ import contextlib
 import csv
 import io
 import json
+import re
 import runpy
 import subprocess
 import sys
@@ -21,9 +22,12 @@ from matchpatch.devices.base import (
     AudioRouting,
     DeviceController,
     DeviceFileKind,
+    DeviceFileType,
     DeviceProfile,
+    DeviceSettingDescriptor,
     DeviceTerminology,
     FileOperationCapabilities,
+    GainPoint,
     NamingRules,
     NormalizationPolicy,
     PatchAssignment,
@@ -32,6 +36,9 @@ from matchpatch.devices.base import (
     SteeringOptions,
 )
 from matchpatch.midi import midi_output_names
+
+HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
+HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
 
 
 class HelixPatchFileHandler(PatchFileHandler):
@@ -153,6 +160,7 @@ class HelixPatchFileHandler(PatchFileHandler):
                     for levels in assignment.get("snapshot_output_levels", ())
                 ),
                 original_filename=input_path.name if input_path.suffix.lower() == ".hlx" else None,
+                gain_points=_assignment_gain_points(assignment),
             )
             for assignment in json.loads(completed.stdout)
         ]
@@ -173,6 +181,24 @@ class HelixPatchFileHandler(PatchFileHandler):
             joins_presets_to_setlist=True,
             splits_setlist_to_presets=True,
             exports_selected_setlist_slots=True,
+        )
+
+    def file_types(self) -> tuple[DeviceFileType, ...]:
+        return (
+            DeviceFileType(
+                kind="setlist",
+                extensions=(".hls",),
+                description="Helix .hls",
+                can_open=True,
+                can_save=True,
+            ),
+            DeviceFileType(
+                kind="preset",
+                extensions=(".hlx",),
+                description="Helix .hlx",
+                can_open=True,
+                can_save=True,
+            ),
         )
 
     def file_kind(self, path: Path) -> DeviceFileKind:
@@ -531,6 +557,7 @@ class HelixDeviceProfile(DeviceProfile):
     max_snapshot_count = 8
     preset_name_max_length = 16
     snapshot_name_max_length = 10
+    name_pattern = r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$"""
 
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
         return HelixPatchFileHandler(project_dir)
@@ -555,8 +582,35 @@ class HelixDeviceProfile(DeviceProfile):
         return NamingRules(
             preset_name_max_length=self.preset_name_max_length,
             snapshot_name_max_length=self.snapshot_name_max_length,
-            allowed_name_pattern=r"^[ -~]*$",
+            allowed_name_pattern=self.name_pattern,
         )
+
+    def validate_preset_name(self, name: str) -> str:
+        return self._validate_helix_name(name, self.preset_name_max_length)
+
+    def validate_subdivision_name(self, name: str) -> str:
+        return self._validate_helix_name(name, self.snapshot_name_max_length)
+
+    def sanitize_preset_name(self, name: str) -> str:
+        return self._sanitize_helix_name(name, self.preset_name_max_length)
+
+    def sanitize_subdivision_name(self, name: str) -> str:
+        return self._sanitize_helix_name(name, self.snapshot_name_max_length)
+
+    @staticmethod
+    def _validate_helix_name(name: str, max_length: int | None = None) -> str:
+        if HELIX_NAME_PATTERN.fullmatch(name) is None:
+            raise ValueError(f"Invalid Helix name: {name!r}")
+        if max_length is not None and len(name) > max_length:
+            raise ValueError(f"Helix name exceeds {max_length} characters: {name!r}")
+        return name
+
+    @staticmethod
+    def _sanitize_helix_name(name: str, max_length: int | None = None) -> str:
+        sanitized = "".join(
+            character for character in name if HELIX_NAME_CHAR_PATTERN.fullmatch(character)
+        )
+        return sanitized[:max_length] if max_length is not None else sanitized
 
     def format_patch_id(self, preset_id: int) -> str:
         zero_based = preset_id - 1
@@ -579,6 +633,121 @@ class HelixDeviceProfile(DeviceProfile):
             measurement_wait_seconds=0.1,
         )
 
+    def setting_descriptors(self) -> tuple[DeviceSettingDescriptor, ...]:
+        audio = self.default_audio_routing()
+        steering = self.default_steering_options()
+        audio_path = ("devices", self.name, "audio")
+        steering_path = ("devices", self.name, "steering")
+        return (
+            DeviceSettingDescriptor(
+                name="audio_device",
+                scope="audio",
+                kind="string",
+                default=audio.device,
+                config_path=(*audio_path, "device"),
+                cli_flags=("--audio-device",),
+                label="Audio device",
+                help="Helix USB audio device query.",
+            ),
+            DeviceSettingDescriptor(
+                name="sample_rate",
+                scope="audio",
+                kind="integer",
+                default=audio.sample_rate,
+                config_path=(*audio_path, "sample_rate"),
+                cli_flags=("--sample-rate",),
+                label="Sample rate",
+                help="Helix USB audio sample rate in hertz.",
+                minimum=1,
+            ),
+            DeviceSettingDescriptor(
+                name="input_mapping",
+                scope="audio",
+                kind="channel_mapping",
+                default=audio.input_mapping,
+                config_path=(*audio_path, "input_mapping"),
+                cli_flags=("--input-mapping",),
+                label="Input mapping",
+                help="One-based Helix USB input channel mapping.",
+            ),
+            DeviceSettingDescriptor(
+                name="output_mapping",
+                scope="audio",
+                kind="channel_mapping",
+                default=audio.output_mapping,
+                config_path=(*audio_path, "output_mapping"),
+                cli_flags=("--output-mapping",),
+                label="Output mapping",
+                help="One-based Helix USB output channel mapping.",
+            ),
+            DeviceSettingDescriptor(
+                name="blocksize",
+                scope="audio",
+                kind="integer",
+                default=0,
+                config_path=(*audio_path, "blocksize"),
+                cli_flags=("--blocksize",),
+                label="Blocksize",
+                help="Audio block size, or zero for the backend default.",
+                minimum=0,
+            ),
+            DeviceSettingDescriptor(
+                name="midi_output",
+                scope="steering",
+                kind="string",
+                default=steering.output,
+                config_path=(*steering_path, "output"),
+                cli_flags=("--steering-output", "--midi-output"),
+                label="MIDI output",
+                help="Helix MIDI output port query.",
+            ),
+            DeviceSettingDescriptor(
+                name="midi_channel",
+                scope="steering",
+                kind="integer",
+                default=steering.channel,
+                config_path=(*steering_path, "channel"),
+                cli_flags=("--midi-channel",),
+                label="MIDI channel",
+                help="Zero-based MIDI channel used for Helix program changes.",
+                minimum=0,
+                maximum=15,
+            ),
+            DeviceSettingDescriptor(
+                name="preset_wait",
+                scope="steering",
+                kind="float",
+                default=steering.preset_wait_seconds,
+                config_path=(*steering_path, "preset_wait_seconds"),
+                cli_flags=("--preset-wait",),
+                label="Preset wait",
+                help="Seconds to wait after sending a Helix preset change.",
+                minimum=0.0,
+            ),
+            DeviceSettingDescriptor(
+                name="snapshot_wait",
+                scope="steering",
+                kind="float",
+                default=steering.snapshot_wait_seconds,
+                config_path=(*steering_path, "snapshot_wait_seconds"),
+                cli_flags=("--snapshot-wait",),
+                label="Snapshot wait",
+                help="Seconds to wait after sending a Helix snapshot change.",
+                minimum=0.0,
+            ),
+            DeviceSettingDescriptor(
+                name="measurement_wait",
+                scope="steering",
+                kind="float",
+                default=steering.measurement_wait_seconds,
+                config_path=(*steering_path, "measurement_wait_seconds"),
+                cli_flags=("--measurement-wait",),
+                label="Measurement wait",
+                help="Seconds to wait before recording each Helix measurement.",
+                minimum=0.0,
+            ),
+        )
+
     def create_controller(self, options: SteeringOptions) -> DeviceController:
         return HelixMidiController(options)
 
@@ -595,3 +764,22 @@ def _error_details(exc: subprocess.CalledProcessError) -> str:
 
 def _load_helix_file_ops() -> Any:  # noqa: ANN401
     return helix_file_ops
+
+
+def _assignment_gain_points(assignment: Mapping[str, object]) -> tuple[GainPoint, ...]:
+    paths = assignment.get("snapshot_output_paths", ())
+    if not isinstance(paths, list | tuple):
+        return ()
+
+    return tuple(
+        GainPoint(
+            id=str(path),
+            label=str(path),
+            current_db=0.0,
+            minimum_db=-120.0,
+            maximum_db=20.0,
+            scope="subdivision",
+            path=str(path),
+        )
+        for path in paths
+    )

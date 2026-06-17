@@ -41,6 +41,9 @@ matchpatch-gui = "matchpatch.gui.app:main"
 # my-device = "my_package.matchpatch_plugin:DeviceProfile"
 # Built-in profiles are registered directly in matchpatch.devices.registry.
 
+[project.entry-points."matchpatch.device_gui_panels"]
+# Optional GUI-only panel factories for device plugins.
+
 [dependency-groups]
 docs = [
     "furo>=2024.8.6",

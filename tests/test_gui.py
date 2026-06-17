@@ -539,6 +539,11 @@ def test_main_window_lists_device_without_settings_panel(monkeypatch, app) -> No
     )
     monkeypatch.setattr(main_window, "list_device_profiles", lambda: [helix, fake])
     monkeypatch.setattr(
+        main_window,
+        "get_device_profile",
+        lambda name: fake if name == "fake" else helix,
+    )
+    monkeypatch.setattr(
         "matchpatch.normalize.get_device_profile",
         lambda name: fake if name == "fake" else helix,
     )

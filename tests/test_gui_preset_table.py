@@ -189,6 +189,22 @@ class _ControllerCallbacks:
             return name[:max_length]
         return name
 
+    def validate_preset_name(self, name: str) -> str:
+        return self.validate_helix_name(name, self.preset_name_max_length())
+
+    def validate_subdivision_name(self, name: str) -> str:
+        return self.validate_helix_name(name, self.snapshot_name_max_length())
+
+    def sanitize_preset_name(self, name: str) -> str:
+        max_length = self.preset_name_max_length()
+        sanitized = name.replace("%", "")
+        return sanitized[:max_length] if max_length is not None else sanitized
+
+    def sanitize_subdivision_name(self, name: str) -> str:
+        max_length = self.snapshot_name_max_length()
+        sanitized = name.replace("%", "")
+        return sanitized[:max_length] if max_length is not None else sanitized
+
     def preset_name_max_length(self) -> int | None:
         return None
 
@@ -438,6 +454,28 @@ def test_preset_table_controller_owns_manual_edit_rules(app) -> None:
     assert IGNORE_REASON_REGEX in snapshot_item.data(IGNORED_SNAPSHOT_REASONS_ROLE)
     assert callbacks.refresh_measurement_calls == 1
     assert callbacks.modified_values[-1] is True
+    table.close()
+
+
+def test_preset_table_controller_uses_callback_name_sanitizers(app) -> None:
+    table, callbacks = _controller_table()
+    controller = PresetTableController(table, callbacks, set())
+    callbacks.manual_checked = True
+    callbacks.snapshot_count_value = 1
+    callbacks.sanitize_preset_name = lambda name: name.replace("*", "-")
+    callbacks.sanitize_subdivision_name = lambda name: name.replace("*", "")
+
+    assert controller.finish_manual_cell_edit(0, 2, "Lead*Wide", commit=True)
+    assert table.item(0, 2).text() == "Lead-Wide"
+
+    assert controller.finish_manual_cell_edit(
+        0,
+        snapshot_name_column(0),
+        "Solo*Boost",
+        commit=True,
+    )
+    assert table.item(0, snapshot_name_column(0)).text() == "SoloBoost"
+
     table.close()
 
 

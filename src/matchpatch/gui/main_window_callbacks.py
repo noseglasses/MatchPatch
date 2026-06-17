@@ -9,6 +9,12 @@ from typing import Any
 from PySide6.QtWidgets import QTableWidgetItem
 
 from matchpatch.devices.base import PatchFileAdjustments, normalize_regex_pattern
+from matchpatch.gui.name_rules import (
+    sanitize_preset_name_for_device,
+    sanitize_subdivision_name_for_device,
+    validate_preset_name_for_device,
+    validate_subdivision_name_for_device,
+)
 from matchpatch.gui.preset_table import (
     PresetTableCallbacks,
     refresh_adjustment_cell_widget,
@@ -58,6 +64,18 @@ class MainWindowPresetTableCallbacks(PresetTableCallbacks):
 
     def validate_helix_name(self, name: str, max_length: int | None = None) -> str:
         return self._window._validate_helix_name(name, max_length)
+
+    def validate_preset_name(self, name: str) -> str:
+        return validate_preset_name_for_device(self._window.device.currentData(), name)
+
+    def validate_subdivision_name(self, name: str) -> str:
+        return validate_subdivision_name_for_device(self._window.device.currentData(), name)
+
+    def sanitize_preset_name(self, name: str) -> str:
+        return sanitize_preset_name_for_device(self._window.device.currentData(), name)
+
+    def sanitize_subdivision_name(self, name: str) -> str:
+        return sanitize_subdivision_name_for_device(self._window.device.currentData(), name)
 
     def preset_name_max_length(self) -> int | None:
         return self._window._preset_name_max_length()

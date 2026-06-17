@@ -114,6 +114,7 @@ Technical details live in the developer docs:
 - [Developer Notes](docs/developer-notes.md)
 - [Architecture](docs/dev/architecture.md)
 - [Commands](docs/dev/commands.md)
+- [Device Plugins](docs/device_plugins.md)
 - [File Formats](docs/dev/file-formats.md)
 
 ## License

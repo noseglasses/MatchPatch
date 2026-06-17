@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from matchpatch.devices import list_device_profiles
-from matchpatch.devices.base import NormalizationPolicy
+from matchpatch.devices.base import DeviceSettingDescriptor, NormalizationPolicy
 
 Config = dict[str, Any]
 
@@ -131,26 +131,30 @@ def default_config() -> Config:
     devices = config["devices"]
     assert isinstance(devices, dict)
     for profile in list_device_profiles():
-        audio = profile.default_audio_routing()
-        steering = profile.default_steering_options()
-        devices[profile.name] = {
-            "audio": {
-                "device": audio.device,
-                "sample_rate": audio.sample_rate,
-                "input_mapping": list(audio.input_mapping),
-                "output_mapping": list(audio.output_mapping),
-                "blocksize": 0,
-            },
-            "steering": {
-                "output": steering.output,
-                "channel": steering.channel,
-                "preset_wait_seconds": steering.preset_wait_seconds,
-                "snapshot_wait_seconds": steering.snapshot_wait_seconds,
-                "measurement_wait_seconds": steering.measurement_wait_seconds,
-            },
-        }
+        devices[profile.name] = _default_device_config(profile.setting_descriptors())
 
     return config
+
+
+def _default_device_config(
+    descriptors: tuple[DeviceSettingDescriptor, ...],
+) -> dict[str, Any]:
+    device_config: dict[str, Any] = {}
+    for descriptor in descriptors:
+        if len(descriptor.config_path) < 4:
+            continue
+        section = descriptor.config_path[-2]
+        key = descriptor.config_path[-1]
+        section_config = device_config.setdefault(section, {})
+        assert isinstance(section_config, dict)
+        section_config[key] = _config_default_value(descriptor.default)
+    return device_config
+
+
+def _config_default_value(value: object) -> object:
+    if isinstance(value, tuple):
+        return list(value)
+    return value
 
 
 def export_default_config(path: str | Path) -> Path:

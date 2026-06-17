@@ -42,7 +42,6 @@ from matchpatch.gui.table_formatting import (
     _normalize_snapshot_output_paths,
     _parse_adjustment_display_text,
     _parse_output_level_display_text,
-    sanitize_helix_name,
 )
 from matchpatch.gui.table_roles import (
     ADJUSTMENT_MAX_DB,
@@ -99,6 +98,14 @@ class PresetTableCallbacks(Protocol):
     def input_path_text(self) -> str: ...
 
     def validate_helix_name(self, name: str, max_length: int | None = None) -> str: ...
+
+    def validate_preset_name(self, name: str) -> str: ...
+
+    def validate_subdivision_name(self, name: str) -> str: ...
+
+    def sanitize_preset_name(self, name: str) -> str: ...
+
+    def sanitize_subdivision_name(self, name: str) -> str: ...
 
     def preset_name_max_length(self) -> int | None: ...
 
@@ -406,16 +413,10 @@ class PresetTableController:
             )
 
     def _validated_preset_name(self, item: QTableWidgetItem) -> str:
-        return self.callbacks.validate_helix_name(
-            item.text(),
-            self.callbacks.preset_name_max_length(),
-        )
+        return self.callbacks.validate_preset_name(item.text())
 
     def _validated_snapshot_name(self, item: QTableWidgetItem) -> str:
-        return self.callbacks.validate_helix_name(
-            item.text(),
-            self.callbacks.snapshot_name_max_length(),
-        )
+        return self.callbacks.validate_subdivision_name(item.text())
 
     def _table_adjustment_value(self, item: QTableWidgetItem) -> float | None:
         if item.data(IGNORED_SNAPSHOT_ROLE) or item.data(BAD_LUFS_HIGHLIGHT_ROLE):
@@ -799,9 +800,9 @@ class PresetTableController:
         if column == 1 and Path(self.callbacks.input_path_text()).suffix.lower() == ".hlx":
             item.setText(value.strip().upper())
         elif column == 2:
-            item.setText(sanitize_helix_name(value, self.callbacks.preset_name_max_length()))
+            item.setText(self.callbacks.sanitize_preset_name(value))
         elif is_snapshot_name_column(column):
-            item.setText(sanitize_helix_name(value, self.callbacks.snapshot_name_max_length()))
+            item.setText(self.callbacks.sanitize_subdivision_name(value))
         elif is_snapshot_adjustment_column(column):
             try:
                 delta = float(value)
@@ -857,7 +858,7 @@ class PresetTableController:
 
     def _handle_manual_adjustment_item_change(self, item: QTableWidgetItem) -> bool:
         if item.column() == 2:
-            self._sanitize_item_text(item, self.callbacks.preset_name_max_length())
+            self._sanitize_item_text(item, self.callbacks.sanitize_preset_name)
         elif is_snapshot_name_column(item.column()):
             self._snapshot_name_item_changed(item)
         elif is_snapshot_adjustment_column(item.column()):
@@ -876,7 +877,7 @@ class PresetTableController:
         return True
 
     def _snapshot_name_item_changed(self, item: QTableWidgetItem) -> None:
-        self._sanitize_item_text(item, self.callbacks.snapshot_name_max_length())
+        self._sanitize_item_text(item, self.callbacks.sanitize_subdivision_name)
         name_item = self.table.item(item.row(), 2)
         snapshot_index = (
             item.column() - SNAPSHOT_TABLE_START_COLUMN
@@ -901,8 +902,12 @@ class PresetTableController:
         )
         self.callbacks.refresh_measurement_time_estimate()
 
-    def _sanitize_item_text(self, item: QTableWidgetItem, max_length: int | None) -> None:
-        sanitized = sanitize_helix_name(item.text(), max_length)
+    def _sanitize_item_text(
+        self,
+        item: QTableWidgetItem,
+        sanitize_name: Callable[[str], str],
+    ) -> None:
+        sanitized = sanitize_name(item.text())
         if sanitized == item.text():
             return
         signals_blocked = self.table.blockSignals(True)

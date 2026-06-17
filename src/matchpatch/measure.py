@@ -8,9 +8,10 @@ import json
 import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
@@ -22,14 +23,24 @@ from matchpatch.config import (
     config_value,
     load_config,
 )
-from matchpatch.config import (
-    parse_channel_mapping as parse_config_mapping,
+from matchpatch.device_settings import (
+    resolve_device_settings,
+    settings_to_audio_routing,
+    settings_to_steering_options,
 )
 from matchpatch.devices import get_device_profile, list_device_profiles
 from matchpatch.devices.base import (
+    AudioProcessingMode,
+    AudioProcessorTransport,
     AudioRouting,
+    AudioTransport,
+    AudioTransportCapabilities,
+    AudioTransportContext,
+    AudioTransportFactory,
     DeviceController,
     DeviceProfile,
+    OfflineAudioProcessingRequest,
+    OfflineAudioTransport,
     PatchFileHandler,
     SteeringOptions,
     validate_snapshot_count,
@@ -82,6 +93,73 @@ class MeasurementBackend(Protocol):
 
 
 PlaybackEnabled = Callable[[], bool]
+
+
+class BackendAudioTransport:
+    def __init__(self, backend: MeasurementBackend) -> None:
+        self.backend = backend
+
+    def __enter__(self) -> BackendAudioTransport:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        return None
+
+    def activate_target(self, target: int) -> None:
+        self.backend.activate_preset(target)
+
+    def activate_subdivision(self, subdivision: int) -> None:
+        self.backend.reapply_snapshot(subdivision)
+
+    def process(self, reference_audio: np.ndarray) -> np.ndarray:
+        return self.backend.record(reference_audio)
+
+
+class TransportMeasurementBackend:
+    def __init__(
+        self,
+        transport: AudioTransport,
+        sample_rate: int | None = None,
+        temporary_file_dir: Path | None = None,
+    ) -> None:
+        self.transport = transport
+        self.sample_rate = sample_rate
+        self.temporary_file_dir = temporary_file_dir
+        self.active_preset_id: int | None = None
+        self.active_snapshot: int | None = None
+
+    def activate_preset(self, preset_id: int) -> None:
+        self.active_preset_id = preset_id
+        self.active_snapshot = None
+        self.transport.activate_target(preset_id)
+
+    def reapply_snapshot(self, snapshot: int) -> None:
+        self.active_snapshot = snapshot
+        self.transport.activate_subdivision(snapshot)
+
+    def record(self, reference_audio: np.ndarray) -> np.ndarray:
+        if isinstance(self.transport, OfflineAudioTransport):
+            if self.sample_rate is None:
+                raise ValueError("Offline transport requires a sample rate")
+            if self.active_preset_id is None or self.active_snapshot is None:
+                raise RuntimeError("Offline transport target and subdivision must be active")
+            return self.transport.process_offline(
+                OfflineAudioProcessingRequest(
+                    reference_audio=reference_audio,
+                    sample_rate=self.sample_rate,
+                    target_id=self.active_preset_id,
+                    subdivision_id=self.active_snapshot,
+                    target_metadata={"preset_id": self.active_preset_id},
+                    subdivision_metadata={"snapshot": self.active_snapshot},
+                    temporary_file_dir=self.temporary_file_dir,
+                )
+            )
+        return self.transport.process(reference_audio)
 
 
 class HardwareBackend:
@@ -191,6 +269,55 @@ class SimulatedHardwareBackend:
     @staticmethod
     def _gain_db(preset_id: int, snapshot: int) -> float:
         return float(((preset_id - 1) % 5 - 2) * 2 + (snapshot - 1))
+
+
+class LoopbackTransportFactory:
+    capabilities = AudioTransportCapabilities(mode="loopback")
+
+    def supports(self, mode: AudioProcessingMode, settings: Mapping[str, object]) -> bool:  # noqa: ARG002
+        return mode == self.capabilities.mode
+
+    def create(self, context: AudioTransportContext) -> AudioProcessorTransport:  # noqa: ARG002
+        return BackendAudioTransport(LoopbackBackend())
+
+
+class SimulatedTransportFactory:
+    capabilities = AudioTransportCapabilities(mode="simulated")
+
+    def supports(self, mode: AudioProcessingMode, settings: Mapping[str, object]) -> bool:  # noqa: ARG002
+        return mode == self.capabilities.mode
+
+    def create(self, context: AudioTransportContext) -> AudioProcessorTransport:
+        return BackendAudioTransport(
+            SimulatedHardwareBackend(
+                context.audio_routing,
+                context.snapshot_count,
+                _channel_mapping_setting(context.settings, "input_mapping"),
+                _channel_mapping_setting(context.settings, "output_mapping"),
+                context.failing_preset_ids,
+            )
+        )
+
+
+class HardwareTransportFactory:
+    capabilities = AudioTransportCapabilities(mode="hardware")
+
+    def supports(self, mode: AudioProcessingMode, settings: Mapping[str, object]) -> bool:  # noqa: ARG002
+        return mode == self.capabilities.mode
+
+    def create(self, context: AudioTransportContext) -> AudioProcessorTransport:
+        if context.audio_config is None or context.controller is None:
+            raise ValueError("Hardware transport requires audio configuration and controller")
+        return BackendAudioTransport(
+            HardwareBackend(
+                cast("AudioConfig", context.audio_config),
+                context.controller,
+                context.timing_values.get(
+                    "measurement_wait",
+                    context.steering_options.measurement_wait_seconds,
+                ),
+            )
+        )
 
 
 def parse_int_list(value: str) -> list[int]:
@@ -691,17 +818,14 @@ def _emit_progress(
 def resolve_audio_config(args: argparse.Namespace, profile: DeviceProfile) -> AudioConfig:
     from matchpatch.audio import AudioConfig
 
-    defaults = profile.default_audio_routing()
+    settings = getattr(args, "device_settings", None) or resolve_device_settings(profile, {}, args)
+    routing = settings_to_audio_routing(profile, settings)
     config = AudioConfig(
-        device=args.audio_device if args.audio_device is not None else defaults.device,
-        sample_rate=args.sample_rate if args.sample_rate is not None else defaults.sample_rate,
-        input_mapping=(
-            args.input_mapping if args.input_mapping is not None else defaults.input_mapping
-        ),
-        output_mapping=(
-            args.output_mapping if args.output_mapping is not None else defaults.output_mapping
-        ),
-        blocksize=args.blocksize,
+        device=routing.device,
+        sample_rate=routing.sample_rate,
+        input_mapping=routing.input_mapping,
+        output_mapping=routing.output_mapping,
+        blocksize=cast("int", settings.get("blocksize", getattr(args, "blocksize", 0) or 0)),
         pre_roll_seconds=getattr(args, "pre_roll", 0.2),
         post_roll_seconds=getattr(args, "post_roll", 0.1),
         round_trip_latency_seconds=getattr(args, "round_trip_latency", 0.02),
@@ -727,29 +851,117 @@ def resolve_steering_options(
     args: argparse.Namespace,
     profile: DeviceProfile,
 ) -> SteeringOptions:
-    defaults = profile.default_steering_options()
-    return SteeringOptions(
-        output=(args.steering_output if args.steering_output is not None else defaults.output),
-        channel=args.steering_channel if args.steering_channel is not None else defaults.channel,
-        preset_wait_seconds=(
-            args.preset_wait if args.preset_wait is not None else defaults.preset_wait_seconds
-        ),
-        snapshot_wait_seconds=(
-            args.snapshot_wait if args.snapshot_wait is not None else defaults.snapshot_wait_seconds
-        ),
-        measurement_wait_seconds=(
-            args.measurement_wait
-            if args.measurement_wait is not None
-            else defaults.measurement_wait_seconds
-        ),
+    return settings_to_steering_options(
+        profile,
+        getattr(args, "device_settings", None) or resolve_device_settings(profile, {}, args),
     )
+
+
+def _builtin_audio_transport_factories() -> tuple[AudioTransportFactory, ...]:
+    return (
+        HardwareTransportFactory(),
+        LoopbackTransportFactory(),
+        SimulatedTransportFactory(),
+    )
+
+
+def _audio_transport_factories(profile: DeviceProfile) -> tuple[AudioTransportFactory, ...]:
+    profile_factories = getattr(profile, "audio_transport_factories", lambda: ())()
+    return (*profile_factories, *_builtin_audio_transport_factories())
+
+
+def _backend_mode(backend: str) -> AudioProcessingMode:
+    if backend not in {"hardware", "loopback", "simulated", "offline"}:
+        raise ValueError(f"Unknown measurement backend: {backend}")
+    return cast("AudioProcessingMode", backend)
+
+
+def _transport_settings(
+    args: argparse.Namespace,
+    profile: DeviceProfile,
+) -> Mapping[str, object]:
+    return getattr(args, "device_settings", None) or resolve_device_settings(profile, {}, args)
+
+
+def _select_audio_transport_factory(
+    profile: DeviceProfile,
+    mode: AudioProcessingMode,
+    settings: Mapping[str, object],
+) -> AudioTransportFactory:
+    _validate_profile_backend_support(profile, mode)
+    for factory in _audio_transport_factories(profile):
+        if factory.supports(mode, settings):
+            return factory
+    if mode == "offline":
+        raise NotImplementedError(
+            "The offline measurement backend is not implemented yet; "
+            "install or enable a plugin-provided offline audio transport factory"
+        )
+    raise ValueError(
+        f"Backend {mode!r} is supported by {profile.display_name}, "
+        "but no audio transport factory is available"
+    )
+
+
+def _validate_profile_backend_support(profile: DeviceProfile, mode: AudioProcessingMode) -> None:
+    supported_backends = profile.measurement_backends()
+    if mode not in supported_backends:
+        supported = ", ".join(supported_backends)
+        raise ValueError(
+            f"Backend {mode!r} is not supported by {profile.display_name}; "
+            f"choose one of: {supported}"
+        )
+
+
+def _transport_context(
+    args: argparse.Namespace,
+    profile: DeviceProfile,
+    mode: AudioProcessingMode,
+    settings: Mapping[str, object],
+    sample_rate: int,
+    snapshot_count: int,
+    *,
+    audio_config: object | None = None,
+    controller: DeviceController | None = None,
+    timing_values: Mapping[str, float] | None = None,
+) -> AudioTransportContext:
+    temporary_file_dir = getattr(args, "temporary_file_dir", None)
+    return AudioTransportContext(
+        profile=profile,
+        mode=mode,
+        settings=settings,
+        audio_routing=settings_to_audio_routing(profile, settings),
+        steering_options=resolve_steering_options(args, profile),
+        sample_rate=sample_rate,
+        snapshot_count=snapshot_count,
+        audio_config=audio_config,
+        controller=controller,
+        temporary_file_dir=Path(temporary_file_dir) if temporary_file_dir else None,
+        failing_preset_ids=frozenset(getattr(args, "simulate_fail_presets", ())),
+        timing_values=timing_values or {},
+    )
+
+
+def _channel_mapping_setting(
+    settings: Mapping[str, object],
+    name: str,
+) -> tuple[int, int] | None:
+    value = settings.get(name)
+    if value is None:
+        return None
+    channels = tuple(cast("tuple[int, int] | list[int]", value))
+    if len(channels) != 2:
+        raise ValueError(f"{name} must contain exactly two channels")
+    return channels[0], channels[1]
 
 
 def measure(args: argparse.Namespace) -> None:
     profile = get_device_profile(args.device)
-    _raise_unimplemented_backend(args.backend)
-    defaults = profile.default_audio_routing()
-    sample_rate = args.sample_rate if args.sample_rate is not None else defaults.sample_rate
+    mode = _backend_mode(args.backend)
+    settings = _transport_settings(args, profile)
+    factory = _select_audio_transport_factory(profile, mode, settings)
+    routing = settings_to_audio_routing(profile, settings)
+    sample_rate = routing.sample_rate
     on_progress = getattr(args, "on_progress", None)
     _emit_progress(
         on_progress,
@@ -772,47 +984,28 @@ def measure(args: argparse.Namespace) -> None:
         Path(args.recordings_dir) if getattr(args, "recordings_dir", None) else None
     )
     snapshot_plan = getattr(args, "snapshot_plan", None)
+    measure_kwargs = {
+        "snapshot_count": snapshot_count,
+        "analysis_options": analysis_options,
+        "on_progress": on_progress,
+        "log_output": log_output,
+        "play_recorded_output": play_recorded_output,
+        "recorded_output_dir": recorded_output_dir,
+        "snapshot_plan": snapshot_plan,
+    }
 
-    if args.backend == "loopback":
-        measure_presets(
-            profile,
-            args.preset_ids,
-            Path(args.csv),
-            reference,
-            sample_rate,
-            LoopbackBackend(),
-            snapshot_count=snapshot_count,
-            analysis_options=analysis_options,
-            on_progress=on_progress,
-            log_output=log_output,
-            play_recorded_output=play_recorded_output,
-            recorded_output_dir=recorded_output_dir,
-            snapshot_plan=snapshot_plan,
-        )
-        return
-
-    if args.backend == "simulated":
-        measure_presets(
-            profile,
-            args.preset_ids,
-            Path(args.csv),
-            reference,
-            sample_rate,
-            SimulatedHardwareBackend(
-                defaults,
-                snapshot_count,
-                args.input_mapping,
-                args.output_mapping,
-                frozenset(args.simulate_fail_presets),
-            ),
-            snapshot_count=snapshot_count,
-            analysis_options=analysis_options,
-            on_progress=on_progress,
-            log_output=log_output,
-            play_recorded_output=play_recorded_output,
-            recorded_output_dir=recorded_output_dir,
-            snapshot_plan=snapshot_plan,
-        )
+    if mode != "hardware":
+        context = _transport_context(args, profile, mode, settings, sample_rate, snapshot_count)
+        with factory.create(context) as transport:
+            measure_presets(
+                profile,
+                args.preset_ids,
+                Path(args.csv),
+                reference,
+                sample_rate,
+                TransportMeasurementBackend(transport, sample_rate, context.temporary_file_dir),
+                **measure_kwargs,
+            )
         return
 
     from matchpatch.audio import prepare_audio_config
@@ -831,32 +1024,35 @@ def measure(args: argparse.Namespace) -> None:
         ProgressEvent("measurement_preparation", message="Opening processor MIDI output..."),
     )
     with profile.create_controller(steering_options) as controller:
-        measure_presets(
+        context = _transport_context(
+            args,
             profile,
-            args.preset_ids,
-            Path(args.csv),
-            reference,
+            mode,
+            settings,
             sample_rate,
-            HardwareBackend(
-                audio_config,
-                controller,
-                steering_options.measurement_wait_seconds,
-            ),
-            snapshot_count=snapshot_count,
-            analysis_options=analysis_options,
-            on_progress=on_progress,
-            log_output=log_output,
-            play_recorded_output=play_recorded_output,
-            recorded_output_dir=recorded_output_dir,
-            snapshot_plan=snapshot_plan,
+            snapshot_count,
+            audio_config=audio_config,
+            controller=controller,
         )
+        with factory.create(context) as transport:
+            measure_presets(
+                profile,
+                args.preset_ids,
+                Path(args.csv),
+                reference,
+                sample_rate,
+                TransportMeasurementBackend(transport, sample_rate, context.temporary_file_dir),
+                **measure_kwargs,
+            )
 
 
 def optimize_measurement_timing(args: argparse.Namespace) -> None:
     profile = get_device_profile(args.device)
-    _raise_unimplemented_backend(args.backend)
-    defaults = profile.default_audio_routing()
-    sample_rate = args.sample_rate if args.sample_rate is not None else defaults.sample_rate
+    mode = _backend_mode(args.backend)
+    settings = _transport_settings(args, profile)
+    factory = _select_audio_transport_factory(profile, mode, settings)
+    routing = settings_to_audio_routing(profile, settings)
+    sample_rate = routing.sample_rate
     reference = load_reference_audio(Path(args.reference_di), sample_rate)
     initial_values = _timing_values(args)
     valid_parameter_names = {parameter.name for parameter in TIMING_PARAMETERS}
@@ -887,49 +1083,7 @@ def optimize_measurement_timing(args: argparse.Namespace) -> None:
         getattr(args, "play_recorded_output", False),
     )
 
-    if args.backend == "loopback":
-        results = optimize_timing_parameters(
-            profile,
-            args.preset_id,
-            alternate_id,
-            reference,
-            sample_rate,
-            lambda values: PlaybackBackend(LoopbackBackend(), sample_rate, play_recorded_output),
-            initial_values,
-            analysis_options,
-            stability_runs=args.stability_runs,
-            termination_tolerance_percent=args.termination_tolerance,
-            stability_tolerance_percent=args.stability_tolerance,
-            on_progress=on_progress,
-            parameters=optimization_parameters,
-        )
-    elif args.backend == "simulated":
-        results = optimize_timing_parameters(
-            profile,
-            args.preset_id,
-            alternate_id,
-            reference,
-            sample_rate,
-            lambda values: PlaybackBackend(
-                SimulatedHardwareBackend(
-                    defaults,
-                    max(2, getattr(profile, "snapshot_count", 4)),
-                    args.input_mapping,
-                    args.output_mapping,
-                    frozenset(args.simulate_fail_presets),
-                ),
-                sample_rate,
-                play_recorded_output,
-            ),
-            initial_values,
-            analysis_options,
-            stability_runs=args.stability_runs,
-            termination_tolerance_percent=args.termination_tolerance,
-            stability_tolerance_percent=args.stability_tolerance,
-            on_progress=on_progress,
-            parameters=optimization_parameters,
-        )
-    else:
+    if mode == "hardware":
         from matchpatch.audio import prepare_audio_config
 
         audio_config = prepare_audio_config(resolve_audio_config(args, profile))
@@ -945,16 +1099,27 @@ def optimize_measurement_timing(args: argparse.Namespace) -> None:
                         preset_wait_seconds=values["preset_wait"],
                         snapshot_wait_seconds=values["snapshot_wait"],
                     )
+                context = _transport_context(
+                    args,
+                    profile,
+                    mode,
+                    settings,
+                    sample_rate,
+                    max(2, getattr(profile, "snapshot_count", 4)),
+                    audio_config=replace(
+                        audio_config,
+                        pre_roll_seconds=values["pre_roll"],
+                        post_roll_seconds=values["post_roll"],
+                        round_trip_latency_seconds=values["round_trip_latency"],
+                    ),
+                    controller=controller,
+                    timing_values=values,
+                )
                 return PlaybackBackend(
-                    HardwareBackend(
-                        replace(
-                            audio_config,
-                            pre_roll_seconds=values["pre_roll"],
-                            post_roll_seconds=values["post_roll"],
-                            round_trip_latency_seconds=values["round_trip_latency"],
-                        ),
-                        controller,
-                        values["measurement_wait"],
+                    TransportMeasurementBackend(
+                        factory.create(context),
+                        sample_rate,
+                        context.temporary_file_dir,
                     ),
                     sample_rate,
                     play_recorded_output,
@@ -975,6 +1140,43 @@ def optimize_measurement_timing(args: argparse.Namespace) -> None:
                 on_progress=on_progress,
                 parameters=optimization_parameters,
             )
+    else:
+
+        def transport_backend(values: dict[str, float]) -> PlaybackBackend:
+            context = _transport_context(
+                args,
+                profile,
+                mode,
+                settings,
+                sample_rate,
+                max(2, getattr(profile, "snapshot_count", 4)),
+                timing_values=values,
+            )
+            return PlaybackBackend(
+                TransportMeasurementBackend(
+                    factory.create(context),
+                    sample_rate,
+                    context.temporary_file_dir,
+                ),
+                sample_rate,
+                play_recorded_output,
+            )
+
+        results = optimize_timing_parameters(
+            profile,
+            args.preset_id,
+            alternate_id,
+            reference,
+            sample_rate,
+            transport_backend,
+            initial_values,
+            analysis_options,
+            stability_runs=args.stability_runs,
+            termination_tolerance_percent=args.termination_tolerance,
+            stability_tolerance_percent=args.stability_tolerance,
+            on_progress=on_progress,
+            parameters=optimization_parameters,
+        )
 
     result_by_name = {result.parameter.name: result for result in (*pinned_results, *results)}
     results = tuple(
@@ -1235,8 +1437,10 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     config = load_config(args.config)
     profile = get_device_profile(args.device)
     _apply_backend_config(args, config, profile)
-    _apply_audio_config(args, config, profile)
-    _apply_timing_config(args, config, profile)
+    args.device_settings = resolve_device_settings(profile, config, args)
+    _validate_configured_backend_factory(args, profile)
+    _apply_resolved_device_settings(args)
+    _apply_timing_config(args, config)
     _apply_optimization_config(args, config)
     if args.snapshot_count is not None:
         validate_snapshot_count(profile, args.snapshot_count)
@@ -1254,89 +1458,43 @@ def _apply_backend_config(
     )
     if args.backend == "helix":
         args.backend = "hardware"
-    supported_backends = profile.measurement_backends()
-    if args.backend not in supported_backends:
-        supported = ", ".join(supported_backends)
-        raise ValueError(
-            f"Backend {args.backend!r} is not supported by {profile.display_name}; "
-            f"choose one of: {supported}"
-        )
+    _validate_profile_backend_support(profile, _backend_mode(args.backend))
 
 
-def _raise_unimplemented_backend(backend: str) -> None:
-    if backend == "offline":
-        raise NotImplementedError("The offline measurement backend is not implemented yet")
-
-
-def _apply_audio_config(
+def _validate_configured_backend_factory(
     args: argparse.Namespace,
-    config: Config,
     profile: DeviceProfile,
 ) -> None:
-    default_audio = profile.default_audio_routing()
-    device_audio = ("devices", args.device, "audio")
-    args.audio_device = _arg_or_config(
-        args,
-        "audio_device",
-        config,
-        *device_audio,
-        "device",
-        default=default_audio.device,
-    )
-    args.sample_rate = _arg_or_config(
-        args,
-        "sample_rate",
-        config,
-        *device_audio,
-        "sample_rate",
-        default=default_audio.sample_rate,
-    )
-    _apply_mapping_config(args, config, device_audio, default_audio)
-    args.blocksize = _arg_or_config(
-        args, "blocksize", config, *device_audio, "blocksize", default=0
+    mode = _backend_mode(args.backend)
+    if mode == "offline":
+        return
+    settings = cast("Mapping[str, object]", args.device_settings)
+    if any(factory.supports(mode, settings) for factory in _audio_transport_factories(profile)):
+        return
+    raise ValueError(
+        f"Backend {mode!r} is supported by {profile.display_name}, "
+        "but no audio transport factory is available"
     )
 
 
-def _apply_mapping_config(
-    args: argparse.Namespace,
-    config: Config,
-    device_audio: tuple[str, str, str],
-    default_audio: AudioRouting,
-) -> None:
-    for name in ("input_mapping", "output_mapping"):
-        value = _arg_or_config(
-            args,
-            name,
-            config,
-            *device_audio,
-            name,
-            default=getattr(default_audio, name),
-        )
-        if value is not None:
-            setattr(args, name, parse_config_mapping(value))
+def _apply_resolved_device_settings(args: argparse.Namespace) -> None:
+    settings = args.device_settings
+    args.audio_device = settings["audio_device"]
+    args.sample_rate = settings["sample_rate"]
+    args.input_mapping = settings["input_mapping"]
+    args.output_mapping = settings["output_mapping"]
+    args.blocksize = settings["blocksize"]
+    args.steering_output = settings["midi_output"]
+    args.steering_channel = settings["midi_channel"]
+    args.preset_wait = settings["preset_wait"]
+    args.snapshot_wait = settings["snapshot_wait"]
+    args.measurement_wait = settings["measurement_wait"]
 
 
 def _apply_timing_config(
     args: argparse.Namespace,
     config: Config,
-    profile: DeviceProfile,
 ) -> None:
-    default_steering = profile.default_steering_options()
-    device_steering = ("devices", args.device, "steering")
-    for attr, key, default in (
-        ("steering_output", "output", default_steering.output),
-        ("steering_channel", "channel", default_steering.channel),
-        ("preset_wait", "preset_wait_seconds", default_steering.preset_wait_seconds),
-        ("snapshot_wait", "snapshot_wait_seconds", default_steering.snapshot_wait_seconds),
-        (
-            "measurement_wait",
-            "measurement_wait_seconds",
-            default_steering.measurement_wait_seconds,
-        ),
-    ):
-        setattr(
-            args, attr, _arg_or_config(args, attr, config, *device_steering, key, default=default)
-        )
     for attr, key, default in (
         ("pre_roll", "pre_roll_seconds", 0.2),
         ("post_roll", "post_roll_seconds", 0.1),

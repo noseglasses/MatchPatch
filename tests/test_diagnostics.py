@@ -67,6 +67,11 @@ def test_effective_config_from_request_is_json_ready(tmp_path: Path) -> None:
             interval_seconds=0.25,
             minimum_valid_lufs=-90.0,
         ),
+        device_settings={
+            "audio_device": "ASIO Helix",
+            "sample_rate": 48000,
+            "midi_output": "Helix MIDI",
+        },
     )
 
     config = EffectiveConfig.from_request(request)
@@ -78,6 +83,8 @@ def test_effective_config_from_request_is_json_ready(tmp_path: Path) -> None:
     assert payload["policy"]["solo_regex"] == "solo"
     assert payload["policy"]["ignore_preset_regex"] == "empty"
     assert payload["analysis_options"]["window_seconds"] == 2.5
+    assert payload["device_settings"]["audio_device"] == "ASIO Helix"
+    assert payload["device_settings"]["steering_output"] == "Helix MIDI"
     assert payload["snapshot_plan"] == [{"patch": "01A", "snapshots": [1, 3]}]
     json.dumps(payload)
 
@@ -252,6 +259,7 @@ def test_write_diagnostic_bundle_appends_zip_and_writes_stable_entries(tmp_path:
         }
     ]
     assert effective_config["input_path"] == str(tmp_path / "input.hls")
+    assert effective_config["device_settings"] == {}
     assert progress_events == [{"kind": "phase", "message": "Measuring"}]
     assert retained_csv["row_count"] == 1
     assert gui_log == "[12:00] INFO Started\n"

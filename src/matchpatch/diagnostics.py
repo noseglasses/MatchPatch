@@ -17,6 +17,7 @@ from typing import Any, Literal, Sequence, cast
 
 from matchpatch import __version__
 from matchpatch.analysis import AnalysisOptions
+from matchpatch.device_settings import setting_diagnostics
 from matchpatch.devices.base import NormalizationPolicy
 from matchpatch.progress import ProgressEvent
 from matchpatch.workflow import NormalizationRequest, NormalizationResult
@@ -92,6 +93,7 @@ class EffectiveConfig:
     snapshot_plan: tuple[tuple[str, tuple[int, ...]], ...]
     policy: dict[str, Any]
     analysis_options: dict[str, Any]
+    device_settings: dict[str, Any]
 
     @classmethod
     def from_request(cls, request: NormalizationRequest) -> EffectiveConfig:
@@ -134,6 +136,7 @@ class EffectiveConfig:
             ),
             policy=normalization_policy_to_dict(request.policy),
             analysis_options=analysis_options_to_dict(request.analysis_options),
+            device_settings=setting_diagnostics(request.device_settings or {}),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -177,6 +180,7 @@ class EffectiveConfig:
             ],
             "policy": self.policy,
             "analysis_options": self.analysis_options,
+            "device_settings": self.device_settings,
         }
 
 
@@ -530,6 +534,7 @@ def request_diagnostics(request: NormalizationRequest) -> dict[str, object]:
         ],
         "policy": normalization_policy_to_dict(request.policy),
         "analysis_options": analysis_options_to_dict(request.analysis_options),
+        "device_settings": setting_diagnostics(request.device_settings or {}),
     }
 
 

@@ -15,8 +15,13 @@ from hypothesis import strategies as st
 
 from matchpatch.devices import get_device_profile
 from matchpatch.devices.base import (
+    AudioProcessingMode,
     AudioRouting,
+    AudioTransportCapabilities,
+    AudioTransportContext,
     DeviceProfile,
+    MeasurementBackendCapabilities,
+    OfflineAudioProcessingRequest,
     PatchFileHandler,
     SteeringOptions,
 )
@@ -192,6 +197,128 @@ class FakeDeviceProfile(DeviceProfile):
 
     def create_controller(self, options: SteeringOptions):
         raise AssertionError("Loopback must not create a controller")
+
+
+class RecordingTransport:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int] | tuple[str, tuple[int, ...]] | tuple[str]] = []
+
+    def __enter__(self):
+        self.calls.append(("enter",))
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.calls.append(("exit",))
+
+    def activate_target(self, target: int) -> None:
+        self.calls.append(("target", target))
+
+    def activate_subdivision(self, subdivision: int) -> None:
+        self.calls.append(("subdivision", subdivision))
+
+    def process(self, reference_audio: np.ndarray) -> np.ndarray:
+        self.calls.append(("process", reference_audio.shape))
+        return reference_audio.copy()
+
+
+class RecordingTransportFactory:
+    capabilities = AudioTransportCapabilities(mode="loopback")
+
+    def __init__(self) -> None:
+        self.transport = RecordingTransport()
+        self.contexts: list[AudioTransportContext] = []
+
+    def supports(self, mode: AudioProcessingMode, settings) -> bool:
+        return mode == "loopback" and settings["sample_rate"] == 48000
+
+    def create(self, context: AudioTransportContext) -> RecordingTransport:
+        self.contexts.append(context)
+        return self.transport
+
+
+class OfflineRecordingTransport:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int] | tuple[str, tuple[int, ...]] | tuple[str]] = []
+        self.requests: list[OfflineAudioProcessingRequest] = []
+
+    def __enter__(self):
+        self.calls.append(("enter",))
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.calls.append(("exit",))
+
+    def activate_target(self, target: int) -> None:
+        self.calls.append(("target", target))
+
+    def activate_subdivision(self, subdivision: int) -> None:
+        self.calls.append(("subdivision", subdivision))
+
+    def process_offline(self, request: OfflineAudioProcessingRequest) -> np.ndarray:
+        self.calls.append(("offline", request.reference_audio.shape))
+        self.requests.append(request)
+        return request.reference_audio * 0.5
+
+
+class OfflineRecordingTransportFactory:
+    capabilities = AudioTransportCapabilities(mode="offline", real_time=False, offline=True)
+
+    def __init__(self) -> None:
+        self.transport = OfflineRecordingTransport()
+        self.contexts: list[AudioTransportContext] = []
+
+    def supports(self, mode: AudioProcessingMode, settings) -> bool:
+        return mode == "offline" and settings["sample_rate"] == 48000
+
+    def create(self, context: AudioTransportContext) -> OfflineRecordingTransport:
+        self.contexts.append(context)
+        return self.transport
+
+
+class TransportDeviceProfile(DeviceProfile):
+    name = "transport"
+    display_name = "Transport Processor"
+    snapshot_count = 1
+
+    def __init__(self, factory: RecordingTransportFactory) -> None:
+        self.factory = factory
+
+    def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
+        return FakePatchFileHandler()
+
+    def measurement_backends(self) -> tuple[str, ...]:
+        return MeasurementBackendCapabilities(hardware=False, simulated=False).names()
+
+    def audio_transport_factories(self):
+        return (self.factory,)
+
+    def default_audio_routing(self) -> AudioRouting:
+        return AudioRouting(None, 48000, (1, 2), (1, 2))
+
+    def default_steering_options(self) -> SteeringOptions:
+        return SteeringOptions(None, 0, 0.0, 0.0, 0.0)
+
+    def create_controller(self, options: SteeringOptions):
+        raise AssertionError("Custom loopback transport must not create a controller")
+
+
+class OfflineTransportDeviceProfile(TransportDeviceProfile):
+    name = "offline-transport"
+    display_name = "Offline Transport Processor"
+
+    def __init__(self, factory: OfflineRecordingTransportFactory) -> None:
+        self.factory = factory
+
+    def measurement_backends(self) -> tuple[str, ...]:
+        return MeasurementBackendCapabilities(
+            hardware=False,
+            loopback=False,
+            simulated=False,
+            offline=True,
+        ).names()
+
+    def audio_transport_factories(self):
+        return (self.factory,)
 
 
 def test_loopback_is_device_independent(tmp_path) -> None:
@@ -557,7 +684,7 @@ def test_measure_dispatches_loopback_without_audio_module(monkeypatch) -> None:
 
     measure(worker_args())
 
-    assert isinstance(calls[0][-1], LoopbackBackend)
+    assert isinstance(calls[0][-1].transport.backend, LoopbackBackend)
     assert calls[0][4] == 48000
 
 
@@ -578,8 +705,8 @@ def test_measure_dispatches_stateful_simulator_without_audio_module(monkeypatch)
     )
 
     backend = calls[0][-1]
-    assert isinstance(backend, SimulatedHardwareBackend)
-    assert backend.failing_preset_ids == frozenset({6})
+    assert isinstance(backend.transport.backend, SimulatedHardwareBackend)
+    assert backend.transport.backend.failing_preset_ids == frozenset({6})
 
 
 def test_measure_configures_hardware_backend(monkeypatch) -> None:
@@ -620,11 +747,85 @@ def test_measure_configures_hardware_backend(monkeypatch) -> None:
     )
 
     assert calls[0] == ("prepared", "processor")
-    assert isinstance(calls[1][-1], HardwareBackend)
+    assert isinstance(calls[1][-1].transport.backend, HardwareBackend)
     assert [event.message for event in events] == [
         "Loading reference DI audio...",
         "Resolving and validating audio device...",
         "Opening processor MIDI output...",
+    ]
+
+
+def test_measure_uses_profile_audio_transport_factory(monkeypatch, tmp_path) -> None:
+    sample_rate = 48000
+    times = np.arange(sample_rate * 4) / sample_rate
+    reference = np.sin(2 * np.pi * 1000 * times)[:, np.newaxis]
+    factory = RecordingTransportFactory()
+    profile = TransportDeviceProfile(factory)
+    csv_path = tmp_path / "transport.csv"
+
+    monkeypatch.setattr("matchpatch.measure.get_device_profile", lambda device: profile)
+    monkeypatch.setattr("matchpatch.measure.load_reference_audio", lambda path, rate: reference)
+
+    measure(
+        worker_args(
+            device="transport",
+            backend="loopback",
+            csv=str(csv_path),
+            reference_di="reference.wav",
+        )
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as csv_file:
+        row = next(csv.DictReader(csv_file))
+
+    assert row["DevicePatch"] == "patch-1"
+    assert factory.contexts[0].mode == "loopback"
+    assert factory.transport.calls == [
+        ("enter",),
+        ("target", 1),
+        ("subdivision", 1),
+        ("process", reference.shape),
+        ("exit",),
+    ]
+
+
+def test_measure_uses_profile_offline_audio_transport_factory(monkeypatch, tmp_path) -> None:
+    sample_rate = 48000
+    times = np.arange(sample_rate * 4) / sample_rate
+    reference = np.sin(2 * np.pi * 1000 * times)[:, np.newaxis]
+    factory = OfflineRecordingTransportFactory()
+    profile = OfflineTransportDeviceProfile(factory)
+    csv_path = tmp_path / "offline.csv"
+
+    monkeypatch.setattr("matchpatch.measure.get_device_profile", lambda device: profile)
+    monkeypatch.setattr("matchpatch.measure.load_reference_audio", lambda path, rate: reference)
+
+    measure(
+        worker_args(
+            device="offline-transport",
+            backend="offline",
+            csv=str(csv_path),
+            reference_di="reference.wav",
+        )
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as csv_file:
+        row = next(csv.DictReader(csv_file))
+
+    request = factory.transport.requests[0]
+    assert row["DevicePatch"] == "patch-1"
+    assert factory.contexts[0].mode == "offline"
+    assert request.sample_rate == sample_rate
+    assert request.target_id == 1
+    assert request.subdivision_id == 1
+    assert request.target_metadata == {"preset_id": 1}
+    assert request.subdivision_metadata == {"snapshot": 1}
+    assert factory.transport.calls == [
+        ("enter",),
+        ("target", 1),
+        ("subdivision", 1),
+        ("offline", reference.shape),
+        ("exit",),
     ]
 
 
@@ -869,6 +1070,8 @@ stability_tolerance_percent = 0.25
     assert args.preset_wait == 0.5
     assert args.snapshot_wait == 0.2
     assert args.measurement_wait == 0.1
+    assert args.device_settings["input_mapping"] == (3, 4)
+    assert args.device_settings["midi_output"] == "Helix"
     assert args.snapshot_count == 2
     assert args.analysis_options.window_seconds == 1.5
     assert args.pre_roll == 1.5

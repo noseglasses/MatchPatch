@@ -120,8 +120,54 @@ def test_list_assignments_and_measurement_delegate_to_legacy_script(tmp_path, mo
     assert handler.list_assignments(Path("set.hls")) == [
         PatchAssignment(1, "01A", "Clean", ("Rhythm", "Solo"), ((0.0,), (-3.5, -4.0)))
     ]
+    targets = handler.list_targets(Path("set.hls"))
+    assert [
+        (target.id, target.display_label, target.name, target.compat_numeric_id)
+        for target in targets
+    ] == [(1, "01A", "Clean", 1)]
+    assert [
+        (subdivision.id, subdivision.display_label, subdivision.name)
+        for subdivision in targets[0].subdivisions
+    ] == [
+        (1, "Rhythm", "Rhythm"),
+        (2, "Solo", "Solo"),
+    ]
     handler.create_measurement_file(Path("set.hls"), Path("measurement.hls"))
-    assert calls[1][0] == ("-i", Path("set.hls"), "-o", Path("measurement.hls"), "--measurement")
+    assert calls[2][0] == ("-i", Path("set.hls"), "-o", Path("measurement.hls"), "--measurement")
+
+
+def test_helix_snapshot_output_paths_are_exposed_as_gain_points(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    payload = [
+        {
+            "id": 1,
+            "helix_preset": "01A",
+            "name": "Clean",
+            "snapshot_names": ["Rhythm", "Solo"],
+            "snapshot_output_paths": ["dsp0.outputA", "dsp0.outputB"],
+            "snapshot_output_levels": [[0.0, -3.0], [1.5, -1.5]],
+        }
+    ]
+
+    def fake_run(*args, capture=False, log_output=True):
+        return subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+
+    targets = handler.list_targets(Path("set.hls"))
+    solo_points = handler.list_gain_points(Path("set.hls"), 1, 2)
+
+    assert [
+        (point.id, point.current_db, point.minimum_db, point.maximum_db, point.scope, point.path)
+        for point in targets[0].subdivisions[0].gain_points
+    ] == [
+        ("dsp0.outputA", 0.0, -120.0, 20.0, "subdivision", "dsp0.outputA"),
+        ("dsp0.outputB", -3.0, -120.0, 20.0, "subdivision", "dsp0.outputB"),
+    ]
+    assert [(point.id, point.current_db) for point in solo_points] == [
+        ("dsp0.outputA", 1.5),
+        ("dsp0.outputB", -1.5),
+    ]
 
 
 def test_single_preset_assignment_includes_original_filename(tmp_path, monkeypatch) -> None:

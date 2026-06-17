@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
 )
 
 from matchpatch.devices.base import DeviceProfile
+from matchpatch.gui.device_panel_registry import create_plugin_settings_panel
+from matchpatch.gui.settings_renderer import DescriptorSettingsPanel
 
 
 class HelixSettingsPanel(QWidget):
@@ -121,6 +123,12 @@ def create_settings_panel(
     profile: DeviceProfile,
     backend_selector: QWidget,
 ) -> QWidget | None:
+    plugin_panel = create_plugin_settings_panel(profile, backend_selector)
+    if plugin_panel is not None:
+        return plugin_panel
     if profile.name == "helix":
         return HelixSettingsPanel(backend_selector)
+    descriptors = profile.setting_descriptors() if hasattr(profile, "setting_descriptors") else ()
+    if descriptors:
+        return DescriptorSettingsPanel(descriptors)
     return None

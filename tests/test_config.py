@@ -3,10 +3,13 @@ from __future__ import annotations
 import re
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from matchpatch import config
+from matchpatch.device_settings import resolve_device_settings, settings_to_audio_routing
+from matchpatch.devices import get_device_profile
 from matchpatch.devices.base import NormalizationPolicy, normalize_regex_pattern
 
 
@@ -91,6 +94,29 @@ def test_export_default_config_writes_loadable_toml(tmp_path) -> None:
     assert loaded["devices"]["helix"]["audio"]["device"] == "Helix"
     assert loaded["devices"]["helix"]["audio"]["input_mapping"] == [1, 2]
     assert loaded["devices"]["helix"]["steering"]["snapshot_wait_seconds"] == 0.2
+
+
+def test_resolve_device_settings_layers_descriptor_defaults_config_and_cli() -> None:
+    profile = get_device_profile("helix")
+    settings = resolve_device_settings(
+        profile,
+        {
+            "devices": {
+                "helix": {
+                    "audio": {"device": "Configured", "input_mapping": [3, 4]},
+                    "steering": {"output": "Configured MIDI"},
+                }
+            }
+        },
+        SimpleNamespace(audio_device="CLI", output_mapping="5,6"),
+    )
+
+    assert settings["audio_device"] == "CLI"
+    assert settings["sample_rate"] == 48000
+    assert settings["input_mapping"] == (3, 4)
+    assert settings["output_mapping"] == (5, 6)
+    assert settings["midi_output"] == "Configured MIDI"
+    assert settings_to_audio_routing(profile, settings).device == "CLI"
 
 
 @pytest.mark.parametrize("snapshot_name", ["solo", "Solo Pitch", "solo 1", "clean SOLO boost"])
