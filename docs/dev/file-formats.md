@@ -13,9 +13,9 @@ The wrapper includes:
 - `encoded_data`: base64-encoded zlib-compressed JSON text.
 - compression metadata such as `decompressed_size` and `crc32`.
 
-`Python/preset_handling.py` decodes `encoded_data`, edits the decompressed JSON,
-then rebuilds the wrapper by replacing `encoded_data`, `decompressed_size`, and
-`crc32`. Other wrapper fields are preserved.
+`matchpatch.devices.helix_preset_handling` decodes `encoded_data`, edits the
+decompressed JSON, then rebuilds the wrapper by replacing `encoded_data`,
+`decompressed_size`, and `crc32`. Other wrapper fields are preserved.
 
 The decompressed setlist JSON is expected to contain a `presets` list. Each
 non-empty preset is assigned an internal numeric ID starting at `1`, and a Helix
@@ -40,7 +40,7 @@ considered non-empty if its `tone` contains at least one `block*` entry under
 - a top-level preset object containing `tone`, or
 - a wrapper object containing a preset object in `data`.
 
-Internally, the legacy utility wraps a single preset as:
+Internally, the Helix utility wraps a single preset as:
 
 ```text
 {"presets": [preset]}
@@ -57,7 +57,7 @@ measurement.
 
 ## Unpacked `.json`
 
-The legacy Helix utility can also read and write unpacked JSON for selected
+The Helix utility can also read and write unpacked JSON for selected
 utility modes. The modern `HelixPatchFileHandler` only accepts `.hls` and
 `.hlx` as normal workflow inputs and requires output files to use the same
 extension as the input.
@@ -128,9 +128,9 @@ CSV files are written with UTF-8 and read with UTF-8-SIG so a BOM is tolerated.
 
 ## Measurement CSV: Helix Legacy Adapter
 
-`Python/preset_handling.py` historically expects a `HelixPreset` column instead
-of `DevicePatch`. `HelixPatchFileHandler.apply_analysis_csv` therefore writes a
-temporary adapter CSV before invoking the legacy script.
+`matchpatch.devices.helix_preset_handling` expects a `HelixPreset` column
+instead of `DevicePatch`. `HelixPatchFileHandler.apply_analysis_csv` therefore writes a
+temporary adapter CSV before invoking the packaged Helix utility module.
 
 Its columns are:
 
@@ -203,7 +203,7 @@ preset/snapshot.
 
 ## Manual Adjustments JSON
 
-The GUI passes manual table edits to the Helix legacy script as temporary JSON,
+The GUI passes manual table edits to the Helix utility module as temporary JSON,
 not CSV. The payload can contain:
 
 ```json
@@ -222,5 +222,5 @@ deltas for matching snapshots.
 Setlist diff selection compares current and previous files of the same type.
 The comparison removes non-signal content before comparing presets, including
 names, metadata, and color fields. Presets are selected when loudness-affecting
-signal content differs. This feature is implemented by the legacy Helix utility
+signal content differs. This feature is implemented by the Helix utility module
 and surfaced through `--diff-input` and the GUI diff button.

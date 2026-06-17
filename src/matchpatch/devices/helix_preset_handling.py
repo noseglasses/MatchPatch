@@ -10,20 +10,24 @@ import re
 import sys
 from dataclasses import dataclass
 
-_LEGACY_DIR = os.path.dirname(__file__)
-if _LEGACY_DIR not in sys.path:
-    sys.path.insert(0, _LEGACY_DIR)
-
-from helix_file_ops import (  # noqa: E402, F401, I001
+from matchpatch.devices.helix_file_ops import (  # noqa: F401
     build_hls_text,
     build_new_hls_text,
     decode_hls_text,
-    helix_to_preset_index as helix_to_preset_index,
     join_preset_files_to_setlist,
-    load_preset_file as load_preset_file,
-    load_setlist_file as load_setlist_file,
-    safe_preset_filename as safe_preset_filename,
     split_setlist_to_preset_data,
+)
+from matchpatch.devices.helix_file_ops import (
+    helix_to_preset_index as helix_to_preset_index,
+)
+from matchpatch.devices.helix_file_ops import (
+    load_preset_file as load_preset_file,
+)
+from matchpatch.devices.helix_file_ops import (
+    load_setlist_file as load_setlist_file,
+)
+from matchpatch.devices.helix_file_ops import (
+    safe_preset_filename as safe_preset_filename,
 )
 
 # =================================================

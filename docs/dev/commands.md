@@ -198,22 +198,20 @@ The GUI starts with the configured backend and can run loopback/simulated flows
 without Helix hardware. Hardware mode requires the native Windows environment
 and visible audio/MIDI endpoints.
 
-## Legacy Helix Utilities
+## Helix Utility Module
 
 Run from the repository root:
 
 ```bash
-python3 Python/preset_handling.py --help
-python3 Python/decrypt_hls.py --help
-python3 Python/encrypt_hls.py --help
+python3 -m matchpatch.devices.helix_preset_handling --help
 ```
 
 Useful integrated operations:
 
 ```bash
-python3 Python/preset_handling.py -i setlist.hls -o setlist_measurement.hls --measurement
-python3 Python/preset_handling.py -i setlist.hls --list-presets
-python3 Python/preset_handling.py -i current.hls --diff-presets previous.hls
+python3 -m matchpatch.devices.helix_preset_handling -i setlist.hls -o setlist_measurement.hls --measurement
+python3 -m matchpatch.devices.helix_preset_handling -i setlist.hls --list-presets
+python3 -m matchpatch.devices.helix_preset_handling -i current.hls --diff-presets previous.hls
 ```
 
 ## Build

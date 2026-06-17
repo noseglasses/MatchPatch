@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-import importlib.util
+import importlib
 import json
 import subprocess
 import sys
@@ -23,13 +23,7 @@ from matchpatch.midi import midi_output_names
 
 
 def load_legacy_preset_handling():
-    script_path = Path(__file__).resolve().parents[1] / "Python" / "preset_handling.py"
-    spec = importlib.util.spec_from_file_location("preset_handling", script_path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module("matchpatch.devices.helix_preset_handling")
 
 
 def make_handler(tmp_path: Path) -> HelixPatchFileHandler:
@@ -210,7 +204,7 @@ def test_split_setlist_file_writes_helper_results(tmp_path, monkeypatch) -> None
             seen["original_filenames"] = original_filenames
             return [("../Lead.hlx", {"meta": {"name": "Lead"}, "tone": {}})]
 
-    monkeypatch.setattr(helix_module, "_load_helix_file_ops", lambda script: Helper)
+    monkeypatch.setattr(helix_module, "_load_helix_file_ops", lambda: Helper)
 
     created = handler.split_setlist_file(
         Path("set.hls"),
@@ -417,7 +411,7 @@ def test_legacy_snapshot_diff_tracks_snapshot_assigned_parameter_values(tmp_path
     }
 
 
-def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> None:
+def test_helix_module_runner_builds_subprocess_call(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
     calls = []
     completed = subprocess.CompletedProcess([], 0, stdout="ok")
@@ -427,48 +421,53 @@ def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> N
 
     assert handler._run("--list-presets", capture=True) is completed
     command, options = calls[0]
-    assert command[0][0] == sys.executable
+    assert command[0][:3] == [
+        sys.executable,
+        "-m",
+        "matchpatch.devices.helix_preset_handling",
+    ]
     assert command[0][-1] == "--list-presets"
     assert options["stdout"] is subprocess.PIPE
     assert options["stderr"] is subprocess.PIPE
 
 
-def test_frozen_legacy_script_runner_executes_in_process(tmp_path, monkeypatch) -> None:
-    script = tmp_path / "Python" / "preset_handling.py"
-    script.parent.mkdir()
-    script.write_text(
-        "import sys\n"
-        "print('args=' + ','.join(sys.argv[1:]))\n"
-        "print('error stream', file=sys.stderr)\n",
-        encoding="utf-8",
-    )
+def test_frozen_helix_module_runner_executes_in_process(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
     original_argv = sys.argv[:]
+
+    def fake_run_module(module, run_name):
+        assert module == "matchpatch.devices.helix_preset_handling"
+        assert run_name == "__main__"
+        print("args=" + ",".join(sys.argv[1:]))
+        print("error stream", file=sys.stderr)
+
     monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(helix_module.runpy, "run_module", fake_run_module)
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda *args, **kwargs: pytest.fail("frozen legacy runner must not spawn a subprocess"),
+        lambda *args, **kwargs: pytest.fail("frozen Helix runner must not spawn a subprocess"),
     )
 
     completed = handler._run("--list-presets", capture=True)
 
-    assert completed.args == [str(script), "--list-presets"]
+    assert completed.args == ["matchpatch.devices.helix_preset_handling", "--list-presets"]
     assert completed.returncode == 0
     assert completed.stdout == "args=--list-presets\n"
     assert completed.stderr == "error stream\n"
     assert sys.argv == original_argv
 
 
-def test_frozen_legacy_script_runner_raises_called_process_error(tmp_path, monkeypatch) -> None:
-    script = tmp_path / "Python" / "preset_handling.py"
-    script.parent.mkdir()
-    script.write_text(
-        "import sys\nprint('before exit')\nprint('failed', file=sys.stderr)\nraise SystemExit(2)\n",
-        encoding="utf-8",
-    )
+def test_frozen_helix_module_runner_raises_called_process_error(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
+
+    def fake_run_module(module, run_name):
+        print("before exit")
+        print("failed", file=sys.stderr)
+        raise SystemExit(2)
+
     monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(helix_module.runpy, "run_module", fake_run_module)
 
     with pytest.raises(subprocess.CalledProcessError) as exc:
         handler._run("--metadata", capture=True)

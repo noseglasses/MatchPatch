@@ -15,15 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 LINE_LIMITS: tuple[tuple[str, int], ...] = (
     ("src/matchpatch/gui/main_window.py", 2500),
     ("tests/test_gui.py", 1600),
+    ("src/matchpatch/devices/helix_preset_handling.py", 2000),
     ("src/matchpatch/gui/*.py", 2000),
     ("src/matchpatch/**/*.py", 2000),
-    ("Python/*.py", 2000),
     ("tests/test_*.py", 1600),
     ("scripts/*.py", 800),
 )
 
 MAX_CYCLOMATIC_COMPLEXITY = 10
-COMPLEXITY_PATHS = ("src/matchpatch/**/*.py", "Python/*.py", "scripts/*.py", "tests/**/*.py")
+COMPLEXITY_PATHS = ("src/matchpatch/**/*.py", "scripts/*.py", "tests/**/*.py")
 
 
 @dataclass(frozen=True)

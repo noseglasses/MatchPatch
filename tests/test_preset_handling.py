@@ -2,23 +2,16 @@ from __future__ import annotations
 
 import base64
 import binascii
-import importlib.util
+import importlib
 import json
 import zlib
-from pathlib import Path
 from types import ModuleType
 
 import pytest
 
 
 def _load_legacy_module() -> ModuleType:
-    script = Path(__file__).resolve().parents[1] / "Python" / "preset_handling.py"
-    spec = importlib.util.spec_from_file_location("preset_handling", script)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module("matchpatch.devices.helix_preset_handling")
 
 
 def _preset(name: str) -> dict:

@@ -10,10 +10,7 @@ measurement, and device-specific adapters so more processors can be added later.
 - `src/matchpatch/` contains the installable package and console entry points.
 - `src/matchpatch/gui/` contains the PySide6 GUI.
 - `src/matchpatch/devices/` contains processor profile interfaces and the Helix
-  implementation.
-- `Python/` contains legacy Helix file-manipulation utilities. The modern Helix
-  profile still delegates `.hls`/`.hlx` parsing and rewriting to
-  `Python/preset_handling.py`.
+  implementation, including `.hls`/`.hlx` parsing and rewriting helpers.
 - `scripts/` contains WSL/Windows environment, worker, installer build, and
   installer smoke-test wrappers.
 - `installer/` contains the Inno Setup script, PyInstaller specs, and
@@ -171,8 +168,9 @@ The registry in `matchpatch.devices.registry` currently registers only
 changes, where internal preset ID `1` maps to program `0`. Snapshots use CC 69
 with values `0..7`.
 
-`HelixPatchFileHandler` shells out to `Python/preset_handling.py` with the
-current Python interpreter. It delegates:
+`HelixPatchFileHandler` runs `matchpatch.devices.helix_preset_handling` with the
+current Python interpreter in development, and in-process in frozen builds. It
+delegates:
 
 - assignment listing via `--list-presets`
 - metadata extraction via `--metadata`
@@ -181,12 +179,12 @@ current Python interpreter. It delegates:
 - gain application via `--adjust-gain`
 
 Modern measurement CSVs use a generic `DevicePatch` column. Before passing them
-to the legacy utility, the Helix handler writes a temporary legacy CSV that adds
+to the Helix utility module, the Helix handler writes a temporary adapter CSV that adds
 or replaces `HelixPreset`.
 
 ## Helix File Processing
 
-`Python/preset_handling.py` understands `.hls`, `.hlx`, and unpacked `.json`.
+`matchpatch.devices.helix_preset_handling` understands `.hls`, `.hlx`, and unpacked `.json`.
 Setlists are stored as JSON wrappers whose `encoded_data` contains base64 zlib
 data; the script preserves wrapper fields while replacing encoded data, size,
 and CRC. Presets are JSON files and may contain either a top-level preset or a
@@ -241,14 +239,12 @@ file values. `export_default_config` writes a complete TOML file containing
 normalization, analysis, measurement policy, and per-device routing/steering
 defaults.
 
-## Legacy Utility Scripts
+## Helix Utility Module
 
-The `Python/` directory predates the package architecture. The main integrated
-script is `preset_handling.py`; other checked-in scripts perform Helix-specific
-batch transformations such as decrypting/encrypting HLS, listing cab presets,
-replacing amp blocks, removing inactive blocks, resetting output levels, and
-converting blocks to stereo. They are useful utilities but not the core
-normalization API.
+The Helix file utility code is packaged under `matchpatch.devices` so the GUI,
+CLI, tests, and frozen builds use the same implementation. Older standalone
+batch scripts were removed because they were not called by the MatchPatch GUI or
+CLI applications.
 
 ## CI And Packaging
 

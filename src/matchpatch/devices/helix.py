@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import csv
-import importlib.util
 import io
 import json
 import runpy
@@ -17,6 +16,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+from matchpatch.devices import helix_file_ops
 from matchpatch.devices.base import (
     AudioRouting,
     DeviceController,
@@ -36,7 +36,8 @@ from matchpatch.midi import midi_output_names
 
 class HelixPatchFileHandler(PatchFileHandler):
     def __init__(self, project_dir: Path) -> None:
-        self.script = project_dir / "Python" / "preset_handling.py"
+        self.project_dir = project_dir
+        self.module = "matchpatch.devices.helix_preset_handling"
         self.log_callback: Callable[[str], None] | None = None
 
     def set_log_callback(self, callback: Callable[[str], None] | None) -> None:
@@ -55,7 +56,7 @@ class HelixPatchFileHandler(PatchFileHandler):
 
         try:
             completed = subprocess.run(
-                [sys.executable, str(self.script), *(str(arg) for arg in args)],
+                [sys.executable, "-m", self.module, *(str(arg) for arg in args)],
                 check=True,
                 text=True,
                 stdout=subprocess.PIPE if should_capture else None,
@@ -79,11 +80,11 @@ class HelixPatchFileHandler(PatchFileHandler):
         log_output: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         should_capture = capture or self.log_callback is not None
-        command = [str(self.script), *(str(arg) for arg in args)]
+        command = [self.module, *(str(arg) for arg in args)]
         original_argv = sys.argv
         stdout = io.StringIO()
         stderr = io.StringIO()
-        sys.argv = command
+        sys.argv = [self.module, *(str(arg) for arg in args)]
         try:
             stdout_context = (
                 contextlib.redirect_stdout(stdout) if should_capture else contextlib.nullcontext()
@@ -93,7 +94,7 @@ class HelixPatchFileHandler(PatchFileHandler):
             )
             with stdout_context, stderr_context:
                 try:
-                    runpy.run_path(str(self.script), run_name="__main__")
+                    runpy.run_module(self.module, run_name="__main__")
                     returncode = 0
                 except SystemExit as exc:
                     returncode = exc.code if isinstance(exc.code, int) else 1
@@ -210,8 +211,7 @@ class HelixPatchFileHandler(PatchFileHandler):
             raise ValueError(f"Helix split input must be an .hls file: {input_path}")
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        file_ops = _load_helix_file_ops(self.script)
-        split_presets = file_ops.split_setlist_to_preset_data(
+        split_presets = _load_helix_file_ops().split_setlist_to_preset_data(
             input_path,
             selected_ids=selected_ids,
             original_filenames=original_filenames,
@@ -593,18 +593,5 @@ def _error_details(exc: subprocess.CalledProcessError) -> str:
     return lines[-1].strip() if lines else ""
 
 
-def _load_helix_file_ops(script: Path) -> Any:  # noqa: ANN401
-    module_path = script.with_name("helix_file_ops.py")
-    module_name = "_matchpatch_helix_file_ops"
-    module = sys.modules.get(module_name)
-    if module is not None:
-        return module
-
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load Helix file operations helper: {module_path}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+def _load_helix_file_ops() -> Any:  # noqa: ANN401
+    return helix_file_ops
