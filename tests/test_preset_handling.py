@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import importlib
 import json
+import sys
 import zlib
 from types import ModuleType
 
@@ -26,6 +28,40 @@ def _preset(name: str) -> dict:
             "snapshot0": {"@name": "Snapshot 1"},
         },
     }
+
+
+def _preset_with_snapshot_assigned_properties(
+    name: str,
+    count: int,
+    *,
+    output_gain_assigned: bool = False,
+) -> dict:
+    preset = _preset(name)
+    tone = preset["tone"]
+    block = tone["dsp0"]["block0"]
+    block_controller = (
+        tone.setdefault("controller", {}).setdefault("dsp0", {}).setdefault("block0", {})
+    )
+
+    for index in range(count):
+        parameter = f"param{index}"
+        block[parameter] = index
+        block_controller[parameter] = {
+            "@controller": 19,
+            "@snapshot_disable": False,
+        }
+
+    if output_gain_assigned:
+        tone["controller"]["dsp0"]["outputA"] = {
+            "gain": {
+                "@controller": 19,
+                "@max": 20.0,
+                "@min": -120.0,
+                "@snapshot_disable": False,
+            }
+        }
+
+    return preset
 
 
 def _hls_text(data: dict) -> str:
@@ -169,6 +205,114 @@ def test_snapshot_level_assignment_includes_parallel_outputs() -> None:
     assert tone["snapshot0"]["controllers"]["dsp0"]["outputB"]["gain"]["@value"] == -3.0
     assert tone["snapshot1"]["controllers"]["dsp0"]["outputA"]["gain"]["@value"] == -1.0
     assert tone["snapshot1"]["controllers"]["dsp0"]["outputB"]["gain"]["@value"] == -3.0
+
+
+def test_snapshot_level_assignment_allows_helix_limit_boundary() -> None:
+    module = _load_legacy_module()
+    data = {"presets": [_preset_with_snapshot_assigned_properties("Boundary", 63)]}
+
+    modified_json_text, snapshot_changes, gain_changes = module.process_json_structure(
+        json.dumps(data),
+        assign_output_gain=True,
+    )
+    modified = json.loads(modified_json_text)
+    preset = modified["presets"][0]
+
+    assert snapshot_changes == 1
+    assert gain_changes == 0
+    assert module.count_snapshot_assigned_properties(preset) == 64
+    assert preset["tone"]["controller"]["dsp0"]["outputA"]["gain"]["@controller"] == 19
+
+
+def test_snapshot_level_assignment_rejects_exceeding_helix_limit_without_mutation() -> None:
+    module = _load_legacy_module()
+    data = {"presets": [_preset_with_snapshot_assigned_properties("Full", 64)]}
+    original = copy.deepcopy(data)
+
+    with pytest.raises(ValueError, match="snapshot-assigned property limit"):
+        module.process_json_structure(json.dumps(data), assign_output_gain=True)
+
+    assert data == original
+
+
+def test_snapshot_level_assignment_does_not_double_count_existing_output_gain() -> None:
+    module = _load_legacy_module()
+    data = {
+        "presets": [
+            _preset_with_snapshot_assigned_properties(
+                "Already Assigned",
+                63,
+                output_gain_assigned=True,
+            )
+        ]
+    }
+
+    modified_json_text, snapshot_changes, gain_changes = module.process_json_structure(
+        json.dumps(data),
+        assign_output_gain=True,
+    )
+    preset = json.loads(modified_json_text)["presets"][0]
+
+    assert snapshot_changes == 0
+    assert gain_changes == 0
+    assert module.count_snapshot_assigned_properties(preset) == 64
+    assert preset["tone"]["snapshot0"]["controllers"]["dsp0"]["outputA"]["gain"]["@value"] == 0.0
+
+
+def test_snapshot_level_assignment_rejects_setlist_before_partial_mutation() -> None:
+    module = _load_legacy_module()
+    data = {
+        "presets": [
+            _preset_with_snapshot_assigned_properties("Would Mutate", 0),
+            _preset_with_snapshot_assigned_properties("Too Full", 64),
+        ]
+    }
+    original = copy.deepcopy(data)
+
+    with pytest.raises(ValueError, match=r'01B, "Too Full"'):
+        module.process_json_structure(json.dumps(data), assign_output_gain=True)
+
+    assert data == original
+
+
+def test_snapshot_assignment_limit_error_does_not_write_partial_setlist(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    module = _load_legacy_module()
+    input_path = tmp_path / "input.hls"
+    output_path = tmp_path / "output.hls"
+    input_path.write_text(
+        _hls_text(
+            {
+                "presets": [
+                    _preset_with_snapshot_assigned_properties("Would Mutate", 0),
+                    _preset_with_snapshot_assigned_properties("Too Full", 64),
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "helix_preset_handling",
+            "-i",
+            str(input_path),
+            "-o",
+            str(output_path),
+            "--measurement",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+
+    assert exc.value.code == 1
+    assert "snapshot-assigned property limit" in capsys.readouterr().out
+    assert not output_path.exists()
 
 
 def test_metadata_extraction_keeps_wrapper_and_meta_nodes() -> None:

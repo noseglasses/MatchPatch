@@ -388,6 +388,25 @@ The measurement was probably invalid, often because silence was recorded.
 4. Rerun the preset.
 5. If the preset is intentionally strange, use manual editing carefully.
 
+## Too Many Snapshot Assignments
+
+### What You See
+
+MatchPatch says the Helix snapshot-assigned property limit would be exceeded.
+
+### Likely Cause
+
+The preset already uses close to Helix's limit of 64 snapshot-assigned
+properties. MatchPatch needs to assign the output block level to snapshots before
+it can balance snapshot loudness.
+
+### What To Try
+
+1. Open the preset in HX Edit or on the Helix.
+2. Remove unused snapshot assignments from blocks or parameters.
+3. Save the preset or setlist.
+4. Run MatchPatch again.
+
 ## Fast Timing Feels Unstable
 
 ### What You See

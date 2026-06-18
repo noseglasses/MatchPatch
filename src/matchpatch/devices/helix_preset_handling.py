@@ -350,7 +350,10 @@ def _iter_controller_blocks(tone, controller_root):
 
 def _is_snapshot_parameter_assignment(assignment, parameter, block):
     return (
-        isinstance(assignment, dict) and assignment.get("@controller") == 19 and parameter in block
+        isinstance(assignment, dict)
+        and assignment.get("@controller") == 19
+        and assignment.get("@snapshot_disable") is not True
+        and parameter in block
     )
 
 
@@ -588,6 +591,13 @@ def count_controller_assignments(preset):
     return count
 
 
+def count_snapshot_assigned_properties(preset):
+    tone = preset.get("tone", {})
+    if not isinstance(tone, dict):
+        return 0
+    return sum(1 for _ in iter_snapshot_assigned_parameters(tone))
+
+
 def iter_output_blocks(preset):
     tone = preset.get("tone", {})
 
@@ -732,7 +742,7 @@ def validate_controller_assignment_capacity(data, gain_deltas=None):
         if gain_deltas is not None and helix_preset not in gain_deltas:
             continue
 
-        current_count = count_controller_assignments(preset)
+        current_count = count_snapshot_assigned_properties(preset)
 
         missing = get_missing_output_gain_assignments(preset)
 
@@ -749,15 +759,15 @@ def validate_controller_assignment_capacity(data, gain_deltas=None):
 
         raise ValueError(
             "Cannot assign output gain/level to snapshots: "
-            "the Helix controller assignment limit would be "
+            "the Helix snapshot-assigned property limit would be "
             f"exceeded for preset {preset_index + 1} "
             f'({helix_preset}, "{preset_name}"). '
-            f"Current controller assignments: {current_count}. "
+            f"Current snapshot-assigned properties: {current_count}. "
             f"Required additional assignments: {len(missing)} "
             f"({missing_text}). "
             f"Limit: {CONTROLLER_ASSIGNMENT_LIMIT}. "
             "Please edit this preset manually in HX Edit/Helix "
-            "and remove unused controller/snapshot assignments "
+            "and remove unused snapshot assignments "
             "before running this conversion."
         )
 
@@ -984,7 +994,6 @@ def normalize_single_preset_gain_deltas(gain_deltas):
 
 
 def preset_index_to_helix(index):
-
     bank = (index // 4) + 1
     slot = ["A", "B", "C", "D"][index % 4]
 
