@@ -55,6 +55,10 @@ def mock_single_hlx_handler(
 
     class Handler:
         @staticmethod
+        def file_kind(path):
+            return "preset"
+
+        @staticmethod
         def validate_input(path):
             return None
 

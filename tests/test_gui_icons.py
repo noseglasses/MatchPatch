@@ -106,6 +106,7 @@ from matchpatch.gui.save_workflow import (
 from matchpatch.gui.table_roles import (
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_PRESET,
+    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
 )
 from matchpatch.gui.worker import NormalizationWorker
@@ -282,14 +283,13 @@ def test_toolbar_tooltip_position_is_kept_inside_screen() -> None:
 
 
 def test_preset_table_legend_dialog_uses_table_icons(app) -> None:
-    ignore_reason_icons = {
-        reason: icons._ignore_reason_icon(reason)
-        for reason in (
-            IGNORE_REASON_PRESET,
-            IGNORE_REASON_COMPARISON,
-            IGNORE_REASON_REGEX,
-        )
-    }
+    ignore_reasons = (
+        IGNORE_REASON_PRESET,
+        IGNORE_REASON_COMPARISON,
+        IGNORE_REASON_REGEX,
+        IGNORE_REASON_PRESET_REGEX,
+    )
+    ignore_reason_icons = {reason: icons._ignore_reason_icon(reason) for reason in ignore_reasons}
 
     parent = QWidget()
     dialog = table_legend.build_preset_table_legend_dialog(
@@ -325,22 +325,12 @@ def test_preset_table_legend_dialog_uses_table_icons(app) -> None:
         label_text.index(entry) for entry in color_entries
     )
     pixmap_labels = [
-        dialog.findChild(QLabel, f"legendIgnoreIcon{reason}")
-        for reason in (
-            IGNORE_REASON_PRESET,
-            IGNORE_REASON_COMPARISON,
-            IGNORE_REASON_REGEX,
-        )
+        dialog.findChild(QLabel, f"legendIgnoreIcon{reason}") for reason in ignore_reasons
     ]
     assert all(label is not None for label in pixmap_labels)
-    assert len(pixmap_labels) == 3
+    assert len(pixmap_labels) == len(ignore_reasons)
     assert {label.pixmap().cacheKey() for label in pixmap_labels if label is not None} == {
-        ignore_reason_icons[reason].pixmap(18, 18).cacheKey()
-        for reason in (
-            IGNORE_REASON_PRESET,
-            IGNORE_REASON_COMPARISON,
-            IGNORE_REASON_REGEX,
-        )
+        ignore_reason_icons[reason].pixmap(18, 18).cacheKey() for reason in ignore_reasons
     }
     color_swatches = dialog.findChildren(QLabel, "legendColorSwatch")
     assert len(color_swatches) == 6

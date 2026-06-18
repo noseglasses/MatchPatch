@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from matchpatch.diagnostics import DiagnosticCheck
-from matchpatch.gui import main_window, measurement_optimization, progress_widgets
+from matchpatch.gui import main_window, measurement_optimization, progress_widgets, window_state
 from matchpatch.gui import worker as gui_worker
 from matchpatch.gui.main_window import MainWindow
 from matchpatch.gui.preset_table import (
@@ -118,12 +118,10 @@ def _mock_single_hlx_handler(
         def metadata(path):
             return {"file_type": "hlx"}
 
-    class Profile:
-        @staticmethod
-        def create_patch_file_handler(root):
-            return Handler()
+    Handler.file_kind = staticmethod(lambda path: "preset")
 
-    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    profile = SimpleNamespace(create_patch_file_handler=lambda root: Handler())
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: profile)
 
 
 class _SignalStub:
@@ -501,7 +499,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.play_recorded_output_button.isChecked()
     assert window.log_level.currentText() == "Info"
     assert window.metadata_text.toPlainText() == "{}"
-    assert window.device_stack.count() == 1
+    assert window.device_stack.count() == 2
     assert window.device_panels["helix"].audio_group.isEnabled()
     assert window.progress_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
     assert not window.statusBar().isHidden()
@@ -636,12 +634,10 @@ def test_loading_preset_table_does_not_resize_window(monkeypatch, app, tmp_path)
         def metadata(path):
             return {"file_type": "hls"}
 
-    class Profile:
-        @staticmethod
-        def create_patch_file_handler(root):
-            return Handler()
+    Handler.file_kind = staticmethod(lambda path: "setlist")
 
-    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    profile = SimpleNamespace(create_patch_file_handler=lambda root: Handler())
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: profile)
     window.show()
     app.processEvents()
     initial_size = window.size()
@@ -882,12 +878,10 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
         def metadata(path):
             return {"file_type": "hls", "metadata": [{"path": "$.meta", "value": {"name": "Set"}}]}
 
-    class Profile:
-        @staticmethod
-        def create_patch_file_handler(root):
-            return Handler()
+    Handler.file_kind = staticmethod(lambda path: "setlist")
 
-    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    profile = SimpleNamespace(create_patch_file_handler=lambda root: Handler())
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: profile)
     window.input_path.setText(str(path))
     window.load_assignments()
 
@@ -956,12 +950,12 @@ def test_setlist_load_enables_preset_table_csv_buttons(monkeypatch, app, tmp_pat
         def metadata(path):
             return {"file_type": "hls"}
 
-    class Profile:
-        @staticmethod
-        def create_patch_file_handler(root):
-            return Handler()
+    Handler.file_kind = staticmethod(
+        lambda path: "preset" if Path(path).suffix.lower() == ".hlx" else "setlist"
+    )
 
-    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    profile = SimpleNamespace(create_patch_file_handler=lambda root: Handler())
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: profile)
     window.input_path.setText(str(path))
     window.load_assignments()
 
@@ -1072,7 +1066,7 @@ def test_startup_open_button_loads_like_toolbar_open(tmp_path, monkeypatch, app)
     assert window.preset_table.item(0, 1).text() == ""
     assert window.preset_table.item(0, 2).text() == "Embedded"
     assert window.preset_empty_state.isHidden()
-    assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == [path]
+    assert QSettings().value(window_state.RECENT_FILES_SETTINGS_KEY) == [path]
 
     window.close()
 
@@ -1085,7 +1079,7 @@ def test_startup_recent_files_selector_loads_selected_file(tmp_path, monkeypatch
     older = str(older_file)
     recent_path = str(recent_file)
     recent = [older, recent_path]
-    QSettings().setValue(main_window.RECENT_FILES_SETTINGS_KEY, recent)
+    QSettings().setValue(window_state.RECENT_FILES_SETTINGS_KEY, recent)
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="Recent")
 
@@ -1099,7 +1093,7 @@ def test_startup_recent_files_selector_loads_selected_file(tmp_path, monkeypatch
     assert window.input_path.text() == recent_path
     assert window.preset_table.rowCount() == 1
     assert window.preset_table.item(0, 2).text() == "Recent"
-    assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == [recent_path, older]
+    assert QSettings().value(window_state.RECENT_FILES_SETTINGS_KEY) == [recent_path, older]
 
     window.close()
 

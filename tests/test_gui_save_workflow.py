@@ -809,6 +809,10 @@ def test_discarding_before_normalization_preserves_preset_selection(
 
     class Handler:
         @staticmethod
+        def file_kind(path):
+            return "setlist"
+
+        @staticmethod
         def validate_input(path):
             return None
 
@@ -1196,6 +1200,10 @@ def test_single_preset_save_as_preserves_preset_table_state(tmp_path, monkeypatc
 
     class Handler:
         @staticmethod
+        def file_kind(path):
+            return "preset"
+
+        @staticmethod
         def validate_input(path):
             return None
 
@@ -1261,6 +1269,10 @@ def test_saving_table_changes_preserves_preset_selection(tmp_path, monkeypatch, 
     csv_path.touch()
 
     class Handler:
+        @staticmethod
+        def file_kind(path):
+            return "setlist"
+
         @staticmethod
         def validate_input(path):
             return None
