@@ -35,13 +35,13 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from matchpatch.diagnostics import DiagnosticCheck
-from matchpatch.gui import main_window, measurement_optimization, progress_widgets
+from matchpatch.gui import main_window, measurement_optimization, progress_widgets, window_state
 from matchpatch.gui import worker as gui_worker
 from matchpatch.gui.main_window import MainWindow
 from matchpatch.gui.preset_table import (
     ContentHeightTableWidget,
 )
-from matchpatch.gui.table_roles import PRESET_TABLE_ATTENTION_ROLE
+from matchpatch.gui.table_roles import PRESET_ORIGINAL_FILENAME_ROLE, PRESET_TABLE_ATTENTION_ROLE
 from matchpatch.gui.worker import NormalizationWorker
 from matchpatch.normalize import DEFAULT_REFERENCE_DI, DEFAULT_WINDOWS_PYTHON
 from matchpatch.progress import ProgressEvent
@@ -118,12 +118,10 @@ def _mock_single_hlx_handler(
         def metadata(path):
             return {"file_type": "hlx"}
 
-    class Profile:
-        @staticmethod
-        def create_patch_file_handler(root):
-            return Handler()
+    Handler.file_kind = staticmethod(lambda path: "preset")
 
-    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    profile = SimpleNamespace(create_patch_file_handler=lambda root: Handler())
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: profile)
 
 
 class _SignalStub:
@@ -230,6 +228,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.custom_adjustments_path)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.reference_di)
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.keep_temp)
+
     assert window.advanced_tabs.widget(2).isAncestorOf(window.measurement_parameter_preset)
     assert window.advanced_tabs.widget(2).isAncestorOf(window.apply_measurement_parameters_button)
     assert window.advanced_tabs.widget(2).isAncestorOf(window.pre_roll)
@@ -344,7 +343,41 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.preset_advanced_splitter.widget(0) is window.presets
     assert window.preset_advanced_splitter.widget(1) is window.advanced
     assert window.content.layout().indexOf(window.preset_advanced_splitter) == 0
-    assert not window.findChildren(QMenuBar)
+    menu_bar = window.menuBar()
+    assert isinstance(menu_bar, QMenuBar)
+    assert [action.text() for action in menu_bar.actions()] == ["File", "Run", "Help"]
+    file_menu = menu_bar.actions()[0].menu()
+    run_menu = menu_bar.actions()[1].menu()
+    help_menu = menu_bar.actions()[2].menu()
+    assert file_menu is not None
+    assert run_menu is not None
+    assert help_menu is not None
+    assert [action.text() for action in file_menu.actions() if not action.isSeparator()] == [
+        "Open",
+        "Save",
+        "Save As",
+        "Save Measurement File",
+        "Split Setlist",
+        "Exit",
+    ]
+    assert file_menu.actions()[-1] is window.exit_action
+    assert [action.text() for action in run_menu.actions()] == ["Normalize"]
+    assert run_menu.actions()[0] is window.run_normalization_action
+    assert [action.text() for action in help_menu.actions()] == ["Help", "About"]
+    assert help_menu.actions()[0] is window.help_action
+    assert help_menu.actions()[1] is window.about_action
+    for action in (
+        window.open_action,
+        window.save_action,
+        window.save_as_action,
+        window.save_measurement_action,
+        window.split_setlist_action,
+        window.exit_action,
+        window.run_normalization_action,
+        window.help_action,
+        window.about_action,
+    ):
+        assert not action.icon().isNull()
     toolbar = window.findChildren(QToolBar)[0]
     toolbar_actions = [
         action for action in toolbar.actions() if action.text() and not action.isSeparator()
@@ -457,6 +490,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.save_as_action.isEnabled()
     assert not window.save_measurement_action.isEnabled()
     assert not window.start_button.isEnabled()
+    assert not window.run_normalization_action.isEnabled()
     assert not window.determine_parameters_button.isEnabled()
     assert not window.determine_parameters_hint.isHidden()
     assert "Open a Helix file" in window.determine_parameters_hint.text()
@@ -465,7 +499,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.play_recorded_output_button.isChecked()
     assert window.log_level.currentText() == "Info"
     assert window.metadata_text.toPlainText() == "{}"
-    assert window.device_stack.count() == 1
+    assert window.device_stack.count() == 2
     assert window.device_panels["helix"].audio_group.isEnabled()
     assert window.progress_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
     assert not window.statusBar().isHidden()
@@ -514,6 +548,53 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     window.close()
 
 
+def test_main_window_lists_device_without_settings_panel(monkeypatch, app) -> None:
+    helix = main_window.get_device_profile("helix")
+    fake = SimpleNamespace(
+        name="fake",
+        display_name="Fake Device",
+        measurement_backends=lambda: ("offline",),
+        default_audio_routing=lambda: SimpleNamespace(
+            device=None,
+            sample_rate=48000,
+            input_mapping="1,2",
+            output_mapping="1,2",
+        ),
+        default_steering_options=lambda: SimpleNamespace(
+            output=None,
+            channel=0,
+            preset_wait_seconds=0.0,
+            snapshot_wait_seconds=0.0,
+            measurement_wait_seconds=0.0,
+        ),
+    )
+    monkeypatch.setattr(main_window, "list_device_profiles", lambda: [helix, fake])
+    monkeypatch.setattr(
+        main_window,
+        "get_device_profile",
+        lambda name: fake if name == "fake" else helix,
+    )
+    monkeypatch.setattr(
+        "matchpatch.normalize.get_device_profile",
+        lambda name: fake if name == "fake" else helix,
+    )
+
+    window = MainWindow()
+    window.loading_controller.get_profile = lambda name: fake if name == "fake" else helix
+    fake_index = window.device.findData("fake")
+
+    assert fake_index >= 0
+    assert "fake" not in window.device_panels
+
+    window.device.setCurrentIndex(fake_index)
+    app.processEvents()
+
+    assert window.device.currentData() == "fake"
+    assert window.backend.currentText() == "offline"
+
+    window.close()
+
+
 def test_initial_window_size_avoids_scrollbar_for_collapsed_layout(app) -> None:
     window = MainWindow()
     window.show()
@@ -553,12 +634,10 @@ def test_loading_preset_table_does_not_resize_window(monkeypatch, app, tmp_path)
         def metadata(path):
             return {"file_type": "hls"}
 
-    class Profile:
-        @staticmethod
-        def create_patch_file_handler(root):
-            return Handler()
+    Handler.file_kind = staticmethod(lambda path: "setlist")
 
-    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    profile = SimpleNamespace(create_patch_file_handler=lambda root: Handler())
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: profile)
     window.show()
     app.processEvents()
     initial_size = window.size()
@@ -722,6 +801,7 @@ def test_single_preset_load_displays_presets_panel_with_instruction_label(monkey
     assert window.preset_table.rowCount() == 1
     assert window.preset_table.item(0, 1).text() == ""
     assert window.preset_table.item(0, 2).text() == "Lead"
+    assert window.preset_table.item(0, 2).data(PRESET_ORIGINAL_FILENAME_ROLE) == "example.hlx"
     assert window.preset_table.item(0, 3).text() == "Clean"
     assert window.preset_table.item(0, 4).text() == "0.0"
     assert window.preset_table.item(0, 6).text() == "Solo"
@@ -785,18 +865,23 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
 
         @staticmethod
         def list_assignments(path):
-            return []
+            return [
+                SimpleNamespace(
+                    device_patch="01A",
+                    name="Lead",
+                    snapshot_names=("Verse",),
+                    original_filename="lead.hlx",
+                )
+            ]
 
         @staticmethod
         def metadata(path):
             return {"file_type": "hls", "metadata": [{"path": "$.meta", "value": {"name": "Set"}}]}
 
-    class Profile:
-        @staticmethod
-        def create_patch_file_handler(root):
-            return Handler()
+    Handler.file_kind = staticmethod(lambda path: "setlist")
 
-    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    profile = SimpleNamespace(create_patch_file_handler=lambda root: Handler())
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: profile)
     window.input_path.setText(str(path))
     window.load_assignments()
 
@@ -804,6 +889,7 @@ def test_setlist_load_displays_presets_panel(monkeypatch, app, tmp_path) -> None
     assert not window.preset_advanced_splitter.isHidden()
     assert not window.preset_table.isHidden()
     assert not window.preset_table.isColumnHidden(0)
+    assert window.preset_table.item(0, 2).data(PRESET_ORIGINAL_FILENAME_ROLE) == "lead.hlx"
     assert not window.preset_csv_controls.isHidden()
     assert window.preset_hint.text() == "Select the presets to normalize."
     assert '"file_type": "hls"' in window.metadata_text.toPlainText()
@@ -864,12 +950,12 @@ def test_setlist_load_enables_preset_table_csv_buttons(monkeypatch, app, tmp_pat
         def metadata(path):
             return {"file_type": "hls"}
 
-    class Profile:
-        @staticmethod
-        def create_patch_file_handler(root):
-            return Handler()
+    Handler.file_kind = staticmethod(
+        lambda path: "preset" if Path(path).suffix.lower() == ".hlx" else "setlist"
+    )
 
-    monkeypatch.setattr(main_window, "get_device_profile", lambda device: Profile())
+    profile = SimpleNamespace(create_patch_file_handler=lambda root: Handler())
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: profile)
     window.input_path.setText(str(path))
     window.load_assignments()
 
@@ -905,8 +991,8 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
     answers = iter([QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Discard])
     monkeypatch.setattr(
         QFileDialog,
-        "getOpenFileName",
-        lambda *args, **kwargs: ("/tmp/new.hlx", ""),
+        "getOpenFileNames",
+        lambda *args, **kwargs: (["/tmp/new.hlx"], ""),
     )
     monkeypatch.setattr(main_window, "QMessageBox", _FakeSaveChangesMessageBox)
     _FakeSaveChangesMessageBox.instances = []
@@ -920,7 +1006,7 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
     _FakeSaveChangesMessageBox.next_click = next(answers)
     window.browse_input()
 
-    assert window.input_path.text() == "/tmp/new.hlx"
+    assert window.input_path.text() == str(Path("/tmp/new.hlx"))
     assert window.preset_table.rowCount() == 1
     assert window.preset_table.item(0, 1).text() == ""
     assert window.preset_table.item(0, 2).text() == "New"
@@ -945,8 +1031,8 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
     window.input_path.setText("/tmp/original.hls")
     monkeypatch.setattr(
         QFileDialog,
-        "getOpenFileName",
-        lambda *args, **kwargs: ("/tmp/new.hlx", ""),
+        "getOpenFileNames",
+        lambda *args, **kwargs: (["/tmp/new.hlx"], ""),
     )
     monkeypatch.setattr(
         QMessageBox,
@@ -956,7 +1042,7 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
 
     window.browse_input()
 
-    assert window.input_path.text() == "/tmp/new.hlx"
+    assert window.input_path.text() == str(Path("/tmp/new.hlx"))
 
     window.close()
 
@@ -969,8 +1055,8 @@ def test_startup_open_button_loads_like_toolbar_open(tmp_path, monkeypatch, app)
     path = str(input_file)
     monkeypatch.setattr(
         QFileDialog,
-        "getOpenFileName",
-        lambda *args, **kwargs: (path, ""),
+        "getOpenFileNames",
+        lambda *args, **kwargs: ([path], ""),
     )
 
     window.preset_empty_open_button.click()
@@ -980,7 +1066,7 @@ def test_startup_open_button_loads_like_toolbar_open(tmp_path, monkeypatch, app)
     assert window.preset_table.item(0, 1).text() == ""
     assert window.preset_table.item(0, 2).text() == "Embedded"
     assert window.preset_empty_state.isHidden()
-    assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == [path]
+    assert QSettings().value(window_state.RECENT_FILES_SETTINGS_KEY) == [path]
 
     window.close()
 
@@ -993,7 +1079,7 @@ def test_startup_recent_files_selector_loads_selected_file(tmp_path, monkeypatch
     older = str(older_file)
     recent_path = str(recent_file)
     recent = [older, recent_path]
-    QSettings().setValue(main_window.RECENT_FILES_SETTINGS_KEY, recent)
+    QSettings().setValue(window_state.RECENT_FILES_SETTINGS_KEY, recent)
     window = MainWindow()
     _mock_single_hlx_handler(monkeypatch, name="Recent")
 
@@ -1007,7 +1093,7 @@ def test_startup_recent_files_selector_loads_selected_file(tmp_path, monkeypatch
     assert window.input_path.text() == recent_path
     assert window.preset_table.rowCount() == 1
     assert window.preset_table.item(0, 2).text() == "Recent"
-    assert QSettings().value(main_window.RECENT_FILES_SETTINGS_KEY) == [recent_path, older]
+    assert QSettings().value(window_state.RECENT_FILES_SETTINGS_KEY) == [recent_path, older]
 
     window.close()
 

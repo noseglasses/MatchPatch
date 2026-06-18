@@ -40,6 +40,9 @@ class NormalizationWorkflowController:
 
     def start_normalization(self) -> None:
         window = self.window
+        if not self._device_supports_normalization():
+            return
+
         if not window._validate_single_preset_slot_for_run():
             return
 
@@ -74,6 +77,18 @@ class NormalizationWorkflowController:
 
         window._available_backend = request.backend
         window._start_normalization_request(request)
+
+    def _device_supports_normalization(self) -> bool:
+        window = self.window
+        profile = get_device_profile(window.device.currentData())
+        if getattr(profile, "supports_normalization", lambda: True)():
+            return True
+        QMessageBox.information(
+            window,
+            "Normalization unavailable",
+            profile.normalization_unavailable_message(),
+        )
+        return False
 
     def start_request(self, request: NormalizationRequest) -> None:
         if not self._confirm_start_allowed(request):

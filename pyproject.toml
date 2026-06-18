@@ -94,7 +94,8 @@ select = ["ANN", "C901", "E4", "E7", "E9", "F", "I"]
 max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
-"Python/**" = ["ANN"]
+"src/matchpatch/devices/helix/file_ops.py" = ["ANN"]
+"src/matchpatch/devices/helix/preset_handling.py" = ["ANN", "C901"]
 "tests/**" = ["ANN"]
 
 [tool.ty.src]

@@ -36,15 +36,15 @@ Do not rely on bare `pytest`; it may not be on `PATH`.
 - `test_config.py`: TOML config loading, default export, precedence helpers, and
   channel mapping parsing.
 - `test_devices.py`: device registry and base device contracts.
-- `test_helix.py`: Helix patch IDs, file-handler delegation to the legacy
-  utility, MIDI steering, metadata/diff handling, and CSV translation.
+- `test_helix.py`: Helix patch IDs, file-handler delegation to the packaged
+  utility module, MIDI steering, metadata/diff handling, and CSV translation.
 - `test_measure.py`: native measurement worker behavior, loopback and simulated
   backends, hardware backend wiring via mocks, CSV output, progress events, and
   worker CLI parsing.
 - `test_normalize.py`: WSL orchestration, config merging, Windows command
   construction, cancellation, retained CSV handling, deferred export, and
   workflow error handling.
-- `test_preset_handling.py`: legacy Helix gain math, custom/manual adjustments,
+- `test_preset_handling.py`: Helix gain math, custom/manual adjustments,
   routing conversion, and name validation.
 - `test_progress.py`: structured progress JSON serialization.
 - `test_gui_app.py`: GUI app bootstrap helpers, WSLg runtime, desktop entry, and
@@ -69,8 +69,8 @@ fixtures. Important recurring fixtures/helpers:
 - `capsys`: asserts CLI stdout/stderr and error reporting.
 - `app` fixture in GUI tests: module-scoped `QApplication`, with
   `QT_QPA_PLATFORM=offscreen`.
-- `load_legacy_preset_handling`: imports `Python/preset_handling.py` directly so
-  legacy behavior can be tested without installing it as a package module.
+- `load_legacy_preset_handling`: imports `matchpatch.devices.helix.preset_handling`
+  so Helix file behavior can be tested through the packaged module.
 - `FakePatchFileHandler`, `FakeDeviceProfile`, and GUI-local fake dialogs/workers
   isolate workflow and UI behavior from real files and devices.
 

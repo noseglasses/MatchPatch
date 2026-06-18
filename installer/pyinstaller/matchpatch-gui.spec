@@ -30,7 +30,11 @@ a = Analysis(
     pathex=[str(PROJECT_ROOT / "src")],
     binaries=[],
     datas=asset_datas(),
-    hiddenimports=["mido.backends.rtmidi", "rtmidi"],
+    hiddenimports=[
+        "matchpatch.devices.helix.preset_handling",
+        "mido.backends.rtmidi",
+        "rtmidi",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

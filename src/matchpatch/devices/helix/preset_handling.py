@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import base64
-import binascii
 import copy
 import csv
 import json
@@ -10,8 +8,27 @@ import math
 import os
 import re
 import sys
-import zlib
 from dataclasses import dataclass
+
+from matchpatch.devices.helix.file_ops import (  # noqa: F401
+    build_hls_text,
+    build_new_hls_text,
+    decode_hls_text,
+    join_preset_files_to_setlist,
+    split_setlist_to_preset_data,
+)
+from matchpatch.devices.helix.file_ops import (
+    helix_to_preset_index as helix_to_preset_index,
+)
+from matchpatch.devices.helix.file_ops import (
+    load_preset_file as load_preset_file,
+)
+from matchpatch.devices.helix.file_ops import (
+    load_setlist_file as load_setlist_file,
+)
+from matchpatch.devices.helix.file_ops import (
+    safe_preset_filename as safe_preset_filename,
+)
 
 # =================================================
 # HELIX CONSTANTS
@@ -87,22 +104,6 @@ def get_filetype(filename):
         return "json"
 
     raise ValueError(f"Unsupported file extension: {ext}")
-
-
-# =================================================
-# HLS DECODING
-# =================================================
-
-
-def decode_hls_text(hls_text):
-
-    wrapper = json.loads(hls_text)
-
-    compressed = base64.b64decode(wrapper["encoded_data"])
-
-    raw = zlib.decompress(compressed)
-
-    return raw.decode("utf-8")
 
 
 def decode_hls_file(filename):
@@ -349,7 +350,10 @@ def _iter_controller_blocks(tone, controller_root):
 
 def _is_snapshot_parameter_assignment(assignment, parameter, block):
     return (
-        isinstance(assignment, dict) and assignment.get("@controller") == 19 and parameter in block
+        isinstance(assignment, dict)
+        and assignment.get("@controller") == 19
+        and assignment.get("@snapshot_disable") is not True
+        and parameter in block
     )
 
 
@@ -587,6 +591,13 @@ def count_controller_assignments(preset):
     return count
 
 
+def count_snapshot_assigned_properties(preset):
+    tone = preset.get("tone", {})
+    if not isinstance(tone, dict):
+        return 0
+    return sum(1 for _ in iter_snapshot_assigned_parameters(tone))
+
+
 def iter_output_blocks(preset):
     tone = preset.get("tone", {})
 
@@ -731,7 +742,7 @@ def validate_controller_assignment_capacity(data, gain_deltas=None):
         if gain_deltas is not None and helix_preset not in gain_deltas:
             continue
 
-        current_count = count_controller_assignments(preset)
+        current_count = count_snapshot_assigned_properties(preset)
 
         missing = get_missing_output_gain_assignments(preset)
 
@@ -748,15 +759,15 @@ def validate_controller_assignment_capacity(data, gain_deltas=None):
 
         raise ValueError(
             "Cannot assign output gain/level to snapshots: "
-            "the Helix controller assignment limit would be "
+            "the Helix snapshot-assigned property limit would be "
             f"exceeded for preset {preset_index + 1} "
             f'({helix_preset}, "{preset_name}"). '
-            f"Current controller assignments: {current_count}. "
+            f"Current snapshot-assigned properties: {current_count}. "
             f"Required additional assignments: {len(missing)} "
             f"({missing_text}). "
             f"Limit: {CONTROLLER_ASSIGNMENT_LIMIT}. "
             "Please edit this preset manually in HX Edit/Helix "
-            "and remove unused controller/snapshot assignments "
+            "and remove unused snapshot assignments "
             "before running this conversion."
         )
 
@@ -983,7 +994,6 @@ def normalize_single_preset_gain_deltas(gain_deltas):
 
 
 def preset_index_to_helix(index):
-
     bank = (index // 4) + 1
     slot = ["A", "B", "C", "D"][index % 4]
 
@@ -1578,36 +1588,6 @@ def process_json_structure(
 
 
 # =================================================
-# BUILD HLS
-# =================================================
-
-
-def build_hls_text(original_hls_text, modified_json_text):
-
-    raw = modified_json_text.encode("utf-8")
-
-    compressed = zlib.compress(raw, level=9)
-
-    encoded_data = base64.b64encode(compressed).decode("ascii")
-
-    decompressed_size = len(raw)
-
-    crc32 = binascii.crc32(raw) & 0xFFFFFFFF
-
-    result = original_hls_text
-
-    result = re.sub(
-        r'("encoded_data"\s*:\s*")([^"]*)(")', rf"\g<1>{encoded_data}\g<3>", result, flags=re.DOTALL
-    )
-
-    result = re.sub(r'("decompressed_size"\s*:\s*)(\d+)', rf"\g<1>{decompressed_size}", result)
-
-    result = re.sub(r'("crc32"\s*:\s*)(\d+)', rf"\g<1>{crc32}", result)
-
-    return result
-
-
-# =================================================
 # LOAD INPUT
 # =================================================
 
@@ -1666,21 +1646,8 @@ def save_output(modified_json_text, output_filename, original_hls_text=None):
 
         return
 
-    raw = modified_json_text.encode("utf-8")
-
-    compressed = zlib.compress(raw, level=9)
-
-    wrapper = {
-        "compression": {
-            "crc32": (binascii.crc32(raw) & 0xFFFFFFFF),
-            "decompressed_size": len(raw),
-            "type": "zlib",
-        },
-        "encoded_data": base64.b64encode(compressed).decode("ascii"),
-    }
-
     with open(output_filename, "w", encoding="utf-8") as f:
-        json.dump(wrapper, f)
+        f.write(build_new_hls_text(modified_json_text))
 
 
 # =================================================
@@ -1691,9 +1658,14 @@ def save_output(modified_json_text, output_filename, original_hls_text=None):
 def _build_parser():
     parser = argparse.ArgumentParser(description=("Line 6 Helix HLS/HLX/JSON Utility"))
 
-    parser.add_argument("-i", "--input", required=True, help="Input file (.hls, .hlx, or .json)")
+    parser.add_argument("-i", "--input", help="Input file (.hls, .hlx, or .json)")
 
     parser.add_argument("-o", "--output", help="Output file (.hls, .hlx, or .json)")
+
+    parser.add_argument(
+        "--slot-ids",
+        help="Comma-separated Helix slot IDs for --join-presets, for example 01A,01B",
+    )
 
     parser.add_argument("-g", "--lufs-analysis-file", help="LUFS analysis CSV file")
     parser.add_argument(
@@ -1799,10 +1771,25 @@ def _build_parser():
         ),
     )
 
+    mode_group.add_argument(
+        "--join-presets",
+        nargs="+",
+        metavar="PATH",
+        help="Join .hlx preset files into an .hls setlist",
+    )
+
+    mode_group.add_argument(
+        "--split-setlist",
+        metavar="DIR",
+        help="Split an .hls setlist into .hlx preset files in DIR",
+    )
+
     return parser
 
 
 def _load_input_text(args):
+    if not args.input:
+        raise ValueError("Input file is required")
     input_filetype = get_filetype(args.input)
     if args.snapshot_count < 1 or args.snapshot_count > 8:
         raise ValueError("Snapshot count must be between 1 and 8")
@@ -1887,6 +1874,54 @@ def _load_custom_adjustments_for_command(args):
     return load_custom_adjustments_file(args.custom_adjustments_file, args.snapshot_count)
 
 
+def _parse_slot_ids(slot_ids):
+    if not slot_ids:
+        return None
+    return [slot_id.strip() for slot_id in slot_ids.split(",") if slot_id.strip()]
+
+
+def _run_join_presets_command(args):
+    if not args.output:
+        raise ValueError("Output file is required for --join-presets")
+    if get_filetype(args.output) != "hls":
+        raise ValueError(f"Join output must be an .hls file: {args.output}")
+
+    hls_text, metadata = join_preset_files_to_setlist(
+        args.join_presets,
+        slot_ids=_parse_slot_ids(args.slot_ids),
+    )
+    with open(args.output, "w", encoding="utf-8") as f:
+        f.write(hls_text)
+    return metadata
+
+
+def _run_split_setlist_command(args):
+    if not args.input:
+        raise ValueError("Input file is required for --split-setlist")
+    if get_filetype(args.input) != "hls":
+        raise ValueError(f"Split input must be an .hls file: {args.input}")
+
+    os.makedirs(args.split_setlist, exist_ok=True)
+    split_presets = split_setlist_to_preset_data(args.input)
+    for filename, hlx_data in split_presets:
+        output_path = os.path.join(args.split_setlist, filename)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(hlx_data, f, indent=1)
+    return split_presets
+
+
+def _run_split_join_command(args):
+    if args.join_presets:
+        metadata = _run_join_presets_command(args)
+        print(f"[OK] Joined {len(args.join_presets)} presets into {args.output}")
+        return metadata
+    if args.split_setlist:
+        split_presets = _run_split_setlist_command(args)
+        print(f"[OK] Split {len(split_presets)} presets into {args.split_setlist}")
+        return split_presets
+    return None
+
+
 def _run_preset_handling_command(args, json_text, input_filetype):
     mode = _conversion_mode(args)
     modified_json_text, input_changes, output_changes = _convert_if_needed(args, json_text, mode)
@@ -1936,6 +1971,9 @@ def main():
     args = _build_parser().parse_args()
 
     try:
+        if args.join_presets or args.split_setlist:
+            _run_split_join_command(args)
+            return
         input_filetype, json_text, original_hls_text = _load_input_text(args)
         if _run_query_command(args, json_text, original_hls_text):
             return

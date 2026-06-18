@@ -6,31 +6,45 @@ import contextlib
 import csv
 import io
 import json
+import re
 import runpy
 import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import TracebackType
+from typing import Any
 
 from matchpatch.devices.base import (
     AudioRouting,
     DeviceController,
+    DeviceFileKind,
+    DeviceFileType,
     DeviceProfile,
+    DeviceSettingDescriptor,
+    DeviceTerminology,
+    FileOperationCapabilities,
+    GainPoint,
+    NamingRules,
     NormalizationPolicy,
     PatchAssignment,
     PatchFileAdjustments,
     PatchFileHandler,
     SteeringOptions,
 )
+from matchpatch.devices.helix import file_ops
 from matchpatch.midi import midi_output_names
+
+HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
+HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
 
 
 class HelixPatchFileHandler(PatchFileHandler):
     def __init__(self, project_dir: Path) -> None:
-        self.script = project_dir / "Python" / "preset_handling.py"
+        self.project_dir = project_dir
+        self.module = "matchpatch.devices.helix.preset_handling"
         self.log_callback: Callable[[str], None] | None = None
 
     def set_log_callback(self, callback: Callable[[str], None] | None) -> None:
@@ -49,7 +63,7 @@ class HelixPatchFileHandler(PatchFileHandler):
 
         try:
             completed = subprocess.run(
-                [sys.executable, str(self.script), *(str(arg) for arg in args)],
+                [sys.executable, "-m", self.module, *(str(arg) for arg in args)],
                 check=True,
                 text=True,
                 stdout=subprocess.PIPE if should_capture else None,
@@ -73,11 +87,11 @@ class HelixPatchFileHandler(PatchFileHandler):
         log_output: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         should_capture = capture or self.log_callback is not None
-        command = [str(self.script), *(str(arg) for arg in args)]
+        command = [self.module, *(str(arg) for arg in args)]
         original_argv = sys.argv
         stdout = io.StringIO()
         stderr = io.StringIO()
-        sys.argv = command
+        sys.argv = [self.module, *(str(arg) for arg in args)]
         try:
             stdout_context = (
                 contextlib.redirect_stdout(stdout) if should_capture else contextlib.nullcontext()
@@ -87,7 +101,7 @@ class HelixPatchFileHandler(PatchFileHandler):
             )
             with stdout_context, stderr_context:
                 try:
-                    runpy.run_path(str(self.script), run_name="__main__")
+                    runpy.run_module(self.module, run_name="__main__")
                     returncode = 0
                 except SystemExit as exc:
                     returncode = exc.code if isinstance(exc.code, int) else 1
@@ -145,6 +159,8 @@ class HelixPatchFileHandler(PatchFileHandler):
                     tuple(float(level) for level in levels)
                     for levels in assignment.get("snapshot_output_levels", ())
                 ),
+                original_filename=input_path.name if input_path.suffix.lower() == ".hlx" else None,
+                gain_points=_assignment_gain_points(assignment),
             )
             for assignment in json.loads(completed.stdout)
         ]
@@ -155,6 +171,84 @@ class HelixPatchFileHandler(PatchFileHandler):
         if not isinstance(metadata, dict):
             raise ValueError("Helix metadata output must be a JSON object")
         return metadata
+
+    def file_capabilities(self) -> FileOperationCapabilities:
+        return FileOperationCapabilities(
+            reads_preset_files=True,
+            writes_preset_files=True,
+            reads_setlist_files=True,
+            writes_setlist_files=True,
+            joins_presets_to_setlist=True,
+            splits_setlist_to_presets=True,
+            exports_selected_setlist_slots=True,
+        )
+
+    def file_types(self) -> tuple[DeviceFileType, ...]:
+        return (
+            DeviceFileType(
+                kind="setlist",
+                extensions=(".hls",),
+                description="Helix .hls",
+                can_open=True,
+                can_save=True,
+            ),
+            DeviceFileType(
+                kind="preset",
+                extensions=(".hlx",),
+                description="Helix .hlx",
+                can_open=True,
+                can_save=True,
+            ),
+        )
+
+    def file_kind(self, path: Path) -> DeviceFileKind:
+        suffix = path.suffix.lower()
+        if suffix == ".hlx":
+            return "preset"
+        if suffix == ".hls":
+            return "setlist"
+        return "unknown"
+
+    def join_preset_files(
+        self,
+        preset_paths: list[Path],
+        output_path: Path,
+        *,
+        slot_ids: list[int] | None = None,
+    ) -> None:
+        if self.file_kind(output_path) != "setlist":
+            raise ValueError(f"Helix join output must be an .hls file: {output_path}")
+        args: list[object] = ["--join-presets", *preset_paths, "-o", output_path]
+        if slot_ids is not None:
+            args.extend(
+                ["--slot-ids", ",".join(self.format_patch_id(slot_id) for slot_id in slot_ids)]
+            )
+        self._run(*args)
+
+    def split_setlist_file(
+        self,
+        input_path: Path,
+        output_dir: Path,
+        *,
+        selected_ids: list[int] | None = None,
+        original_filenames: Mapping[int, str] | None = None,
+    ) -> list[Path]:
+        if self.file_kind(input_path) != "setlist":
+            raise ValueError(f"Helix split input must be an .hls file: {input_path}")
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        split_presets = _load_helix_file_operations().split_setlist_to_preset_data(
+            input_path,
+            selected_ids=selected_ids,
+            original_filenames=original_filenames,
+        )
+        created_paths = []
+        for filename, hlx_data in split_presets:
+            output_path = output_dir / Path(filename).name
+            with output_path.open("w", encoding="utf-8") as preset_file:
+                json.dump(hlx_data, preset_file, indent=1)
+            created_paths.append(output_path)
+        return created_paths
 
     def diff_preset_ids(self, input_path: Path, previous_input_path: Path) -> list[int]:
         if previous_input_path.suffix.lower() != input_path.suffix.lower():
@@ -463,9 +557,60 @@ class HelixDeviceProfile(DeviceProfile):
     max_snapshot_count = 8
     preset_name_max_length = 16
     snapshot_name_max_length = 10
+    name_pattern = r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$"""
 
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
         return HelixPatchFileHandler(project_dir)
+
+    def terminology(self) -> DeviceTerminology:
+        return DeviceTerminology(
+            device="Helix", preset="preset", snapshot="snapshot", setlist="setlist"
+        )
+
+    def file_capabilities(self) -> FileOperationCapabilities:
+        return FileOperationCapabilities(
+            reads_preset_files=True,
+            writes_preset_files=True,
+            reads_setlist_files=True,
+            writes_setlist_files=True,
+            joins_presets_to_setlist=True,
+            splits_setlist_to_presets=True,
+            exports_selected_setlist_slots=True,
+        )
+
+    def naming_rules(self) -> NamingRules:
+        return NamingRules(
+            preset_name_max_length=self.preset_name_max_length,
+            snapshot_name_max_length=self.snapshot_name_max_length,
+            allowed_name_pattern=self.name_pattern,
+        )
+
+    def validate_preset_name(self, name: str) -> str:
+        return self._validate_helix_name(name, self.preset_name_max_length)
+
+    def validate_subdivision_name(self, name: str) -> str:
+        return self._validate_helix_name(name, self.snapshot_name_max_length)
+
+    def sanitize_preset_name(self, name: str) -> str:
+        return self._sanitize_helix_name(name, self.preset_name_max_length)
+
+    def sanitize_subdivision_name(self, name: str) -> str:
+        return self._sanitize_helix_name(name, self.snapshot_name_max_length)
+
+    @staticmethod
+    def _validate_helix_name(name: str, max_length: int | None = None) -> str:
+        if HELIX_NAME_PATTERN.fullmatch(name) is None:
+            raise ValueError(f"Invalid Helix name: {name!r}")
+        if max_length is not None and len(name) > max_length:
+            raise ValueError(f"Helix name exceeds {max_length} characters: {name!r}")
+        return name
+
+    @staticmethod
+    def _sanitize_helix_name(name: str, max_length: int | None = None) -> str:
+        sanitized = "".join(
+            character for character in name if HELIX_NAME_CHAR_PATTERN.fullmatch(character)
+        )
+        return sanitized[:max_length] if max_length is not None else sanitized
 
     def format_patch_id(self, preset_id: int) -> str:
         zero_based = preset_id - 1
@@ -488,6 +633,121 @@ class HelixDeviceProfile(DeviceProfile):
             measurement_wait_seconds=0.1,
         )
 
+    def setting_descriptors(self) -> tuple[DeviceSettingDescriptor, ...]:
+        audio = self.default_audio_routing()
+        steering = self.default_steering_options()
+        audio_path = ("devices", self.name, "audio")
+        steering_path = ("devices", self.name, "steering")
+        return (
+            DeviceSettingDescriptor(
+                name="audio_device",
+                scope="audio",
+                kind="string",
+                default=audio.device,
+                config_path=(*audio_path, "device"),
+                cli_flags=("--audio-device",),
+                label="Audio device",
+                help="Helix USB audio device query.",
+            ),
+            DeviceSettingDescriptor(
+                name="sample_rate",
+                scope="audio",
+                kind="integer",
+                default=audio.sample_rate,
+                config_path=(*audio_path, "sample_rate"),
+                cli_flags=("--sample-rate",),
+                label="Sample rate",
+                help="Helix USB audio sample rate in hertz.",
+                minimum=1,
+            ),
+            DeviceSettingDescriptor(
+                name="input_mapping",
+                scope="audio",
+                kind="channel_mapping",
+                default=audio.input_mapping,
+                config_path=(*audio_path, "input_mapping"),
+                cli_flags=("--input-mapping",),
+                label="Input mapping",
+                help="One-based Helix USB input channel mapping.",
+            ),
+            DeviceSettingDescriptor(
+                name="output_mapping",
+                scope="audio",
+                kind="channel_mapping",
+                default=audio.output_mapping,
+                config_path=(*audio_path, "output_mapping"),
+                cli_flags=("--output-mapping",),
+                label="Output mapping",
+                help="One-based Helix USB output channel mapping.",
+            ),
+            DeviceSettingDescriptor(
+                name="blocksize",
+                scope="audio",
+                kind="integer",
+                default=0,
+                config_path=(*audio_path, "blocksize"),
+                cli_flags=("--blocksize",),
+                label="Blocksize",
+                help="Audio block size, or zero for the backend default.",
+                minimum=0,
+            ),
+            DeviceSettingDescriptor(
+                name="midi_output",
+                scope="steering",
+                kind="string",
+                default=steering.output,
+                config_path=(*steering_path, "output"),
+                cli_flags=("--steering-output", "--midi-output"),
+                label="MIDI output",
+                help="Helix MIDI output port query.",
+            ),
+            DeviceSettingDescriptor(
+                name="midi_channel",
+                scope="steering",
+                kind="integer",
+                default=steering.channel,
+                config_path=(*steering_path, "channel"),
+                cli_flags=("--midi-channel",),
+                label="MIDI channel",
+                help="Zero-based MIDI channel used for Helix program changes.",
+                minimum=0,
+                maximum=15,
+            ),
+            DeviceSettingDescriptor(
+                name="preset_wait",
+                scope="steering",
+                kind="float",
+                default=steering.preset_wait_seconds,
+                config_path=(*steering_path, "preset_wait_seconds"),
+                cli_flags=("--preset-wait",),
+                label="Preset wait",
+                help="Seconds to wait after sending a Helix preset change.",
+                minimum=0.0,
+            ),
+            DeviceSettingDescriptor(
+                name="snapshot_wait",
+                scope="steering",
+                kind="float",
+                default=steering.snapshot_wait_seconds,
+                config_path=(*steering_path, "snapshot_wait_seconds"),
+                cli_flags=("--snapshot-wait",),
+                label="Snapshot wait",
+                help="Seconds to wait after sending a Helix snapshot change.",
+                minimum=0.0,
+            ),
+            DeviceSettingDescriptor(
+                name="measurement_wait",
+                scope="steering",
+                kind="float",
+                default=steering.measurement_wait_seconds,
+                config_path=(*steering_path, "measurement_wait_seconds"),
+                cli_flags=("--measurement-wait",),
+                label="Measurement wait",
+                help="Seconds to wait before recording each Helix measurement.",
+                minimum=0.0,
+            ),
+        )
+
     def create_controller(self, options: SteeringOptions) -> DeviceController:
         return HelixMidiController(options)
 
@@ -500,3 +760,26 @@ def _error_details(exc: subprocess.CalledProcessError) -> str:
         return "\n".join(errors)
 
     return lines[-1].strip() if lines else ""
+
+
+def _load_helix_file_operations() -> Any:  # noqa: ANN401
+    return file_ops
+
+
+def _assignment_gain_points(assignment: Mapping[str, object]) -> tuple[GainPoint, ...]:
+    paths = assignment.get("snapshot_output_paths", ())
+    if not isinstance(paths, list | tuple):
+        return ()
+
+    return tuple(
+        GainPoint(
+            id=str(path),
+            label=str(path),
+            current_db=0.0,
+            minimum_db=-120.0,
+            maximum_db=20.0,
+            scope="subdivision",
+            path=str(path),
+        )
+        for path in paths
+    )

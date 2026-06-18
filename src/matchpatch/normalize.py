@@ -19,6 +19,7 @@ from typing import Any, cast
 
 from matchpatch.analysis import AnalysisOptions
 from matchpatch.config import Config, config_value, load_config, parse_channel_mapping, prefer
+from matchpatch.device_settings import resolve_device_settings, setting_diagnostics
 from matchpatch.devices import get_device_profile
 from matchpatch.devices.base import (
     NormalizationPolicy,
@@ -121,6 +122,18 @@ def _normalization_policy(config: Config, args: argparse.Namespace) -> Normaliza
                 ),
             )
         ),
+        ignore_preset_regex=normalize_regex_pattern(
+            cast(
+                str,
+                prefer(
+                    args.ignore_preset_regex,
+                    config,
+                    "policy",
+                    "ignore_preset_regex",
+                    default=NormalizationPolicy().ignore_preset_regex,
+                ),
+            )
+        ),
         solo_gain_bump_db=cast(
             float,
             prefer(args.solo_gain_bump_db, config, "policy", "solo_gain_bump_db", default=3.0),
@@ -146,6 +159,22 @@ def _normalization_policy(config: Config, args: argparse.Namespace) -> Normaliza
         re.compile(policy.ignore_snapshot_regex)
     except re.error as exc:
         raise ValueError(f"Invalid ignore snapshot regex: {exc}") from exc
+    try:
+        re.compile(policy.ignore_preset_regex)
+    except re.error as exc:
+        raise ValueError(f"Invalid ignore preset regex: {exc}") from exc
+
+    supported_backends = (
+        profile.measurement_backends()
+        if hasattr(profile, "measurement_backends")
+        else ("hardware", "loopback", "simulated")
+    )
+    if args.backend not in supported_backends:
+        supported = ", ".join(supported_backends)
+        raise ValueError(
+            f"Backend {args.backend!r} is not supported by {profile.display_name}; "
+            f"choose one of: {supported}"
+        )
 
     return policy
 
@@ -182,29 +211,6 @@ def _analysis_options(config: Config, args: argparse.Namespace) -> AnalysisOptio
 def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     config = load_config(args.config)
     profile = get_device_profile(args.device)
-    default_audio = (
-        profile.default_audio_routing()
-        if hasattr(profile, "default_audio_routing")
-        else argparse.Namespace(
-            device=None,
-            sample_rate=None,
-            input_mapping=None,
-            output_mapping=None,
-        )
-    )
-    default_steering = (
-        profile.default_steering_options()
-        if hasattr(profile, "default_steering_options")
-        else argparse.Namespace(
-            output=None,
-            channel=None,
-            preset_wait_seconds=None,
-            snapshot_wait_seconds=None,
-            measurement_wait_seconds=None,
-        )
-    )
-    device_audio = ("devices", args.device, "audio")
-    device_steering = ("devices", args.device, "steering")
     args.backend = (
         args.backend
         or os.getenv("MATCHPATCH_BACKEND")
@@ -226,74 +232,8 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     args.target_lufs = prefer(args.target_lufs, config, "normalize", "target_lufs", default=-16.0)
     args.timeout = prefer(args.timeout, config, "normalize", "timeout_seconds")
     args.ignore_bad_lufs = True
-    args.audio_device = prefer(
-        args.audio_device,
-        config,
-        *device_audio,
-        "device",
-        default=default_audio.device,
-    )
-    args.sample_rate = prefer(
-        args.sample_rate,
-        config,
-        *device_audio,
-        "sample_rate",
-        default=default_audio.sample_rate,
-    )
-    args.input_mapping = _mapping_argument(
-        prefer(
-            args.input_mapping,
-            config,
-            *device_audio,
-            "input_mapping",
-            default=default_audio.input_mapping,
-        )
-    )
-    args.output_mapping = _mapping_argument(
-        prefer(
-            args.output_mapping,
-            config,
-            *device_audio,
-            "output_mapping",
-            default=default_audio.output_mapping,
-        )
-    )
-    args.blocksize = prefer(args.blocksize, config, *device_audio, "blocksize", default=0)
-    args.steering_output = prefer(
-        args.steering_output,
-        config,
-        *device_steering,
-        "output",
-        default=default_steering.output,
-    )
-    args.steering_channel = prefer(
-        args.steering_channel,
-        config,
-        *device_steering,
-        "channel",
-        default=default_steering.channel,
-    )
-    args.preset_wait = prefer(
-        args.preset_wait,
-        config,
-        *device_steering,
-        "preset_wait_seconds",
-        default=default_steering.preset_wait_seconds,
-    )
-    args.snapshot_wait = prefer(
-        args.snapshot_wait,
-        config,
-        *device_steering,
-        "snapshot_wait_seconds",
-        default=default_steering.snapshot_wait_seconds,
-    )
-    args.measurement_wait = prefer(
-        args.measurement_wait,
-        config,
-        *device_steering,
-        "measurement_wait_seconds",
-        default=default_steering.measurement_wait_seconds,
-    )
+    args.device_settings = resolve_device_settings(profile, config, args)
+    _apply_resolved_device_settings(args)
     args.pre_roll = prefer(args.pre_roll, config, "analysis", "pre_roll_seconds", default=0.2)
     args.post_roll = prefer(args.post_roll, config, "analysis", "post_roll_seconds", default=0.1)
     args.round_trip_latency = prefer(
@@ -306,6 +246,20 @@ def apply_config(args: argparse.Namespace) -> argparse.Namespace:
     args.policy = _normalization_policy(config, args)
     args.analysis_options = _analysis_options(config, args)
     return args
+
+
+def _apply_resolved_device_settings(args: argparse.Namespace) -> None:
+    settings = args.device_settings
+    args.audio_device = settings["audio_device"]
+    args.sample_rate = settings["sample_rate"]
+    args.input_mapping = _mapping_argument(settings["input_mapping"])
+    args.output_mapping = _mapping_argument(settings["output_mapping"])
+    args.blocksize = settings["blocksize"]
+    args.steering_output = settings["midi_output"]
+    args.steering_channel = settings["midi_channel"]
+    args.preset_wait = settings["preset_wait"]
+    args.snapshot_wait = settings["snapshot_wait"]
+    args.measurement_wait = settings["measurement_wait"]
 
 
 def run_command(args: list[object], timeout: float | None = None) -> None:
@@ -927,12 +881,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--target-lufs", type=float)
     parser.add_argument("--solo-regex")
     parser.add_argument("--ignore-snapshot-regex")
+    parser.add_argument("--ignore-preset-regex")
     parser.add_argument("--solo-gain-bump-db", type=float)
     parser.add_argument("--snapshot-count", type=int)
-    parser.add_argument(
-        "--backend",
-        choices=["hardware", "loopback", "simulated"],
-    )
+    parser.add_argument("--backend")
     parser.add_argument(
         "--windows-python",
     )
@@ -1008,6 +960,7 @@ def request_from_args(args: argparse.Namespace) -> NormalizationRequest:
         timeout=args.timeout,
         policy=args.policy,
         analysis_options=args.analysis_options,
+        device_settings=setting_diagnostics(getattr(args, "device_settings", {})),
     )
 
 

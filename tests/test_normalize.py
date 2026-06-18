@@ -11,7 +11,13 @@ from pathlib import Path, PureWindowsPath
 import pytest
 
 from matchpatch import normalize, workflow
-from matchpatch.devices.base import PatchAssignment
+from matchpatch.devices.base import (
+    DeviceTargetId,
+    MeasurementTarget,
+    PatchAssignment,
+    SubdivisionSelection,
+    TargetSelection,
+)
 from matchpatch.workflow import NormalizationRequest, export_adjusted_file, normalize_presets
 
 
@@ -152,6 +158,104 @@ def test_normalize_presets_filters_diff_input_snapshot_wise(tmp_path) -> None:
     assert requests[0][0].snapshot_plan == (("patch-1", (2,)), ("patch-2", (3,)))
 
 
+def test_normalize_presets_diff_filter_uses_target_api_with_string_ids(tmp_path) -> None:
+    class StringTargetDiffHandler(FakeHandler):
+        def parse_target_set(self, value: str) -> list[DeviceTargetId]:
+            return [token.strip() for token in value.split(",") if token.strip()]
+
+        def list_targets(self, input_path: Path) -> list[MeasurementTarget]:
+            return [
+                MeasurementTarget(
+                    id="scene:clean",
+                    display_label="Clean Scene",
+                    index=0,
+                    name="Clean",
+                    compat_numeric_id=1,
+                ),
+                MeasurementTarget(
+                    id="scene:lead",
+                    display_label="Lead Scene",
+                    index=1,
+                    name="Lead",
+                    compat_numeric_id=2,
+                ),
+            ]
+
+        def select_targets(
+            self,
+            input_path: Path,
+            targets: list[MeasurementTarget],
+            requested_ids: list[DeviceTargetId] | None,
+        ) -> list[TargetSelection]:
+            requested = set(requested_ids or [target.id for target in targets])
+            return [
+                TargetSelection(
+                    id=target.id,
+                    display_label=target.display_label,
+                    index=target.index,
+                    name=target.name,
+                    compat_numeric_id=target.compat_numeric_id,
+                )
+                for target in targets
+                if target.id in requested
+            ]
+
+        def diff_subdivisions(
+            self,
+            input_path: Path,
+            previous_input_path: Path,
+            subdivision_count: int,
+        ) -> dict[DeviceTargetId, tuple[SubdivisionSelection, ...]]:
+            return {
+                "scene:lead": (
+                    SubdivisionSelection(
+                        target_id="scene:lead",
+                        id="snapshot:solo",
+                        display_label="Solo",
+                        index=1,
+                    ),
+                )
+            }
+
+    handler = StringTargetDiffHandler()
+    input_path = tmp_path / "input.scene"
+    previous_path = tmp_path / "previous.scene"
+    output_path = tmp_path / "output.scene"
+    reference = tmp_path / "reference.wav"
+    work_dir = tmp_path / "work"
+    input_path.touch()
+    previous_path.touch()
+    reference.touch()
+    work_dir.mkdir()
+    requests = []
+
+    def fake_analysis(request, preset_ids, csv_path, callback):
+        requests.append((request, preset_ids))
+        write_analysis_csv(request, preset_ids, csv_path)
+
+    normalize_presets(
+        NormalizationRequest(
+            device="fake",
+            input_path=input_path,
+            output_path=output_path,
+            diff_input_path=previous_path,
+            backend="loopback",
+            windows_python="python.exe",
+            reference_di=reference,
+            automation=False,
+            preset_set="scene:clean,scene:lead",
+            snapshot_plan=(("Lead Scene", (1, 2)),),
+            policy=workflow.NormalizationPolicy(snapshot_count=2),
+        ),
+        run_analysis=fake_analysis,
+        get_profile=lambda device: FakeProfile(handler),
+        make_temp_dir=lambda: work_dir,
+    )
+
+    assert requests[0][1] == [2]
+    assert requests[0][0].snapshot_plan == (("Lead Scene", (2,)),)
+
+
 def test_normalize_presets_default_temp_dir_uses_normalization_prefix(
     tmp_path, monkeypatch
 ) -> None:
@@ -268,6 +372,7 @@ measurement_wait_seconds = 0.7
 measured_snapshots = 3
 solo_marker = "lead"
 ignore_snapshot_regex = "^Init$"
+ignore_preset_regex = "^Empty"
 solo_gain_bump_db = 4.0
 crest_factor_reference_db = 11.0
 crest_factor_correction_ratio = 0.5
@@ -312,9 +417,13 @@ round_trip_latency_seconds = 0.03
     assert args.output_mapping == "5,6"
     assert args.blocksize == 128
     assert args.steering_output == "Configured MIDI"
+    assert args.device_settings["audio_device"] == "CLI Audio"
+    assert args.device_settings["input_mapping"] == (3, 4)
+    assert args.device_settings["midi_output"] == "Configured MIDI"
     assert args.policy.snapshot_count == 3
     assert args.policy.solo_regex == "lead"
     assert args.policy.ignore_snapshot_regex == "^Init$"
+    assert args.policy.ignore_preset_regex == "^Empty"
     assert args.analysis_options.window_seconds == 2.0
     assert args.pre_roll == 1.5
     assert args.post_roll == 2.0
@@ -365,6 +474,30 @@ def test_apply_config_uses_device_timing_defaults_when_config_is_silent() -> Non
     assert args.preset_wait == 0.5
     assert args.snapshot_wait == 0.2
     assert args.measurement_wait == 0.1
+    assert args.device_settings["sample_rate"] == 48000
+    assert args.device_settings["midi_channel"] == 0
+
+
+def test_apply_config_validates_backend_against_selected_profile(monkeypatch) -> None:
+    class OfflineProfile(FakeProfile):
+        display_name = "Offline Processor"
+
+        def measurement_backends(self) -> tuple[str, ...]:
+            return ("offline",)
+
+    monkeypatch.setattr(
+        normalize, "get_device_profile", lambda device: OfflineProfile(FakeHandler())
+    )
+
+    args = normalize.apply_config(
+        normalize.parse_args(["--device", "fake", "-i", "input.hls", "--backend", "offline"])
+    )
+    assert args.backend == "offline"
+
+    with pytest.raises(ValueError, match="Backend 'hardware' is not supported"):
+        normalize.apply_config(
+            normalize.parse_args(["--device", "fake", "-i", "input.hls", "--backend", "hardware"])
+        )
 
 
 def test_configured_windows_python_frozen_windows_ignores_stale_worker_config(
@@ -432,6 +565,40 @@ def test_apply_config_rejects_invalid_ignore_snapshot_regex(tmp_path) -> None:
     config_path.write_text("[policy]\nignore_snapshot_regex = '('\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Invalid ignore snapshot regex"):
+        normalize.apply_config(
+            normalize.parse_args(
+                ["--config", str(config_path), "--device", "helix", "-i", "input.hls"]
+            )
+        )
+
+
+def test_apply_config_cli_ignore_preset_regex_overrides_toml(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[policy]\nignore_preset_regex = '^Empty$'\n", encoding="utf-8")
+
+    args = normalize.apply_config(
+        normalize.parse_args(
+            [
+                "--config",
+                str(config_path),
+                "--device",
+                "helix",
+                "-i",
+                "input.hls",
+                "--ignore-preset-regex",
+                "^Init",
+            ]
+        )
+    )
+
+    assert args.policy.ignore_preset_regex == "^Init"
+
+
+def test_apply_config_rejects_invalid_ignore_preset_regex(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[policy]\nignore_preset_regex = '('\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid ignore preset regex"):
         normalize.apply_config(
             normalize.parse_args(
                 ["--config", str(config_path), "--device", "helix", "-i", "input.hls"]

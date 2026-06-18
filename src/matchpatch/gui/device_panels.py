@@ -14,6 +14,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from matchpatch.devices.base import DeviceProfile
+from matchpatch.gui.settings_renderer import DescriptorSettingsPanel
+
 
 class HelixSettingsPanel(QWidget):
     def __init__(self, backend_selector: QWidget | None = None) -> None:
@@ -113,3 +116,16 @@ def _label(text: str, tooltip: str) -> QLabel:
     label = QLabel(text)
     label.setToolTip(tooltip)
     return label
+
+
+def create_settings_panel(
+    profile: DeviceProfile,
+    backend_selector: QWidget,
+) -> QWidget | None:
+    if profile.name == "helix":
+        return HelixSettingsPanel(backend_selector)
+    descriptors = profile.setting_descriptors() if hasattr(profile, "setting_descriptors") else ()
+    descriptors = tuple(descriptor for descriptor in descriptors if descriptor.show_in_gui)
+    if descriptors:
+        return DescriptorSettingsPanel(descriptors)
+    return None

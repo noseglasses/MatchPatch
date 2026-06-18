@@ -23,7 +23,6 @@ REFERENCE_DI_SOURCE = (
     PROJECT_ROOT / "audio" / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
 )
 PAYLOAD_RUNTIME_FILES = [
-    (PROJECT_ROOT / "Python" / "preset_handling.py", Path("Python") / "preset_handling.py"),
     (
         REFERENCE_DI_SOURCE,
         Path("audio") / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav",
@@ -51,7 +50,6 @@ def git_sha() -> str:
 
 def asset_datas() -> list[tuple[str, str]]:
     return [
-        (str(PROJECT_ROOT / "Python" / "preset_handling.py"), "Python"),
         (str(REFERENCE_DI_SOURCE), "audio/reference-di"),
         (str(PROJECT_ROOT / "docs" / "assets" / "matchmatch-icon.png"), "docs/assets"),
         (str(PROJECT_ROOT / "docs" / "assets" / "matchmatch-icon-512.png"), "docs/assets"),

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from matchpatch.devices.base import DiagnosticsContext
 from matchpatch.diagnostics import DiagnosticCheck
 from matchpatch.preflight import run_preflight_checks
 from matchpatch.workflow import NormalizationRequest
@@ -27,11 +28,18 @@ class FakeHandler:
             raise ValueError(self.output_error)
 
 
-def _profile(handler: FakeHandler | None = None) -> SimpleNamespace:
+def _profile(
+    handler: FakeHandler | None = None,
+    *,
+    backends: tuple[str, ...] = ("hardware", "loopback", "simulated"),
+    diagnostics_provider: object | None = None,
+) -> SimpleNamespace:
     handler = handler or FakeHandler()
     return SimpleNamespace(
         display_name="Fake Device",
         create_patch_file_handler=lambda project_dir: handler,
+        measurement_backends=lambda: backends,
+        diagnostics_provider=lambda: diagnostics_provider,
     )
 
 
@@ -56,6 +64,24 @@ def _statuses(checks: list[DiagnosticCheck]) -> dict[str, str]:
     return {check.name: check.status for check in checks}
 
 
+class RecordingDiagnosticsProvider:
+    def __init__(self) -> None:
+        self.context: DiagnosticsContext | None = None
+
+    def run_checks(self, context: DiagnosticsContext) -> list[DiagnosticCheck]:
+        self.context = context
+        return [
+            DiagnosticCheck("device_storage", "pass", "Storage is writable"),
+            DiagnosticCheck("device_firmware", "warning", "Firmware is unverified"),
+            DiagnosticCheck("device_license", "fail", "License is missing"),
+        ]
+
+
+class FailingDiagnosticsProvider:
+    def run_checks(self, context: DiagnosticsContext) -> list[DiagnosticCheck]:
+        raise RuntimeError("diagnostic transport unavailable")
+
+
 def test_loopback_preflight_skips_hardware(tmp_path: Path) -> None:
     checks = run_preflight_checks(_request(tmp_path), get_profile=lambda device: _profile())
 
@@ -63,6 +89,26 @@ def test_loopback_preflight_skips_hardware(tmp_path: Path) -> None:
 
     assert hardware.status == "skip"
     assert "loopback" in hardware.summary
+
+
+def test_preflight_validates_backend_against_selected_profile(tmp_path: Path) -> None:
+    checks = run_preflight_checks(
+        _request(tmp_path, backend="offline"),
+        get_profile=lambda device: _profile(backends=("offline",)),
+    )
+
+    backend = next(check for check in checks if check.name == "backend")
+    assert backend.status == "pass"
+    assert backend.summary == "Backend is valid: offline"
+
+    checks = run_preflight_checks(
+        _request(tmp_path, backend="hardware"),
+        get_profile=lambda device: _profile(backends=("offline",)),
+    )
+
+    backend = next(check for check in checks if check.name == "backend")
+    assert backend.status == "fail"
+    assert backend.summary == "Backend must be one of offline: hardware"
 
 
 def test_missing_input_returns_failed_check(tmp_path: Path) -> None:
@@ -117,6 +163,48 @@ def test_hardware_backend_includes_windows_checks(tmp_path: Path) -> None:
     )
 
     assert [check for check in checks if check.name.startswith("windows_")] == hardware_checks
+
+
+def test_device_diagnostics_provider_contributes_checks(tmp_path: Path) -> None:
+    provider = RecordingDiagnosticsProvider()
+    request = _request(
+        tmp_path,
+        backend="hardware",
+        device_settings={"sample_rate": 48000},
+    )
+    hardware_checks = [DiagnosticCheck("windows_audio", "pass", "Audio device resolved")]
+
+    checks = run_preflight_checks(
+        request,
+        get_profile=lambda device: _profile(diagnostics_provider=provider),
+        collect_hardware_diagnostics=lambda request: hardware_checks,
+    )
+
+    assert provider.context is not None
+    assert provider.context.request is request
+    assert provider.context.handler is not None
+    assert provider.context.resolved_settings == {"sample_rate": 48000}
+    assert [check.name for check in checks[8:12]] == [
+        "device_storage",
+        "device_firmware",
+        "device_license",
+        "windows_audio",
+    ]
+    assert _statuses(checks)["device_storage"] == "pass"
+    assert _statuses(checks)["device_firmware"] == "warning"
+    assert _statuses(checks)["device_license"] == "fail"
+
+
+def test_device_diagnostics_provider_exception_returns_failed_check(tmp_path: Path) -> None:
+    checks = run_preflight_checks(
+        _request(tmp_path),
+        get_profile=lambda device: _profile(diagnostics_provider=FailingDiagnosticsProvider()),
+    )
+
+    check = next(check for check in checks if check.name == "device_diagnostics")
+    assert check.status == "fail"
+    assert check.summary == "Device diagnostics provider failed"
+    assert check.detail == "diagnostic transport unavailable"
 
 
 def test_preflight_check_ordering(tmp_path: Path) -> None:

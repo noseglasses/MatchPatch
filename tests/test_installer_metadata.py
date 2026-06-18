@@ -120,7 +120,9 @@ def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     assert 'name="MatchPatch"' in gui_spec
     assert "console=False" in gui_spec
     assert "datas=asset_datas()" in gui_spec
-    assert 'hiddenimports=["mido.backends.rtmidi", "rtmidi"]' in gui_spec
+    assert '"matchpatch.devices.helix.preset_handling"' in gui_spec
+    assert '"mido.backends.rtmidi"' in gui_spec
+    assert '"rtmidi"' in gui_spec
     assert '"src" / "matchpatch" / "app.py"' in gui_spec
     assert "prepare_installer_assets()" in gui_spec
     assert 'prepare_pyinstaller_paths(Path(CONF["workpath"]), Path(CONF["distpath"]))' in gui_spec
@@ -128,9 +130,7 @@ def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     assert "stage_runtime_files()" in gui_spec
     assert "stage_docs()" in gui_spec
     assert "write_build_info()" in gui_spec
-
     assert "PAYLOAD_RUNTIME_FILES" in build_support
-    assert '"Python" / "preset_handling.py"' in build_support
     assert '"audio" / "reference-di"' in build_support
     assert "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav" in build_support
     assert '"docs_html"' in build_support
@@ -187,7 +187,6 @@ def test_runtime_files_are_staged_at_payload_root(tmp_path: Path) -> None:
 
     build_support.stage_runtime_files(payload_root)
 
-    assert (payload_root / "Python" / "preset_handling.py").is_file()
     assert (
         payload_root / "audio" / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
     ).is_file()

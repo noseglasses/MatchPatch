@@ -35,6 +35,7 @@ class WindowLoadingController:
         panel = window.device_panels.get(name)
         if panel is not None:
             window.device_stack.setCurrentWidget(panel)
+        self.refresh_backend_choices()
         window.load_defaults()
 
     def backend_changed(self) -> None:
@@ -51,6 +52,24 @@ class WindowLoadingController:
             )
         else:
             window.device_settings.setToolTip("")
+
+    def refresh_backend_choices(self) -> None:
+        window = self.window
+        device = window.device.currentData()
+        if not device:
+            return
+        profile = self.get_profile(device)
+        current = window.backend.currentText() or "hardware"
+        backends = profile.measurement_backends()
+        if not backends:
+            backends = ("hardware",)
+        signals_blocked = window.backend.blockSignals(True)
+        try:
+            window.backend.clear()
+            window.backend.addItems(list(backends))
+            window.backend.setCurrentText(current if current in backends else backends[0])
+        finally:
+            window.backend.blockSignals(signals_blocked)
 
     def load_defaults(self) -> None:
         window = self.window
@@ -86,6 +105,7 @@ class WindowLoadingController:
         window.solo_gain_bump_db.setText(str(args.policy.solo_gain_bump_db))
         window.solo_regex.setText(args.policy.solo_regex)
         window.ignore_snapshot_regex.setText(args.policy.ignore_snapshot_regex)
+        window.ignore_preset_regex.setText(args.policy.ignore_preset_regex)
         window.analysis_window.setText(str(args.analysis_options.window_seconds))
         window.analysis_interval.setText(str(args.analysis_options.interval_seconds))
         window._optimization_stability_runs = int(
@@ -196,12 +216,13 @@ class WindowLoadingController:
         try:
             profile = self.get_profile(window.device.currentData())
             handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+            if handler.file_kind(path) == "unknown":
+                self._show_no_assignments_loaded()
+                return
             handler.validate_input(path)
             assignments = handler.list_assignments(path)
         except Exception as exc:  # noqa: BLE001
-            window._show_preset_empty_state()
-            window.presets.updateGeometry()
-            window._schedule_resize_for_content()
+            self._show_no_assignments_loaded()
             window.show_error(str(exc))
             return
 
@@ -225,6 +246,9 @@ class WindowLoadingController:
         try:
             profile = self.get_profile(window.device.currentData())
             handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+            if handler.file_kind(path) == "unknown":
+                self._show_no_assignments_loaded()
+                return
             handler.validate_input(path)
             with window._sorting_paused():
                 window._adjusted_presets.clear()
@@ -237,7 +261,12 @@ class WindowLoadingController:
                     window.preset_table.setItem(row, 0, selected)
                     window.preset_table.setItem(row, 1, QTableWidgetItem(assignment.device_patch))
                     window.preset_table.setItem(row, 2, QTableWidgetItem(assignment.name))
+                    window.preset_table_controller.set_preset_original_filename(
+                        row,
+                        getattr(assignment, "original_filename", None),
+                    )
                     window.preset_table_controller.clear_preset_adjustments(row)
+                    window.preset_table_controller.refresh_preset_name(row)
                     window.preset_table_controller.set_snapshot_names(
                         row, assignment.snapshot_names
                     )
@@ -248,9 +277,7 @@ class WindowLoadingController:
                     )
                 window._refresh_preset_table_editable_flags()
         except Exception as exc:  # noqa: BLE001
-            window._show_preset_empty_state()
-            window.presets.updateGeometry()
-            window._schedule_resize_for_content()
+            self._show_no_assignments_loaded()
             window.show_error(str(exc))
             return
 
@@ -262,6 +289,12 @@ class WindowLoadingController:
         window.preset_hint.setText("Select the presets to normalize.")
         window._set_preset_csv_buttons_enabled(window.preset_table.rowCount() > 0)
         QTimer.singleShot(0, window._fit_advanced_splitter_width)
+        window._schedule_resize_for_content()
+
+    def _show_no_assignments_loaded(self) -> None:
+        window = self.window
+        window._show_preset_empty_state()
+        window.presets.updateGeometry()
         window._schedule_resize_for_content()
 
     @staticmethod
@@ -289,7 +322,9 @@ class WindowLoadingController:
             window.preset_table.setItem(0, 0, selected)
             window.preset_table.setItem(0, 1, QTableWidgetItem())
             window.preset_table.setItem(0, 2, QTableWidgetItem(preset_name))
+            window.preset_table_controller.set_preset_original_filename(0, path.name)
             window.preset_table_controller.clear_preset_adjustments(0)
+            window.preset_table_controller.refresh_preset_name(0)
             window.preset_table_controller.set_snapshot_names(0, snapshot_names)
             window.preset_table_controller.set_snapshot_output_levels(
                 0, snapshot_output_levels, snapshot_output_paths

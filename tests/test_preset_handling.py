@@ -2,23 +2,85 @@ from __future__ import annotations
 
 import base64
 import binascii
-import importlib.util
+import copy
+import importlib
 import json
+import sys
 import zlib
-from pathlib import Path
 from types import ModuleType
 
 import pytest
 
 
 def _load_legacy_module() -> ModuleType:
-    script = Path(__file__).resolve().parents[1] / "Python" / "preset_handling.py"
-    spec = importlib.util.spec_from_file_location("preset_handling", script)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module("matchpatch.devices.helix.preset_handling")
+
+
+def _preset(name: str) -> dict:
+    return {
+        "meta": {"name": name},
+        "tone": {
+            "dsp0": {
+                "inputA": {"@input": 1},
+                "block0": {},
+                "outputA": {"@output": 6, "gain": 0.0},
+            },
+            "snapshot0": {"@name": "Snapshot 1"},
+        },
+    }
+
+
+def _preset_with_snapshot_assigned_properties(
+    name: str,
+    count: int,
+    *,
+    output_gain_assigned: bool = False,
+) -> dict:
+    preset = _preset(name)
+    tone = preset["tone"]
+    block = tone["dsp0"]["block0"]
+    block_controller = (
+        tone.setdefault("controller", {}).setdefault("dsp0", {}).setdefault("block0", {})
+    )
+
+    for index in range(count):
+        parameter = f"param{index}"
+        block[parameter] = index
+        block_controller[parameter] = {
+            "@controller": 19,
+            "@snapshot_disable": False,
+        }
+
+    if output_gain_assigned:
+        tone["controller"]["dsp0"]["outputA"] = {
+            "gain": {
+                "@controller": 19,
+                "@max": 20.0,
+                "@min": -120.0,
+                "@snapshot_disable": False,
+            }
+        }
+
+    return preset
+
+
+def _hls_text(data: dict) -> str:
+    raw = json.dumps(data, indent=1).encode("utf-8")
+    wrapper = {
+        "compression": {
+            "crc32": binascii.crc32(raw) & 0xFFFFFFFF,
+            "decompressed_size": len(raw),
+            "type": "zlib",
+        },
+        "encoded_data": base64.b64encode(zlib.compress(raw, level=9)).decode("ascii"),
+    }
+    return json.dumps(wrapper)
+
+
+def _decoded_hls_data(hls_text: str) -> dict:
+    wrapper = json.loads(hls_text)
+    raw = zlib.decompress(base64.b64decode(wrapper["encoded_data"]))
+    return json.loads(raw)
 
 
 def test_lufs_error_sentinel_is_retained_per_snapshot(tmp_path) -> None:
@@ -143,6 +205,114 @@ def test_snapshot_level_assignment_includes_parallel_outputs() -> None:
     assert tone["snapshot0"]["controllers"]["dsp0"]["outputB"]["gain"]["@value"] == -3.0
     assert tone["snapshot1"]["controllers"]["dsp0"]["outputA"]["gain"]["@value"] == -1.0
     assert tone["snapshot1"]["controllers"]["dsp0"]["outputB"]["gain"]["@value"] == -3.0
+
+
+def test_snapshot_level_assignment_allows_helix_limit_boundary() -> None:
+    module = _load_legacy_module()
+    data = {"presets": [_preset_with_snapshot_assigned_properties("Boundary", 63)]}
+
+    modified_json_text, snapshot_changes, gain_changes = module.process_json_structure(
+        json.dumps(data),
+        assign_output_gain=True,
+    )
+    modified = json.loads(modified_json_text)
+    preset = modified["presets"][0]
+
+    assert snapshot_changes == 1
+    assert gain_changes == 0
+    assert module.count_snapshot_assigned_properties(preset) == 64
+    assert preset["tone"]["controller"]["dsp0"]["outputA"]["gain"]["@controller"] == 19
+
+
+def test_snapshot_level_assignment_rejects_exceeding_helix_limit_without_mutation() -> None:
+    module = _load_legacy_module()
+    data = {"presets": [_preset_with_snapshot_assigned_properties("Full", 64)]}
+    original = copy.deepcopy(data)
+
+    with pytest.raises(ValueError, match="snapshot-assigned property limit"):
+        module.process_json_structure(json.dumps(data), assign_output_gain=True)
+
+    assert data == original
+
+
+def test_snapshot_level_assignment_does_not_double_count_existing_output_gain() -> None:
+    module = _load_legacy_module()
+    data = {
+        "presets": [
+            _preset_with_snapshot_assigned_properties(
+                "Already Assigned",
+                63,
+                output_gain_assigned=True,
+            )
+        ]
+    }
+
+    modified_json_text, snapshot_changes, gain_changes = module.process_json_structure(
+        json.dumps(data),
+        assign_output_gain=True,
+    )
+    preset = json.loads(modified_json_text)["presets"][0]
+
+    assert snapshot_changes == 0
+    assert gain_changes == 0
+    assert module.count_snapshot_assigned_properties(preset) == 64
+    assert preset["tone"]["snapshot0"]["controllers"]["dsp0"]["outputA"]["gain"]["@value"] == 0.0
+
+
+def test_snapshot_level_assignment_rejects_setlist_before_partial_mutation() -> None:
+    module = _load_legacy_module()
+    data = {
+        "presets": [
+            _preset_with_snapshot_assigned_properties("Would Mutate", 0),
+            _preset_with_snapshot_assigned_properties("Too Full", 64),
+        ]
+    }
+    original = copy.deepcopy(data)
+
+    with pytest.raises(ValueError, match=r'01B, "Too Full"'):
+        module.process_json_structure(json.dumps(data), assign_output_gain=True)
+
+    assert data == original
+
+
+def test_snapshot_assignment_limit_error_does_not_write_partial_setlist(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    module = _load_legacy_module()
+    input_path = tmp_path / "input.hls"
+    output_path = tmp_path / "output.hls"
+    input_path.write_text(
+        _hls_text(
+            {
+                "presets": [
+                    _preset_with_snapshot_assigned_properties("Would Mutate", 0),
+                    _preset_with_snapshot_assigned_properties("Too Full", 64),
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "helix_preset_handling",
+            "-i",
+            str(input_path),
+            "-o",
+            str(output_path),
+            "--measurement",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+
+    assert exc.value.code == 1
+    assert "snapshot-assigned property limit" in capsys.readouterr().out
+    assert not output_path.exists()
 
 
 def test_metadata_extraction_keeps_wrapper_and_meta_nodes() -> None:
@@ -314,3 +484,93 @@ def test_save_output_packs_crc32_for_encoded_data(tmp_path) -> None:
 
     assert wrapper["compression"]["crc32"] == binascii.crc32(raw) & 0xFFFFFFFF
     assert wrapper["compression"]["decompressed_size"] == len(raw)
+
+
+def test_join_preset_files_to_setlist_contains_joined_presets(tmp_path) -> None:
+    module = _load_legacy_module()
+    first_path = tmp_path / "first.hlx"
+    second_path = tmp_path / "second.hlx"
+    first_path.write_text(json.dumps(_preset("First")), encoding="utf-8")
+    second_path.write_text(json.dumps({"data": _preset("Second"), "meta": {"app": "HX Edit"}}))
+
+    hls_text, metadata = module.join_preset_files_to_setlist([first_path, second_path])
+
+    data = _decoded_hls_data(hls_text)
+    assert [preset["meta"]["name"] for preset in data["presets"]] == ["First", "Second"]
+    assert metadata["source_filenames"] == {"01A": "first.hlx", "01B": "second.hlx"}
+
+
+def test_join_preset_files_to_setlist_uses_slot_ids(tmp_path) -> None:
+    module = _load_legacy_module()
+    preset_path = tmp_path / "lead.hlx"
+    preset_path.write_text(json.dumps(_preset("Lead")), encoding="utf-8")
+
+    hls_text, _ = module.join_preset_files_to_setlist([preset_path], slot_ids=["01B"])
+
+    data = _decoded_hls_data(hls_text)
+    assert module.is_default_preset(data["presets"][0])
+    assert data["presets"][1]["meta"]["name"] == "Lead"
+
+
+def test_split_setlist_to_preset_data_skips_empty_presets(tmp_path) -> None:
+    module = _load_legacy_module()
+    setlist_path = tmp_path / "setlist.hls"
+    setlist_path.write_text(
+        _hls_text({"presets": [_preset("Lead"), {"meta": {"name": "Empty"}, "tone": {}}]}),
+        encoding="utf-8",
+    )
+
+    split_presets = module.split_setlist_to_preset_data(setlist_path)
+
+    assert split_presets == [("Lead.hlx", _preset("Lead"))]
+
+
+def test_split_setlist_reuses_original_filename_when_supplied(tmp_path) -> None:
+    module = _load_legacy_module()
+    setlist_path = tmp_path / "setlist.hls"
+    setlist_path.write_text(_hls_text({"presets": [_preset("Lead")]}), encoding="utf-8")
+
+    split_presets = module.split_setlist_to_preset_data(
+        setlist_path, original_filenames={"01A": "Original Lead.hlx"}
+    )
+
+    assert split_presets[0][0] == "Original Lead.hlx"
+
+
+def test_split_setlist_synthesizes_safe_filename_from_preset_name(tmp_path) -> None:
+    module = _load_legacy_module()
+    setlist_path = tmp_path / "setlist.hls"
+    setlist_path.write_text(_hls_text({"presets": [_preset('Lead: / "A"')]}), encoding="utf-8")
+
+    split_presets = module.split_setlist_to_preset_data(setlist_path)
+
+    assert split_presets[0][0] == "Lead A.hlx"
+
+
+def test_split_setlist_disambiguates_duplicate_synthesized_names(tmp_path) -> None:
+    module = _load_legacy_module()
+    setlist_path = tmp_path / "setlist.hls"
+    setlist_path.write_text(
+        _hls_text({"presets": [_preset("Lead"), _preset("Lead")]}),
+        encoding="utf-8",
+    )
+
+    split_presets = module.split_setlist_to_preset_data(setlist_path)
+
+    assert [filename for filename, _ in split_presets] == ["Lead 01A.hlx", "Lead 01B.hlx"]
+
+
+def test_load_and_rebuild_hlx_preserves_wrapper_shape(tmp_path) -> None:
+    module = _load_legacy_module()
+    hlx_path = tmp_path / "wrapped.hlx"
+    hlx_path.write_text(
+        json.dumps({"data": _preset("Wrapped"), "meta": {"app": "HX Edit"}}),
+        encoding="utf-8",
+    )
+
+    preset, wrapper = module.load_preset_file(hlx_path)
+    preset["meta"]["name"] = "Renamed"
+    rebuilt = module.rebuild_hlx_data(wrapper, preset)
+
+    assert rebuilt["data"]["meta"]["name"] == "Renamed"
+    assert rebuilt["meta"] == {"app": "HX Edit"}

@@ -33,6 +33,7 @@ class GuiSettingsState:
     solo_gain_bump_db: str
     solo_regex: str
     ignore_snapshot_regex: str
+    ignore_preset_regex: str
     snapshot_count: int
     keep_temp: bool
     device_arguments: tuple[str, ...]
@@ -88,6 +89,7 @@ class GuiSettingsState:
         argv.extend(
             ["--ignore-snapshot-regex", normalize_regex_pattern(self.ignore_snapshot_regex)]
         )
+        argv.extend(["--ignore-preset-regex", normalize_regex_pattern(self.ignore_preset_regex)])
         argv.extend(["--snapshot-count", str(self.snapshot_count)])
         if self.keep_temp:
             argv.append("--keep-temp")
@@ -132,6 +134,7 @@ class GuiSettingsState:
             "measured_snapshots": args.policy.snapshot_count,
             "solo_regex": args.policy.solo_regex,
             "ignore_snapshot_regex": args.policy.ignore_snapshot_regex,
+            "ignore_preset_regex": args.policy.ignore_preset_regex,
             "solo_gain_bump_db": args.policy.solo_gain_bump_db,
             "crest_factor_reference_db": args.policy.crest_factor_reference_db,
             "crest_factor_correction_ratio": args.policy.crest_factor_correction_ratio,
@@ -204,6 +207,7 @@ class GuiSettingsBinder:
             solo_gain_bump_db=window.solo_gain_bump_db.text(),
             solo_regex=window.solo_regex.text(),
             ignore_snapshot_regex=window.ignore_snapshot_regex.text(),
+            ignore_preset_regex=window.ignore_preset_regex.text(),
             snapshot_count=window.snapshot_count_input.value(),
             keep_temp=window.keep_temp.isChecked(),
             device_arguments=tuple(device_arguments),

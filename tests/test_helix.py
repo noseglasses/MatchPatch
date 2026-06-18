@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-import importlib.util
+import importlib
 import json
 import subprocess
 import sys
@@ -12,6 +12,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+import matchpatch.devices.helix as helix_module
 from matchpatch.devices.base import PatchAssignment, PatchFileAdjustments, SteeringOptions
 from matchpatch.devices.helix import (
     HelixDeviceProfile,
@@ -22,13 +23,7 @@ from matchpatch.midi import midi_output_names
 
 
 def load_legacy_preset_handling():
-    script_path = Path(__file__).resolve().parents[1] / "Python" / "preset_handling.py"
-    spec = importlib.util.spec_from_file_location("preset_handling", script_path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module("matchpatch.devices.helix.preset_handling")
 
 
 def make_handler(tmp_path: Path) -> HelixPatchFileHandler:
@@ -49,6 +44,22 @@ def test_patch_file_validation_and_automation_path(tmp_path) -> None:
     assert handler.automation_output_path(Path("preset.hlx"), "_measurement") == Path(
         "preset_measurement.hlx"
     )
+
+
+def test_helix_file_capabilities_and_kinds_are_advertised(tmp_path) -> None:
+    handler = make_handler(tmp_path)
+    capabilities = handler.file_capabilities()
+
+    assert capabilities.reads_preset_files
+    assert capabilities.writes_preset_files
+    assert capabilities.reads_setlist_files
+    assert capabilities.writes_setlist_files
+    assert capabilities.joins_presets_to_setlist
+    assert capabilities.splits_setlist_to_presets
+    assert capabilities.exports_selected_setlist_slots
+    assert handler.file_kind(Path("preset.hlx")) == "preset"
+    assert handler.file_kind(Path("setlist.hls")) == "setlist"
+    assert handler.file_kind(Path("notes.txt")) == "unknown"
 
 
 def test_parse_and_format_patch_ids(tmp_path) -> None:
@@ -109,8 +120,68 @@ def test_list_assignments_and_measurement_delegate_to_legacy_script(tmp_path, mo
     assert handler.list_assignments(Path("set.hls")) == [
         PatchAssignment(1, "01A", "Clean", ("Rhythm", "Solo"), ((0.0,), (-3.5, -4.0)))
     ]
+    targets = handler.list_targets(Path("set.hls"))
+    assert [
+        (target.id, target.display_label, target.name, target.compat_numeric_id)
+        for target in targets
+    ] == [(1, "01A", "Clean", 1)]
+    assert [
+        (subdivision.id, subdivision.display_label, subdivision.name)
+        for subdivision in targets[0].subdivisions
+    ] == [
+        (1, "Rhythm", "Rhythm"),
+        (2, "Solo", "Solo"),
+    ]
     handler.create_measurement_file(Path("set.hls"), Path("measurement.hls"))
-    assert calls[1][0] == ("-i", Path("set.hls"), "-o", Path("measurement.hls"), "--measurement")
+    assert calls[2][0] == ("-i", Path("set.hls"), "-o", Path("measurement.hls"), "--measurement")
+
+
+def test_helix_snapshot_output_paths_are_exposed_as_gain_points(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    payload = [
+        {
+            "id": 1,
+            "helix_preset": "01A",
+            "name": "Clean",
+            "snapshot_names": ["Rhythm", "Solo"],
+            "snapshot_output_paths": ["dsp0.outputA", "dsp0.outputB"],
+            "snapshot_output_levels": [[0.0, -3.0], [1.5, -1.5]],
+        }
+    ]
+
+    def fake_run(*args, capture=False, log_output=True):
+        return subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+
+    targets = handler.list_targets(Path("set.hls"))
+    solo_points = handler.list_gain_points(Path("set.hls"), 1, 2)
+
+    assert [
+        (point.id, point.current_db, point.minimum_db, point.maximum_db, point.scope, point.path)
+        for point in targets[0].subdivisions[0].gain_points
+    ] == [
+        ("dsp0.outputA", 0.0, -120.0, 20.0, "subdivision", "dsp0.outputA"),
+        ("dsp0.outputB", -3.0, -120.0, 20.0, "subdivision", "dsp0.outputB"),
+    ]
+    assert [(point.id, point.current_db) for point in solo_points] == [
+        ("dsp0.outputA", 1.5),
+        ("dsp0.outputB", -1.5),
+    ]
+
+
+def test_single_preset_assignment_includes_original_filename(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    payload = [{"id": 1, "helix_preset": "01A", "name": "Clean"}]
+
+    def fake_run(*args, capture=False, log_output=True):
+        return subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+
+    assert handler.list_assignments(Path("Clean.hlx")) == [
+        PatchAssignment(1, "01A", "Clean", original_filename="Clean.hlx")
+    ]
 
 
 def test_metadata_delegates_to_legacy_script(tmp_path, monkeypatch) -> None:
@@ -132,6 +203,72 @@ def test_metadata_delegates_to_legacy_script(tmp_path, monkeypatch) -> None:
             False,
         )
     ]
+
+
+def test_join_preset_files_delegates_to_legacy_script(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    calls = []
+
+    def fake_run(*args, capture=False, log_output=True):
+        calls.append((args, capture, log_output))
+        return subprocess.CompletedProcess([], 0)
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+
+    handler.join_preset_files(
+        [Path("first.hlx"), Path("second.hlx")],
+        Path("joined.hls"),
+        slot_ids=[1, 6],
+    )
+
+    assert calls == [
+        (
+            (
+                "--join-presets",
+                Path("first.hlx"),
+                Path("second.hlx"),
+                "-o",
+                Path("joined.hls"),
+                "--slot-ids",
+                "01A,02B",
+            ),
+            False,
+            True,
+        )
+    ]
+
+
+def test_split_setlist_file_writes_helper_results(tmp_path, monkeypatch) -> None:
+    handler = make_handler(tmp_path)
+    seen = {}
+
+    class Helper:
+        @staticmethod
+        def split_setlist_to_preset_data(input_path, selected_ids=None, original_filenames=None):
+            seen["input_path"] = input_path
+            seen["selected_ids"] = selected_ids
+            seen["original_filenames"] = original_filenames
+            return [("../Lead.hlx", {"meta": {"name": "Lead"}, "tone": {}})]
+
+    monkeypatch.setattr(helix_module, "_load_helix_file_operations", lambda: Helper)
+
+    created = handler.split_setlist_file(
+        Path("set.hls"),
+        tmp_path / "presets",
+        selected_ids=[1],
+        original_filenames={1: "Lead.hlx"},
+    )
+
+    assert created == [tmp_path / "presets" / "Lead.hlx"]
+    assert json.loads(created[0].read_text(encoding="utf-8")) == {
+        "meta": {"name": "Lead"},
+        "tone": {},
+    }
+    assert seen == {
+        "input_path": Path("set.hls"),
+        "selected_ids": [1],
+        "original_filenames": {1: "Lead.hlx"},
+    }
 
 
 def test_diff_preset_ids_delegates_to_legacy_script(tmp_path, monkeypatch) -> None:
@@ -320,7 +457,7 @@ def test_legacy_snapshot_diff_tracks_snapshot_assigned_parameter_values(tmp_path
     }
 
 
-def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> None:
+def test_helix_module_runner_builds_subprocess_call(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
     calls = []
     completed = subprocess.CompletedProcess([], 0, stdout="ok")
@@ -330,48 +467,53 @@ def test_legacy_script_runner_builds_subprocess_call(tmp_path, monkeypatch) -> N
 
     assert handler._run("--list-presets", capture=True) is completed
     command, options = calls[0]
-    assert command[0][0] == sys.executable
+    assert command[0][:3] == [
+        sys.executable,
+        "-m",
+        "matchpatch.devices.helix.preset_handling",
+    ]
     assert command[0][-1] == "--list-presets"
     assert options["stdout"] is subprocess.PIPE
     assert options["stderr"] is subprocess.PIPE
 
 
-def test_frozen_legacy_script_runner_executes_in_process(tmp_path, monkeypatch) -> None:
-    script = tmp_path / "Python" / "preset_handling.py"
-    script.parent.mkdir()
-    script.write_text(
-        "import sys\n"
-        "print('args=' + ','.join(sys.argv[1:]))\n"
-        "print('error stream', file=sys.stderr)\n",
-        encoding="utf-8",
-    )
+def test_frozen_helix_module_runner_executes_in_process(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
     original_argv = sys.argv[:]
+
+    def fake_run_module(module, run_name):
+        assert module == "matchpatch.devices.helix.preset_handling"
+        assert run_name == "__main__"
+        print("args=" + ",".join(sys.argv[1:]))
+        print("error stream", file=sys.stderr)
+
     monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(helix_module.runpy, "run_module", fake_run_module)
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda *args, **kwargs: pytest.fail("frozen legacy runner must not spawn a subprocess"),
+        lambda *args, **kwargs: pytest.fail("frozen Helix runner must not spawn a subprocess"),
     )
 
     completed = handler._run("--list-presets", capture=True)
 
-    assert completed.args == [str(script), "--list-presets"]
+    assert completed.args == ["matchpatch.devices.helix.preset_handling", "--list-presets"]
     assert completed.returncode == 0
     assert completed.stdout == "args=--list-presets\n"
     assert completed.stderr == "error stream\n"
     assert sys.argv == original_argv
 
 
-def test_frozen_legacy_script_runner_raises_called_process_error(tmp_path, monkeypatch) -> None:
-    script = tmp_path / "Python" / "preset_handling.py"
-    script.parent.mkdir()
-    script.write_text(
-        "import sys\nprint('before exit')\nprint('failed', file=sys.stderr)\nraise SystemExit(2)\n",
-        encoding="utf-8",
-    )
+def test_frozen_helix_module_runner_raises_called_process_error(tmp_path, monkeypatch) -> None:
     handler = make_handler(tmp_path)
+
+    def fake_run_module(module, run_name):
+        print("before exit")
+        print("failed", file=sys.stderr)
+        raise SystemExit(2)
+
     monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(helix_module.runpy, "run_module", fake_run_module)
 
     with pytest.raises(subprocess.CalledProcessError) as exc:
         handler._run("--metadata", capture=True)

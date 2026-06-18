@@ -71,8 +71,8 @@ repos:
         entry: >-
           bash -c 'export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl";
           python3 scripts/run_hook_with_hint.py
-          --hint "UV_PROJECT_ENVIRONMENT=\"\${XDG_DATA_HOME:-\$HOME/.local/share}/matchpatch/.venv-wsl\" uv run --frozen --no-default-groups --group wsl pytest"
-          -- uv run --frozen --no-default-groups --group wsl pytest'
+          --hint "UV_PROJECT_ENVIRONMENT=\"\${XDG_DATA_HOME:-\$HOME/.local/share}/matchpatch/.venv-wsl\" uv run --frozen --no-default-groups --group wsl pytest --no-cov"
+          -- uv run --frozen --no-default-groups --group wsl pytest --no-cov'
         language: system
         pass_filenames: false
         stages:

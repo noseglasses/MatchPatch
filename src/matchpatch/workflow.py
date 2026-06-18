@@ -9,15 +9,20 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from pathlib import Path
+from typing import TypeVar
 
 from matchpatch.analysis import AnalysisOptions
 from matchpatch.custom_adjustments import load_custom_adjustments_file
 from matchpatch.devices import get_device_profile
 from matchpatch.devices.base import (
     DeviceProfile,
+    DeviceSettings,
+    DeviceTargetId,
     NormalizationPolicy,
     PatchFileAdjustments,
     PatchFileHandler,
+    SubdivisionSelection,
+    TargetSelection,
     validate_snapshot_count,
 )
 from matchpatch.progress import ProgressEvent
@@ -78,6 +83,7 @@ class NormalizationRequest:
     snapshot_plan: tuple[tuple[str, tuple[int, ...]], ...] = ()
     policy: NormalizationPolicy = NormalizationPolicy()
     analysis_options: AnalysisOptions = AnalysisOptions()
+    device_settings: DeviceSettings | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +98,7 @@ ConfirmationCallback = Callable[[ImportRequest], bool]
 AnalysisRunner = Callable[[NormalizationRequest, list[int], Path, ProgressCallback | None], None]
 ProfileProvider = Callable[[str], DeviceProfile]
 TempDirFactory = Callable[[], Path]
+T = TypeVar("T")
 
 
 def normalize_presets(
@@ -114,15 +121,16 @@ def normalize_presets(
     output_path = _resolve_output_paths(
         request, handler, input_path, profile, confirm_import, on_progress
     )
-    preset_ids = _select_presets(request, handler, input_path)
-    preset_ids, snapshot_plan = _apply_diff_filter(
-        request, handler, input_path, preset_ids, request.snapshot_plan
+    selected_targets = _select_targets(request, handler, input_path)
+    selected_targets, snapshot_plan = _apply_diff_filter(
+        request, handler, input_path, selected_targets, request.snapshot_plan
     )
-    preset_ids = _apply_limit(request.limit, preset_ids)
+    selected_targets = _apply_limit(request.limit, selected_targets)
 
-    if not preset_ids:
+    if not selected_targets:
         raise ValueError("Patch file contains no measurable presets")
 
+    preset_ids = _compat_numeric_target_ids(selected_targets)
     return _run_normalization_workspace(
         request,
         run_analysis,
@@ -187,50 +195,90 @@ def _resolve_output_paths(
     return output_path
 
 
-def _select_presets(
+def _select_targets(
     request: NormalizationRequest,
     handler: PatchFileHandler,
     input_path: Path,
-) -> list[int]:
-    requested_ids = (
+) -> list[TargetSelection]:
+    if _has_target_selection_api(handler):
+        requested_ids = (
+            handler.parse_target_set(request.preset_set) if request.preset_set is not None else None
+        )
+        return handler.select_targets(
+            input_path,
+            handler.list_targets(input_path),
+            requested_ids,
+        )
+
+    requested_preset_ids = (
         handler.parse_patch_set(request.preset_set) if request.preset_set is not None else None
     )
     assignments = handler.list_assignments(input_path)
-    return handler.select_preset_ids(input_path, assignments, requested_ids)
+    return [
+        TargetSelection(
+            id=preset_id,
+            display_label=handler.format_patch_id(preset_id),
+            compat_numeric_id=preset_id,
+        )
+        for preset_id in handler.select_preset_ids(
+            input_path,
+            assignments,
+            requested_preset_ids,
+        )
+    ]
 
 
 def _apply_diff_filter(
     request: NormalizationRequest,
     handler: PatchFileHandler,
     input_path: Path,
-    preset_ids: list[int],
+    selected_targets: list[TargetSelection],
     snapshot_plan: tuple[tuple[str, tuple[int, ...]], ...],
-) -> tuple[list[int], tuple[tuple[str, tuple[int, ...]], ...]]:
+) -> tuple[list[TargetSelection], tuple[tuple[str, tuple[int, ...]], ...]]:
     if request.diff_input_path is None:
-        return preset_ids, snapshot_plan
+        return selected_targets, snapshot_plan
 
     previous_input_path = request.diff_input_path.resolve()
     if previous_input_path.suffix.lower() != input_path.suffix.lower():
         raise ValueError("--diff-input must use the same file type as --input")
 
-    diff_snapshots = _diff_snapshots(request, handler, input_path, previous_input_path)
+    diff_snapshots = _diff_subdivisions(request, handler, input_path, previous_input_path)
     diff_ids = set(diff_snapshots)
-    filtered_ids = [preset_id for preset_id in preset_ids if preset_id in diff_ids]
-    return filtered_ids, _intersect_snapshot_plans(
+    filtered_targets = [target for target in selected_targets if target.id in diff_ids]
+    return filtered_targets, _intersect_snapshot_plans(
         snapshot_plan,
-        tuple(
-            (handler.format_patch_id(preset_id), diff_snapshots[preset_id])
-            for preset_id in filtered_ids
-        ),
+        tuple((target.display_label, diff_snapshots[target.id]) for target in filtered_targets),
     )
 
 
-def _diff_snapshots(
+def _diff_subdivisions(
     request: NormalizationRequest,
     handler: PatchFileHandler,
     input_path: Path,
     previous_input_path: Path,
-) -> dict[int, tuple[int, ...]]:
+) -> dict[DeviceTargetId, tuple[int, ...]]:
+    diff_subdivisions = getattr(handler, "diff_subdivisions", None)
+    if diff_subdivisions is None:
+        return _legacy_diff_subdivisions(request, handler, input_path, previous_input_path)
+
+    return {
+        target_id: tuple(
+            _compat_numeric_subdivision_id(subdivision) for subdivision in subdivisions
+        )
+        for target_id, subdivisions in diff_subdivisions(
+            input_path,
+            previous_input_path,
+            request.policy.snapshot_count,
+        ).items()
+    }
+
+
+def _legacy_diff_subdivisions(
+    request: NormalizationRequest,
+    handler: PatchFileHandler,
+    input_path: Path,
+    previous_input_path: Path,
+) -> dict[DeviceTargetId, tuple[int, ...]]:
     diff_snapshot_ids = getattr(handler, "diff_snapshot_ids", None)
     if diff_snapshot_ids is not None:
         return diff_snapshot_ids(
@@ -245,12 +293,42 @@ def _diff_snapshots(
     }
 
 
-def _apply_limit(limit: int | None, preset_ids: list[int]) -> list[int]:
+def _has_target_selection_api(handler: PatchFileHandler) -> bool:
+    return hasattr(handler, "list_targets") and hasattr(handler, "select_targets")
+
+
+def _apply_limit(limit: int | None, items: list[T]) -> list[T]:
     if limit is None:
-        return preset_ids
+        return items
     if limit < 1:
         raise ValueError("--limit must be at least 1")
-    return preset_ids[:limit]
+    return items[:limit]
+
+
+def _compat_numeric_target_ids(targets: list[TargetSelection]) -> list[int]:
+    preset_ids: list[int] = []
+    for target in targets:
+        if target.compat_numeric_id is not None:
+            preset_ids.append(target.compat_numeric_id)
+        elif isinstance(target.id, int):
+            preset_ids.append(target.id)
+        else:
+            raise ValueError(
+                f"Target {target.display_label!r} cannot be measured by the legacy worker"
+            )
+    return preset_ids
+
+
+def _compat_numeric_subdivision_id(subdivision: SubdivisionSelection) -> int:
+    if subdivision.compat_numeric_id is not None:
+        return subdivision.compat_numeric_id
+    if isinstance(subdivision.id, int):
+        return subdivision.id
+    if subdivision.index is not None:
+        return subdivision.index + 1
+    raise ValueError(
+        f"Subdivision {subdivision.display_label!r} cannot be measured by the legacy worker"
+    )
 
 
 def _run_normalization_workspace(

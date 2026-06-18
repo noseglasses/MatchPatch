@@ -9,7 +9,7 @@ import tempfile
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence, cast
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -70,15 +70,21 @@ from matchpatch.diagnostics import (
     write_diagnostic_bundle,
 )
 from matchpatch.gui import diagnostics_panel as gui_diagnostics
+from matchpatch.gui import (
+    file_operations_workflow,
+    file_type_filters,
+    multi_hlx_workflow,
+    save_dialogs,
+    window_layout,
+    window_state,
+)
 from matchpatch.gui import help as gui_help
-from matchpatch.gui import window_layout, window_state
 from matchpatch.gui.advanced_settings import (
     GuiSettingsBinder,
     PresetTableSelectionContext,
-    append_optional_argument,
     diagnostic_request,
 )
-from matchpatch.gui.device_panels import HelixSettingsPanel
+from matchpatch.gui.device_panels import create_settings_panel
 from matchpatch.gui.diagnostics_panel import (
     preset_table_selection_preflight_checks,
 )
@@ -115,6 +121,11 @@ from matchpatch.gui.measurement_optimization import (
 )
 from matchpatch.gui.measurement_optimization import (
     _optimization_progress_event_total as _optimization_progress_event_total,
+)
+from matchpatch.gui.name_rules import (
+    device_name_max_length,
+    validate_preset_name_for_device,
+    validate_subdivision_name_for_device,
 )
 from matchpatch.gui.normalization_workflow import NormalizationWorkflowController
 from matchpatch.gui.optimization_workflow import MeasurementOptimizationWorkflowController
@@ -159,6 +170,7 @@ from matchpatch.gui.table_legend import build_preset_table_legend_dialog
 from matchpatch.gui.table_roles import (
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_PRESET,
+    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
     PRESET_TABLE_ATTENTION_ROLE,
     PRESET_TABLE_CSV_DELIMITER,
@@ -219,7 +231,6 @@ _preflight_headline = gui_diagnostics.preflight_headline
 
 __all__ = ["MainWindow"]
 
-RECENT_FILES_SETTINGS_KEY = window_state.RECENT_FILES_SETTINGS_KEY
 MAX_RECENT_FILES = window_state.MAX_RECENT_FILES
 TOOLBAR_VERTICAL_PADDING = window_layout.TOOLBAR_VERTICAL_PADDING
 
@@ -263,13 +274,16 @@ class MainWindow(QMainWindow):
         self.completed_request: NormalizationRequest | None = None
         self.completed_result: NormalizationResult | None = None
         self._last_hardware_diagnostic_checks: list[DiagnosticCheck] = []
-        self.device_panels: dict[str, HelixSettingsPanel] = {}
+        self.device_panels: dict[str, Any] = {}
         self.snapshot_count = 4
         self.preset_snapshot_positions: dict[str, int] = {}
         self._adjusted_presets: set[str] = set()
         self._preset_table_modified = False
         self._preset_table_clean_signature: tuple[tuple[str, ...], ...] = ()
         self._loaded_input_path = ""
+        self._staged_joined_setlist_path: Path | None = None
+        self._multi_hlx_output_paths_by_id: dict[int, Path] = {}
+        self._multi_hlx_input_count = 0
         self._preset_load_discard_confirmed = False
         self._manual_cell_editor: QLineEdit | None = None
         self._manual_cell_target: tuple[int, int] | None = None
@@ -322,7 +336,12 @@ class MainWindow(QMainWindow):
         self._record_off_icon = _record_icon(recording=False)
         self._ignore_reason_icons = {
             reason: _ignore_reason_icon(reason)
-            for reason in (IGNORE_REASON_PRESET, IGNORE_REASON_COMPARISON, IGNORE_REASON_REGEX)
+            for reason in (
+                IGNORE_REASON_PRESET,
+                IGNORE_REASON_COMPARISON,
+                IGNORE_REASON_REGEX,
+                IGNORE_REASON_PRESET_REGEX,
+            )
         }
         self._startup_resize_done = False
         self.settings = QSettings()
@@ -330,7 +349,6 @@ class MainWindow(QMainWindow):
         self.input_path = QLineEdit()
         self.output_path = QLineEdit()
         self.backend = QComboBox()
-        self.backend.addItems(["hardware", "loopback", "simulated"])
         self.backend.currentTextChanged.connect(self.backend_changed)
         self._build_toolbar()
         content = QWidget()
@@ -665,16 +683,19 @@ class MainWindow(QMainWindow):
     def _populate_devices(self) -> None:
         for profile in list_device_profiles():
             self.device.addItem(profile.display_name, profile.name)
-            if profile.name == "helix":
-                panel = HelixSettingsPanel(self.backend)
+            panel = create_settings_panel(profile, self.backend)
+            if panel is not None:
                 self.device_panels[profile.name] = panel
                 self.device_stack.addWidget(panel)
+        self.loading_controller.refresh_backend_choices()
 
     def browse_input(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Choose patch file", filter="Patches (*.hls *.hlx)"
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Choose patch file",
+            filter=file_type_filters.open_patch_filter_for_device(self.device.currentData()),
         )
-        self._open_input_path(path)
+        multi_hlx_workflow.open_input_paths(self._multi_hlx_window(), paths)
 
     def _recent_file_paths(self) -> list[str]:
         return recent_file_paths(self.settings)
@@ -716,6 +737,9 @@ class MainWindow(QMainWindow):
         ):
             return
         self._preset_load_discard_confirmed = True
+        self._staged_joined_setlist_path = None
+        self._multi_hlx_output_paths_by_id = {}
+        self._multi_hlx_input_count = 0
         self.input_path.setText(path)
         try:
             self.load_assignments()
@@ -736,51 +760,21 @@ class MainWindow(QMainWindow):
         return answer in {QMessageBox.StandardButton.Discard, QMessageBox.StandardButton.Yes}
 
     def _choose_save_as_path(self, *, accept_label: str = "Save as") -> Path | None:
-        suffix = Path(self.input_path.text()).suffix.lower()
-        if suffix not in {".hls", ".hlx"}:
-            self.show_error("Open a Helix .hls or .hlx file before saving")
-            return None
-        file_filter = (
-            f"Helix {suffix} (*{suffix})" if suffix in {".hls", ".hlx"} else "Patches (*.hls *.hlx)"
+        return save_dialogs.choose_save_as_path(
+            self,
+            input_path_text=self.input_path.text(),
+            device_name=self.device.currentData(),
+            show_error=self.show_error,
+            accept_label=accept_label,
         )
-        dialog = QFileDialog(self, "Save Helix file as")
-        dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setNameFilter(file_filter)
-        dialog.setLabelText(QFileDialog.DialogLabel.Accept, accept_label)
-        path = dialog.selectedFiles()[0] if dialog.exec() and dialog.selectedFiles() else ""
-        if not path:
-            return None
-        save_path = Path(path)
-        if save_path.suffix.lower() != suffix:
-            self.show_error(f"Saved file must use the {suffix} extension")
-            return None
-        return save_path
 
     def _choose_measurement_save_path(self) -> Path | None:
-        input_path = Path(self.input_path.text())
-        suffix = input_path.suffix.lower()
-        if suffix not in {".hls", ".hlx"}:
-            self.show_error("Open a Helix .hls or .hlx file before saving a measurement file")
-            return None
-        file_filter = f"Helix {suffix} (*{suffix})"
-        suggested_path = input_path.with_name(input_path.stem + "_measurement" + suffix)
-        dialog = QFileDialog(self, "Save measurement file")
-        dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setNameFilter(file_filter)
-        dialog.selectFile(str(suggested_path))
-        dialog.setLabelText(QFileDialog.DialogLabel.Accept, "Save")
-        path = dialog.selectedFiles()[0] if dialog.exec() and dialog.selectedFiles() else ""
-        if not path:
-            return None
-        save_path = Path(path)
-        if save_path.suffix.lower() != suffix:
-            self.show_error(f"Measurement file must use the {suffix} extension")
-            return None
-        return save_path
+        return save_dialogs.choose_measurement_save_path(
+            self,
+            input_path=Path(self.input_path.text()),
+            device_name=self.device.currentData(),
+            show_error=self.show_error,
+        )
 
     def browse_output(self) -> None:
         path = self._choose_save_as_path(accept_label="Save")
@@ -892,10 +886,10 @@ class MainWindow(QMainWindow):
         )
 
     def _validate_preset_table_csv_preset_name(self, name: str) -> None:
-        self._validate_helix_name(name, self._preset_name_max_length())
+        validate_preset_name_for_device(self.device.currentData(), name)
 
     def _validate_preset_table_csv_snapshot_name(self, name: str) -> None:
-        self._validate_helix_name(name, self._snapshot_name_max_length())
+        validate_subdivision_name_for_device(self.device.currentData(), name)
 
     def _is_solo_snapshot_name(self, name: str) -> bool:
         try:
@@ -1597,6 +1591,10 @@ class MainWindow(QMainWindow):
         if not self.input_path.text().strip():
             self.show_error("Open a Helix .hls or .hlx file before saving")
             return False
+        if self._multi_hlx_output_paths_by_id:
+            return multi_hlx_workflow.save_multi_hlx_files(self._multi_hlx_window())
+        if active_path == self._staged_joined_setlist_path:
+            return self.save_active_file_as()
         return self._save_to_path(active_path)
 
     def save_active_file_as(self) -> bool:
@@ -1695,11 +1693,20 @@ class MainWindow(QMainWindow):
     def _activate_saved_file_without_reloading_preset_table(self, path: Path) -> None:
         self.input_path.setText(str(path))
         self._loaded_input_path = str(path)
+        self._staged_joined_setlist_path = None
+        self._multi_hlx_output_paths_by_id = {}
+        self._multi_hlx_input_count = 0
         self._set_active_file(path)
         self._store_recent_file(path)
         self._load_metadata()
         self._reset_preset_table_modified()
         self._refresh_file_actions()
+
+    def _mark_joined_setlist_staged(self, path: Path) -> None:
+        multi_hlx_workflow.mark_joined_setlist_staged(self._multi_hlx_window(), path)
+
+    def _multi_hlx_window(self) -> multi_hlx_workflow.MultiHlxWindow:
+        return cast(multi_hlx_workflow.MultiHlxWindow, self)
 
     def _set_active_file(self, path: Path) -> None:
         self.setWindowTitle(active_file_title(path))
@@ -1714,17 +1721,13 @@ class MainWindow(QMainWindow):
             has_file=bool(self.input_path.text().strip()),
             has_loaded_file=has_loaded_file,
             preset_table_modified=self._preset_table_has_unsaved_changes(),
-            has_preset_selection=self._current_optimization_preset_selection_state(),
+            has_preset_selection=hasattr(self, "determine_parameters_button")
+            and self._has_optimization_preset_selection(),
             normalization_active=self.worker is not None,
             hardware_check_active=self.hardware_check_worker is not None,
             optimization_active=self.optimization_worker is not None,
             preflight_active=self.preflight_worker is not None,
         )
-
-    def _current_optimization_preset_selection_state(self) -> bool:
-        if not hasattr(self, "determine_parameters_button"):
-            return False
-        return self._has_optimization_preset_selection()
 
     def _apply_file_action_state(self, action_state: FileActionState) -> None:
         self._set_optional_widget_enabled("save_action", action_state.save_enabled)
@@ -1733,7 +1736,17 @@ class MainWindow(QMainWindow):
             "save_measurement_action",
             action_state.save_measurement_enabled,
         )
+        file_operations_workflow.apply_file_operation_action_state(
+            cast(file_operations_workflow.FileOperationWindow, self),
+            action_state,
+            get_profile=get_device_profile,
+            project_dir=Path(__file__).resolve().parents[3],
+        )
         self._set_optional_widget_enabled("start_button", action_state.start_enabled)
+        self._set_optional_widget_enabled(
+            "run_normalization_action",
+            action_state.start_enabled,
+        )
         self._refresh_determine_parameters_action(action_state)
         self._set_optional_widget_enabled(
             "record_output_button",
@@ -2333,6 +2346,11 @@ class MainWindow(QMainWindow):
             return
         self.preset_table_controller.refresh_all_snapshot_names()
 
+    def _refresh_all_preset_names(self) -> None:
+        if not hasattr(self, "preset_table"):
+            return
+        self.preset_table_controller.refresh_all_preset_names()
+
     def _refresh_snapshot_name_cell_widget(self, item: QTableWidgetItem) -> None:
         refresh_snapshot_name_cell_widget(
             item,
@@ -2350,14 +2368,7 @@ class MainWindow(QMainWindow):
 
     def _current_profile_name_max_length(self, attribute: str) -> int | None:
         device = self.device.currentData() if hasattr(self, "device") else None
-        if not device:
-            return None
-        try:
-            profile = get_device_profile(device)
-        except ValueError:
-            return None
-        value = getattr(profile, attribute, None)
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
+        return device_name_max_length(device, attribute)
 
     @staticmethod
     def _sanitize_helix_name(name: str, max_length: int | None = None) -> str:
@@ -2485,7 +2496,3 @@ class MainWindow(QMainWindow):
 
     def _preset_table_content_signature(self) -> tuple[tuple[str, ...], ...]:
         return self.preset_table_controller.preset_table_content_signature()
-
-
-def _append_optional_argument(argv: list[str], name: str, value: object) -> None:
-    append_optional_argument(argv, name, value)

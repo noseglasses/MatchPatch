@@ -197,6 +197,7 @@ def _state(**overrides: object) -> GuiSettingsState:
         "solo_gain_bump_db": "2.5",
         "solo_regex": "solo",
         "ignore_snapshot_regex": "",
+        "ignore_preset_regex": "",
         "snapshot_count": 4,
         "keep_temp": False,
         "device_arguments": ("--audio-device", "Helix"),

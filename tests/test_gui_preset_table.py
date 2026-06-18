@@ -122,10 +122,12 @@ from matchpatch.gui.table_roles import (
     IGNORED_SNAPSHOT_ROLE,
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_PRESET,
+    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
     MANUAL_NAME_MODIFIED_ROLE,
     MEASURED_ADJUSTMENT_ROLE,
     NORMALIZATION_FOCUS_ROLE,
+    PRESET_ORIGINAL_FILENAME_ROLE,
     PROCESSED_SNAPSHOT_ROLE,
     RECORDED_OUTPUT_PATH_ROLE,
 )
@@ -186,6 +188,22 @@ class _ControllerCallbacks:
         if max_length is not None:
             return name[:max_length]
         return name
+
+    def validate_preset_name(self, name: str) -> str:
+        return self.validate_helix_name(name, self.preset_name_max_length())
+
+    def validate_subdivision_name(self, name: str) -> str:
+        return self.validate_helix_name(name, self.snapshot_name_max_length())
+
+    def sanitize_preset_name(self, name: str) -> str:
+        max_length = self.preset_name_max_length()
+        sanitized = name.replace("%", "")
+        return sanitized[:max_length] if max_length is not None else sanitized
+
+    def sanitize_subdivision_name(self, name: str) -> str:
+        max_length = self.snapshot_name_max_length()
+        sanitized = name.replace("%", "")
+        return sanitized[:max_length] if max_length is not None else sanitized
 
     def preset_name_max_length(self) -> int | None:
         return None
@@ -359,6 +377,31 @@ def test_preset_table_controller_builds_adjustment_payload(app) -> None:
     table.close()
 
 
+def test_preset_table_controller_tracks_original_filenames(app) -> None:
+    table, callbacks = _controller_table()
+    controller = PresetTableController(table, callbacks, set())
+
+    controller.set_preset_original_filename(0, "lead.hlx")
+    controller.set_preset_original_filename(1, "")
+
+    assert controller.preset_original_filename(0) == "lead.hlx"
+    assert controller.preset_original_filename(1) is None
+    assert table.item(0, 2).data(PRESET_ORIGINAL_FILENAME_ROLE) == "lead.hlx"
+    assert controller.original_filename_map(lambda patch: {"01A": [1], "02B": [6]}[patch]) == {
+        1: "lead.hlx"
+    }
+
+    table.item(1, 1).setText("06B")
+    controller.set_preset_original_filename(1, "rhythm.hlx")
+    assert controller.preset_ids_for_rows(
+        [0, 1], lambda patch: {"01A": [1], "06B": [22]}[patch]
+    ) == [
+        1,
+        22,
+    ]
+    table.close()
+
+
 def test_preset_table_controller_lists_patch_ids_for_save_workflow(app) -> None:
     table, callbacks = _controller_table()
     controller = PresetTableController(table, callbacks, set())
@@ -411,6 +454,28 @@ def test_preset_table_controller_owns_manual_edit_rules(app) -> None:
     assert IGNORE_REASON_REGEX in snapshot_item.data(IGNORED_SNAPSHOT_REASONS_ROLE)
     assert callbacks.refresh_measurement_calls == 1
     assert callbacks.modified_values[-1] is True
+    table.close()
+
+
+def test_preset_table_controller_uses_callback_name_sanitizers(app) -> None:
+    table, callbacks = _controller_table()
+    controller = PresetTableController(table, callbacks, set())
+    callbacks.manual_checked = True
+    callbacks.snapshot_count_value = 1
+    callbacks.sanitize_preset_name = lambda name: name.replace("*", "-")
+    callbacks.sanitize_subdivision_name = lambda name: name.replace("*", "")
+
+    assert controller.finish_manual_cell_edit(0, 2, "Lead*Wide", commit=True)
+    assert table.item(0, 2).text() == "Lead-Wide"
+
+    assert controller.finish_manual_cell_edit(
+        0,
+        snapshot_name_column(0),
+        "Solo*Boost",
+        commit=True,
+    )
+    assert table.item(0, snapshot_name_column(0)).text() == "SoloBoost"
+
     table.close()
 
 
@@ -803,6 +868,48 @@ def test_ignore_snapshot_regex_marks_and_skips_default_snapshots(monkeypatch, ap
     assert adjustment.text() == "-"
     assert adjustment.data(ADJUSTMENT_VALUE_ROLE) is None
     assert 0 not in window._table_adjustments().gain_deltas["01A"]
+
+    window.close()
+
+
+def test_ignore_preset_regex_marks_and_skips_matching_preset(monkeypatch, app) -> None:
+    window = MainWindow()
+    _mock_single_hlx_handler(
+        monkeypatch,
+        name="Init Tone",
+        snapshot_names=("Verse", "Chorus"),
+        snapshot_output_levels=((0.0,), (0.0,)),
+    )
+    window.ignore_preset_regex.setText("^Init")
+    window.input_path.setText("/tmp/example.hlx")
+    window.load_assignments()
+    window.preset_table.item(0, 1).setText("01A")
+    selected = window.preset_table.item(0, 0)
+    assert selected is not None
+    selected.setCheckState(Qt.CheckState.Checked)
+
+    for snapshot in range(2):
+        item = window.preset_table.item(0, snapshot_name_column(snapshot))
+        assert item.data(IGNORED_SNAPSHOT_REASONS_ROLE) == (IGNORE_REASON_PRESET_REGEX,)
+
+    assert window._row_measured_snapshot_indexes(0) == ()
+
+    selected.setCheckState(Qt.CheckState.Unchecked)
+    name = window.preset_table.item(0, snapshot_name_column(0))
+    assert name.data(IGNORED_SNAPSHOT_REASONS_ROLE) == (
+        IGNORE_REASON_PRESET_REGEX,
+        IGNORE_REASON_PRESET,
+    )
+
+    window.ignore_preset_regex.setText("^Other")
+
+    assert name.data(IGNORED_SNAPSHOT_REASONS_ROLE) == (IGNORE_REASON_PRESET,)
+    assert window._row_measured_snapshot_indexes(0) == ()
+
+    selected.setCheckState(Qt.CheckState.Checked)
+
+    assert name.data(IGNORED_SNAPSHOT_ROLE) is None
+    assert window._row_measured_snapshot_indexes(0) == (1, 2, 3, 4)
 
     window.close()
 

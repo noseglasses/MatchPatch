@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtWidgets import QTableWidgetItem
 
 from matchpatch.devices.base import PatchFileAdjustments, normalize_regex_pattern
+from matchpatch.gui.name_rules import (
+    sanitize_preset_name_for_device,
+    sanitize_subdivision_name_for_device,
+    validate_preset_name_for_device,
+    validate_subdivision_name_for_device,
+)
 from matchpatch.gui.preset_table import (
     PresetTableCallbacks,
     refresh_adjustment_cell_widget,
@@ -22,10 +28,18 @@ from matchpatch.progress import ProgressEvent
 
 
 class MainWindowSaveCallbacks(SaveCallbacks):
-    def __init__(self, window: object) -> None:
+    def __init__(
+        self,
+        window: object,
+        *,
+        confirm_overwrite: Callable[[Path], bool] | None = None,
+    ) -> None:
         self._window: Any = window
+        self._confirm_overwrite = confirm_overwrite
 
     def confirm_overwrite(self, output_path: Path) -> bool:
+        if self._confirm_overwrite is not None:
+            return self._confirm_overwrite(output_path)
         return self._window._confirm_overwrite(output_path)
 
     def create_table_save_csv(self, directory: Path) -> Path:
@@ -58,6 +72,18 @@ class MainWindowPresetTableCallbacks(PresetTableCallbacks):
 
     def validate_helix_name(self, name: str, max_length: int | None = None) -> str:
         return self._window._validate_helix_name(name, max_length)
+
+    def validate_preset_name(self, name: str) -> str:
+        return validate_preset_name_for_device(self._window.device.currentData(), name)
+
+    def validate_subdivision_name(self, name: str) -> str:
+        return validate_subdivision_name_for_device(self._window.device.currentData(), name)
+
+    def sanitize_preset_name(self, name: str) -> str:
+        return sanitize_preset_name_for_device(self._window.device.currentData(), name)
+
+    def sanitize_subdivision_name(self, name: str) -> str:
+        return sanitize_subdivision_name_for_device(self._window.device.currentData(), name)
 
     def preset_name_max_length(self) -> int | None:
         return self._window._preset_name_max_length()
@@ -140,6 +166,13 @@ class MainWindowPresetTableCallbacks(PresetTableCallbacks):
         except re.error:
             return False
         return ignore_pattern.search(name) is not None
+
+    def is_ignored_preset_name(self, name: str) -> bool:
+        try:
+            pattern = re.compile(normalize_regex_pattern(self._window.ignore_preset_regex.text()))
+        except re.error:
+            return False
+        return bool(pattern.pattern) and pattern.search(name) is not None
 
     def refresh_measurement_time_estimate(self) -> None:
         self._window._refresh_measurement_time_estimate()

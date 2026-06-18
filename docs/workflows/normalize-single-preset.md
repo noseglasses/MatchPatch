@@ -4,6 +4,11 @@
 Use this workflow when you have one Helix `.hlx` preset instead of a full
 setlist.
 
+If you have several `.hlx` presets and want to work on them together, select all
+of those `.hlx` files in File > Open. MatchPatch will show them as a temporary
+setlist in the preset table. In that mode, Save writes the edited presets back
+to their original `.hlx` files, while Save As writes one `.hls` setlist.
+
 A single preset file does not know where it will live on the Helix. MatchPatch
 therefore needs a temporary Helix slot for measurement.
 

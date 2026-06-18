@@ -1,6 +1,7 @@
 # MatchPatch Agent Notes
 
-Python package in `src/matchpatch`; legacy Helix JSON/HLS utilities live in `Python/`.
+Python package in `src/matchpatch`; Helix JSON/HLS utilities live in
+`src/matchpatch/devices/`.
 Use existing WSL env, not bare `pytest` or a stale project `.venv`:
 
 ```bash

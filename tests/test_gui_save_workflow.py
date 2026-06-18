@@ -53,15 +53,23 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from matchpatch.devices.base import NormalizationPolicy, PatchFileAdjustments
+from matchpatch.devices.base import (
+    DeviceFileType,
+    FileOperationCapabilities,
+    NormalizationPolicy,
+    PatchFileAdjustments,
+)
 from matchpatch.diagnostics import DiagnosticCheck
 from matchpatch.gui import (
     advanced_settings,
+    file_operations_workflow,
     icons,
     loudness_widgets,
     main_window,
     measurement_optimization,
+    multi_hlx_workflow,
     results,
+    save_dialogs,
 )
 from matchpatch.gui import worker as gui_worker
 from matchpatch.gui.advanced_settings import (
@@ -185,7 +193,7 @@ def install_save_measurement_fakes(monkeypatch, output_path, request):
     SaveMeasurementFileDialog.output_path = output_path
     RecordingMeasurementHandler.created = []
     RecordingMeasurementHandler.validated = []
-    monkeypatch.setattr(main_window, "QFileDialog", SaveMeasurementFileDialog)
+    monkeypatch.setattr(save_dialogs, "QFileDialog", SaveMeasurementFileDialog)
     monkeypatch.setattr(advanced_settings, "parse_args", lambda argv: argv)
     monkeypatch.setattr(advanced_settings, "apply_config", lambda args: args)
     monkeypatch.setattr(advanced_settings, "request_from_args", lambda args: request)
@@ -359,6 +367,372 @@ def test_save_measurement_file_honors_cancelled_overwrite(tmp_path) -> None:
     assert handler.measurements == []
 
 
+class _FileOperationHandler:
+    def __init__(
+        self,
+        *,
+        capabilities: FileOperationCapabilities,
+        file_kind: str = "setlist",
+    ) -> None:
+        self._capabilities = capabilities
+        self._file_kind = file_kind
+
+    def file_capabilities(self) -> FileOperationCapabilities:
+        return self._capabilities
+
+    def file_kind(self, path: Path) -> str:
+        return self._file_kind
+
+    @staticmethod
+    def parse_patch_set(patch: str) -> list[int]:
+        return {"01A": [1], "02B": [6], "03C": [11]}[patch]
+
+
+class _FileOperationProfile:
+    def __init__(self, handler: _FileOperationHandler) -> None:
+        self.handler = handler
+
+    def create_patch_file_handler(self, project_dir: Path) -> _FileOperationHandler:
+        return self.handler
+
+
+def test_file_operation_actions_are_gated_by_capabilities_and_active_kind(
+    monkeypatch,
+    app,
+    tmp_path,
+) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hls"
+    input_path.write_text("{}", encoding="utf-8")
+    window.input_path.setText(str(input_path))
+    window._loaded_input_path = str(input_path)
+    capabilities = FileOperationCapabilities(
+        joins_presets_to_setlist=True,
+        splits_setlist_to_presets=True,
+    )
+    handler = _FileOperationHandler(capabilities=capabilities, file_kind="setlist")
+    monkeypatch.setattr(
+        main_window, "get_device_profile", lambda device: _FileOperationProfile(handler)
+    )
+
+    window._refresh_file_actions()
+
+    assert window.join_preset_files_action.isEnabled()
+    assert window.split_setlist_action.isEnabled()
+
+    handler._file_kind = "preset"
+    window._refresh_file_actions()
+
+    assert window.join_preset_files_action.isEnabled()
+    assert not window.split_setlist_action.isEnabled()
+
+    handler._capabilities = FileOperationCapabilities()
+    window._refresh_file_actions()
+
+    assert not window.join_preset_files_action.isEnabled()
+    assert not window.split_setlist_action.isEnabled()
+    window.close()
+
+
+def test_join_preset_files_action_calls_workflow_and_opens_staged_setlist(
+    monkeypatch,
+    app,
+    tmp_path,
+) -> None:
+    window = MainWindow()
+    preset_paths = [tmp_path / "lead.hlx", tmp_path / "rhythm.hlx"]
+    staged_path = tmp_path / "joined.hls"
+    opened_paths: list[str] = []
+    staged_paths: list[Path] = []
+    calls = []
+    monkeypatch.setattr(
+        file_operations_workflow,
+        "choose_join_preset_paths",
+        lambda parent, file_types=(): preset_paths,
+    )
+    monkeypatch.setattr(
+        file_operations_workflow,
+        "temporary_join_output_path",
+        lambda file_types=(): staged_path,
+    )
+    monkeypatch.setattr(window, "_open_input_path", opened_paths.append)
+    monkeypatch.setattr(window, "_mark_joined_setlist_staged", staged_paths.append)
+
+    def join_preset_files(
+        device,
+        selected_preset_paths,
+        selected_output_path,
+        *,
+        log_callback=None,
+    ):
+        calls.append((device, selected_preset_paths, selected_output_path, log_callback))
+        log_callback("[OK] Joined 2 presets into staged.hls")
+        return file_operations_workflow.file_operations.JoinPresetFilesResult(
+            output_path=selected_output_path
+        )
+
+    monkeypatch.setattr(
+        file_operations_workflow.file_operations,
+        "join_preset_files",
+        join_preset_files,
+    )
+
+    assert file_operations_workflow.join_preset_files(window)
+
+    assert len(calls) == 1
+    device, selected_preset_paths, selected_output_path, log_callback = calls[0]
+    assert (device, selected_preset_paths, selected_output_path) == (
+        "helix",
+        preset_paths,
+        staged_path,
+    )
+    assert log_callback is not None
+    assert any("[OK] Joined 2 presets into staged.hls" in entry[2] for entry in window.log_entries)
+    assert opened_paths == [str(staged_path)]
+    assert staged_paths == [staged_path]
+    window.close()
+
+
+def test_input_browse_uses_device_file_type_filter(monkeypatch, app) -> None:
+    window = MainWindow()
+    filters = []
+
+    class Handler:
+        @staticmethod
+        def file_types():
+            return (
+                DeviceFileType("setlist", (".setlist",), "Fake setlist"),
+                DeviceFileType("preset", (".preset",), "Fake preset"),
+            )
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    monkeypatch.setattr(
+        main_window.file_type_filters,
+        "get_device_profile",
+        lambda device: Profile(),
+    )
+
+    def get_open_file_names(*args, **kwargs):
+        filters.append(kwargs["filter"])
+        return [], ""
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", get_open_file_names)
+
+    window.browse_input()
+
+    assert filters == ["Patches (*.setlist *.preset)"]
+    window.close()
+
+
+def test_input_browse_rejects_mixed_multi_selection(monkeypatch, app) -> None:
+    window = MainWindow()
+    errors = []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileNames",
+        lambda *args, **kwargs: (["/tmp/one.hlx", "/tmp/set.hls"], ""),
+    )
+    monkeypatch.setattr(window, "show_error", errors.append)
+
+    window.browse_input()
+
+    assert errors == [
+        "Select either one .hls setlist, one .hlx preset, or multiple .hlx presets. "
+        "Do not mix .hls and .hlx files."
+    ]
+    window.close()
+
+
+def test_input_browse_multiple_hlx_joins_and_loads_staged_setlist(
+    monkeypatch,
+    app,
+    tmp_path,
+) -> None:
+    window = MainWindow()
+    preset_paths = [tmp_path / "lead.hlx", tmp_path / "rhythm.hlx"]
+    staged_path = tmp_path / "joined.hls"
+    opened_paths = []
+    staged_calls = []
+    calls = []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileNames",
+        lambda *args, **kwargs: ([str(path) for path in preset_paths], ""),
+    )
+    monkeypatch.setattr(
+        file_operations_workflow,
+        "temporary_join_output_path",
+        lambda file_types=(): staged_path,
+    )
+    monkeypatch.setattr(window, "_open_input_path", opened_paths.append)
+    monkeypatch.setattr(
+        multi_hlx_workflow,
+        "mark_multi_hlx_setlist_staged",
+        lambda *args: staged_calls.append(args),
+    )
+
+    def join_preset_files(device, selected_preset_paths, output_path, *, log_callback=None):
+        calls.append((device, selected_preset_paths, output_path, log_callback))
+        return file_operations_workflow.file_operations.JoinPresetFilesResult(output_path)
+
+    monkeypatch.setattr(multi_hlx_workflow.file_operations, "join_preset_files", join_preset_files)
+
+    window.browse_input()
+
+    assert len(calls) == 1
+    device, selected_preset_paths, output_path, log_callback = calls[0]
+    assert (device, selected_preset_paths, output_path) == ("helix", preset_paths, staged_path)
+    assert log_callback is not None
+    assert opened_paths == [str(staged_path)]
+    assert staged_calls == [(window, staged_path, preset_paths)]
+    window.close()
+
+
+def test_join_dialogs_use_device_file_type_filters(monkeypatch, app, tmp_path) -> None:
+    window = MainWindow()
+    preset_paths = [tmp_path / "lead.preset"]
+    staged_path = tmp_path / "joined.setlist"
+    filters = []
+
+    class Handler:
+        @staticmethod
+        def file_types():
+            return (
+                DeviceFileType("setlist", (".setlist",), "Fake setlist"),
+                DeviceFileType("preset", (".preset",), "Fake preset"),
+            )
+
+    class Profile:
+        @staticmethod
+        def create_patch_file_handler(project_dir):
+            return Handler()
+
+    monkeypatch.setattr(file_operations_workflow, "get_device_profile", lambda device: Profile())
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileNames",
+        lambda *args, **kwargs: filters.append(kwargs["filter"]) or ([str(preset_paths[0])], ""),
+    )
+    monkeypatch.setattr(
+        file_operations_workflow,
+        "temporary_join_output_path",
+        lambda file_types=(): staged_path,
+    )
+    monkeypatch.setattr(window, "_open_input_path", lambda path: None)
+    monkeypatch.setattr(window, "_mark_joined_setlist_staged", lambda path: None)
+    monkeypatch.setattr(
+        file_operations_workflow.file_operations,
+        "join_preset_files",
+        lambda device, selected_preset_paths, selected_output_path, **kwargs: (
+            file_operations_workflow.file_operations.JoinPresetFilesResult(
+                output_path=selected_output_path
+            )
+        ),
+    )
+
+    assert file_operations_workflow.join_preset_files(window)
+
+    assert filters == ["Preset files (*.preset)"]
+    window.close()
+
+
+def test_split_setlist_action_passes_selected_ids_and_original_filename_map(
+    monkeypatch,
+    app,
+    tmp_path,
+) -> None:
+    window = MainWindow()
+    input_path = tmp_path / "input.hls"
+    output_dir = tmp_path / "split"
+    created_paths = [output_dir / "rhythm.hlx"]
+    window.input_path.setText(str(input_path))
+    window._loaded_input_path = str(input_path)
+    window.preset_table.setRowCount(0)
+    for row, patch in enumerate(("01A", "02B", "03C")):
+        window.preset_table.insertRow(row)
+        window.preset_table.setItem(row, 1, QTableWidgetItem(patch))
+        window.preset_table.setItem(row, 2, QTableWidgetItem(f"Preset {patch}"))
+        window.preset_table.setItem(row, 3, QTableWidgetItem("Snap"))
+    window.preset_table_controller.set_preset_original_filename(0, "lead.hlx")
+    window.preset_table_controller.set_preset_original_filename(1, "rhythm.hlx")
+    window.preset_table.selectRow(1)
+    handler = _FileOperationHandler(
+        capabilities=FileOperationCapabilities(splits_setlist_to_presets=True),
+    )
+    monkeypatch.setattr(
+        main_window, "get_device_profile", lambda device: _FileOperationProfile(handler)
+    )
+    monkeypatch.setattr(
+        file_operations_workflow, "choose_split_output_dir", lambda parent: output_dir
+    )
+    calls = []
+
+    def split_setlist_file(
+        device,
+        selected_input_path,
+        selected_output_dir,
+        *,
+        selected_ids=None,
+        original_filenames=None,
+        log_callback=None,
+    ):
+        calls.append(
+            (
+                device,
+                selected_input_path,
+                selected_output_dir,
+                selected_ids,
+                original_filenames,
+                log_callback,
+            )
+        )
+        return file_operations_workflow.file_operations.SplitSetlistFileResult(
+            created_paths=created_paths
+        )
+
+    monkeypatch.setattr(
+        file_operations_workflow.file_operations,
+        "split_setlist_file",
+        split_setlist_file,
+    )
+
+    assert file_operations_workflow.split_setlist(
+        window,
+        get_profile=main_window.get_device_profile,
+        project_dir=Path(main_window.__file__).resolve().parents[3],
+    )
+
+    assert len(calls) == 1
+    (
+        device,
+        selected_input_path,
+        selected_output_dir,
+        selected_ids,
+        original_filenames,
+        log_callback,
+    ) = calls[0]
+    assert (
+        device,
+        selected_input_path,
+        selected_output_dir,
+        selected_ids,
+        original_filenames,
+    ) == (
+        "helix",
+        input_path,
+        output_dir,
+        [6],
+        {1: "lead.hlx", 6: "rhythm.hlx"},
+    )
+    assert log_callback is not None
+    assert any(str(created_paths[0].resolve()) in entry[2] for entry in window.log_entries)
+    window.close()
+
+
 def test_completion_enables_save_and_shows_success_popup(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     window.input_path.setText(str(tmp_path / "input.hls"))
@@ -434,6 +808,10 @@ def test_discarding_before_normalization_preserves_preset_selection(
     input_path.write_text("{}", encoding="utf-8")
 
     class Handler:
+        @staticmethod
+        def file_kind(path):
+            return "setlist"
+
         @staticmethod
         def validate_input(path):
             return None
@@ -529,7 +907,7 @@ def test_save_as_uses_file_selection_dialog(monkeypatch, app) -> None:
         def selectedFiles():
             return ["/tmp/output.hls"]
 
-    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
+    monkeypatch.setattr(save_dialogs, "QFileDialog", FileDialog)
     monkeypatch.setattr(
         window,
         "_save_to_path",
@@ -546,6 +924,135 @@ def test_save_as_uses_file_selection_dialog(monkeypatch, app) -> None:
         ("name_filter", "Helix .hls (*.hls)"),
         ("label", FileDialog.DialogLabel.Accept, "Save as"),
     ]
+    window.close()
+
+
+def test_save_active_file_routes_staged_join_to_save_as(monkeypatch, app, tmp_path) -> None:
+    window = MainWindow()
+    staged_path = tmp_path / "matchpatch_joined.hls"
+    window.input_path.setText(str(staged_path))
+    window._staged_joined_setlist_path = staged_path
+    calls = []
+    monkeypatch.setattr(window, "save_active_file_as", lambda: calls.append("save_as") or True)
+
+    assert window.save_active_file()
+
+    assert calls == ["save_as"]
+    window.close()
+
+
+def test_save_active_file_with_multiple_hlx_writes_original_presets(
+    monkeypatch,
+    app,
+    tmp_path,
+) -> None:
+    window = MainWindow()
+    active_setlist = tmp_path / "active.hls"
+    active_setlist.write_text("old setlist", encoding="utf-8")
+    lead_path = tmp_path / "lead.hlx"
+    rhythm_path = tmp_path / "rhythm.hlx"
+    lead_path.write_text("old lead", encoding="utf-8")
+    rhythm_path.write_text("old rhythm", encoding="utf-8")
+    window.input_path.setText(str(active_setlist))
+    window._loaded_input_path = str(active_setlist)
+    window._multi_hlx_output_paths_by_id = {1: lead_path, 6: rhythm_path}
+    window._multi_hlx_input_count = 2
+    window._mark_preset_table_modified()
+    split_calls = []
+    monkeypatch.setattr(
+        multi_hlx_workflow,
+        "confirm_multi_hlx_overwrites",
+        lambda window, paths: True,
+    )
+    monkeypatch.setattr(
+        multi_hlx_workflow,
+        "save_table_to_temporary_setlist",
+        lambda window, output_path: output_path.write_text("new setlist", encoding="utf-8") or True,
+    )
+
+    def split_setlist_file(
+        device,
+        input_path,
+        output_dir,
+        *,
+        selected_ids=None,
+        original_filenames=None,
+        log_callback=None,
+    ):
+        split_calls.append((device, input_path, output_dir, selected_ids, original_filenames))
+        output_dir.mkdir(parents=True)
+        created = []
+        for preset_id, filename in original_filenames.items():
+            output_path = output_dir / filename
+            output_path.write_text(f"new {preset_id}", encoding="utf-8")
+            created.append(output_path)
+        return multi_hlx_workflow.file_operations.SplitSetlistFileResult(created)
+
+    monkeypatch.setattr(
+        multi_hlx_workflow.file_operations,
+        "split_setlist_file",
+        split_setlist_file,
+    )
+
+    assert window.save_active_file()
+
+    assert lead_path.read_text(encoding="utf-8") == "new 1"
+    assert rhythm_path.read_text(encoding="utf-8") == "new 6"
+    assert active_setlist.read_text(encoding="utf-8") == "new setlist"
+    assert not window._preset_table_has_unsaved_changes()
+    assert split_calls[0][3] == [1, 6]
+    assert split_calls[0][4] == {1: "001_lead.hlx", 6: "006_rhythm.hlx"}
+    window.close()
+
+
+def test_multi_hlx_overwrite_prompt_can_apply_to_all(monkeypatch, app, tmp_path) -> None:
+    window = MainWindow()
+    first = tmp_path / "first.hlx"
+    second = tmp_path / "second.hlx"
+    first.touch()
+    second.touch()
+    prompts = []
+
+    class FakeMessageBox:
+        StandardButton = QMessageBox.StandardButton
+
+        def __init__(self, parent):
+            self.parent = parent
+            self.checkbox = None
+            self.overwrite_button = object()
+            prompts.append(self)
+
+        def setWindowTitle(self, title):
+            self.title = title
+
+        def setText(self, text):
+            self.text = text
+
+        def addButton(self, button):
+            if button == QMessageBox.StandardButton.Yes:
+                return self.overwrite_button
+            return object()
+
+        def setDefaultButton(self, button):
+            self.default_button = button
+
+        def setCheckBox(self, checkbox):
+            self.checkbox = checkbox
+            checkbox.setChecked(True)
+
+        def exec(self):
+            return None
+
+        def clickedButton(self):
+            return self.overwrite_button
+
+    monkeypatch.setattr(multi_hlx_workflow, "QMessageBox", FakeMessageBox)
+
+    assert multi_hlx_workflow.confirm_multi_hlx_overwrites(window, [first, second])
+
+    assert len(prompts) == 1
+    assert prompts[0].checkbox is not None
+    assert prompts[0].checkbox.text() == "I do not want to be asked again, overwrite them all"
     window.close()
 
 
@@ -592,7 +1099,7 @@ def test_save_measurement_dialog_uses_loaded_suffix_and_save_label(
         def selectedFiles(self):
             return [str(output_path)]
 
-    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
+    monkeypatch.setattr(save_dialogs, "QFileDialog", FileDialog)
     window.input_path.setText(str(input_path))
 
     assert window._choose_measurement_save_path() == output_path
@@ -673,7 +1180,7 @@ def test_save_measurement_file_rejects_mismatched_suffix(tmp_path, monkeypatch, 
         def selectedFiles(self):
             return [str(output_path)]
 
-    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
+    monkeypatch.setattr(save_dialogs, "QFileDialog", FileDialog)
     monkeypatch.setattr(window, "show_error", errors.append)
     window.input_path.setText(str(input_path))
 
@@ -692,6 +1199,10 @@ def test_single_preset_save_as_preserves_preset_table_state(tmp_path, monkeypatc
     exports = []
 
     class Handler:
+        @staticmethod
+        def file_kind(path):
+            return "preset"
+
         @staticmethod
         def validate_input(path):
             return None
@@ -758,6 +1269,10 @@ def test_saving_table_changes_preserves_preset_selection(tmp_path, monkeypatch, 
     csv_path.touch()
 
     class Handler:
+        @staticmethod
+        def file_kind(path):
+            return "setlist"
+
         @staticmethod
         def validate_input(path):
             return None
@@ -861,7 +1376,7 @@ def test_output_save_picker_uses_save_button(monkeypatch, app) -> None:
         def selectedFiles():
             return [str(Path("/tmp/output.hls"))]
 
-    monkeypatch.setattr(main_window, "QFileDialog", FileDialog)
+    monkeypatch.setattr(save_dialogs, "QFileDialog", FileDialog)
 
     window.browse_output()
 
