@@ -1006,7 +1006,7 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
     _FakeSaveChangesMessageBox.next_click = next(answers)
     window.browse_input()
 
-    assert window.input_path.text() == "/tmp/new.hlx"
+    assert window.input_path.text() == str(Path("/tmp/new.hlx"))
     assert window.preset_table.rowCount() == 1
     assert window.preset_table.item(0, 1).text() == ""
     assert window.preset_table.item(0, 2).text() == "New"
@@ -1042,7 +1042,7 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
 
     window.browse_input()
 
-    assert window.input_path.text() == "/tmp/new.hlx"
+    assert window.input_path.text() == str(Path("/tmp/new.hlx"))
 
     window.close()
 

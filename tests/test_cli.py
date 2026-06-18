@@ -116,7 +116,7 @@ def test_files_split_command_dispatches_file_operation(monkeypatch, capsys) -> N
     assert calls == [("helix", Path("setlist.hls"), Path("presets"), [1])]
     output = capsys.readouterr().out
     assert "Split 1 preset files into presets" in output
-    assert "presets/Lead.hlx" in output
+    assert str(Path("presets") / "Lead.hlx") in output
 
 
 def test_environment_command_prints_runtime(monkeypatch, capsys) -> None:
