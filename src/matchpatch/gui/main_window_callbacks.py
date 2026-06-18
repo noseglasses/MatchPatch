@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtWidgets import QTableWidgetItem
 
@@ -28,10 +28,18 @@ from matchpatch.progress import ProgressEvent
 
 
 class MainWindowSaveCallbacks(SaveCallbacks):
-    def __init__(self, window: object) -> None:
+    def __init__(
+        self,
+        window: object,
+        *,
+        confirm_overwrite: Callable[[Path], bool] | None = None,
+    ) -> None:
         self._window: Any = window
+        self._confirm_overwrite = confirm_overwrite
 
     def confirm_overwrite(self, output_path: Path) -> bool:
+        if self._confirm_overwrite is not None:
+            return self._confirm_overwrite(output_path)
         return self._window._confirm_overwrite(output_path)
 
     def create_table_save_csv(self, directory: Path) -> Path:

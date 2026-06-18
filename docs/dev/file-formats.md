@@ -55,6 +55,12 @@ measurement therefore requires exactly one `--preset-set`/`-S` value, such as
 `12A`, so the worker knows which temporary Helix slot to steer during
 measurement.
 
+The GUI can open several `.hlx` files in one File > Open selection. That mode is
+implemented by joining the selected presets into a temporary `.hls` setlist so
+the existing preset-table and measurement workflow can operate on the group.
+Saving with Save splits the temporary setlist back into the original `.hlx`
+files. Saving with Save As writes the temporary setlist as a normal `.hls` file.
+
 ## Unpacked `.json`
 
 The Helix utility can also read and write unpacked JSON for selected

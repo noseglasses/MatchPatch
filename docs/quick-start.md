@@ -12,7 +12,9 @@ Helix results, use hardware mode.
 - Have a reference DI WAV ready, or use the default one.
 - Decide which file you are working on:
   - `.hls` for a setlist;
-  - `.hlx` for one preset.
+  - one `.hlx` for one preset;
+  - several `.hlx` files when you want MatchPatch to show them together as a
+    temporary setlist.
 - Decide which backend to use:
   - loopback for a safe no-hardware test;
   - hardware for real Helix measurement.
@@ -31,7 +33,7 @@ Loopback is the easiest way to learn MatchPatch. It does not measure your Helix,
 but it lets you practice the full GUI flow.
 
 1. Open MatchPatch.
-2. Open a Helix `.hls` setlist or `.hlx` preset.
+2. Open a Helix `.hls` setlist, one `.hlx` preset, or several `.hlx` presets.
 3. Open Advanced.
 4. Go to the Device tab.
 5. Set Backend to `loopback`.
@@ -55,7 +57,7 @@ Use hardware mode when you are ready to measure the Helix.
 
 1. Connect and power on the Helix.
 2. Open MatchPatch.
-3. Open your `.hls` setlist or `.hlx` preset.
+3. Open your `.hls` setlist, one `.hlx` preset, or several `.hlx` presets.
 4. Open Advanced > Device.
 5. Set Backend to `hardware`.
 6. Check audio routing and MIDI steering.
@@ -65,7 +67,8 @@ Use hardware mode when you are ready to measure the Helix.
 10. Click Start normalization.
 11. Follow any import prompts.
 12. Review the result table.
-13. Click Save As and save an adjusted file.
+13. Click Save As and save an adjusted file, or click Save when you opened
+    several `.hlx` files and want to overwrite those original preset files.
 14. Import the adjusted file into the Helix.
 15. Listen through the presets and snapshots.
 

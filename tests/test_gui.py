@@ -345,7 +345,41 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert window.preset_advanced_splitter.widget(0) is window.presets
     assert window.preset_advanced_splitter.widget(1) is window.advanced
     assert window.content.layout().indexOf(window.preset_advanced_splitter) == 0
-    assert not window.findChildren(QMenuBar)
+    menu_bar = window.menuBar()
+    assert isinstance(menu_bar, QMenuBar)
+    assert [action.text() for action in menu_bar.actions()] == ["File", "Run", "Help"]
+    file_menu = menu_bar.actions()[0].menu()
+    run_menu = menu_bar.actions()[1].menu()
+    help_menu = menu_bar.actions()[2].menu()
+    assert file_menu is not None
+    assert run_menu is not None
+    assert help_menu is not None
+    assert [action.text() for action in file_menu.actions() if not action.isSeparator()] == [
+        "Open",
+        "Save",
+        "Save As",
+        "Save Measurement File",
+        "Split Setlist",
+        "Exit",
+    ]
+    assert file_menu.actions()[-1] is window.exit_action
+    assert [action.text() for action in run_menu.actions()] == ["Normalize"]
+    assert run_menu.actions()[0] is window.run_normalization_action
+    assert [action.text() for action in help_menu.actions()] == ["Help", "About"]
+    assert help_menu.actions()[0] is window.help_action
+    assert help_menu.actions()[1] is window.about_action
+    for action in (
+        window.open_action,
+        window.save_action,
+        window.save_as_action,
+        window.save_measurement_action,
+        window.split_setlist_action,
+        window.exit_action,
+        window.run_normalization_action,
+        window.help_action,
+        window.about_action,
+    ):
+        assert not action.icon().isNull()
     toolbar = window.findChildren(QToolBar)[0]
     toolbar_actions = [
         action for action in toolbar.actions() if action.text() and not action.isSeparator()
@@ -355,13 +389,11 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
         "Save",
         "Save As",
         "Save Measurement File",
-        "Join Preset Files",
-        "Split Setlist",
         "Help",
         "About",
     ]
     assert toolbar.actions().index(window.normalization_separator_action) == (
-        toolbar.actions().index(window.split_setlist_action) + 1
+        toolbar.actions().index(window.save_measurement_action) + 1
     )
     assert toolbar.actions().index(window.save_measurement_action) == (
         toolbar.actions().index(window.save_as_action) + 1
@@ -460,6 +492,7 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.save_as_action.isEnabled()
     assert not window.save_measurement_action.isEnabled()
     assert not window.start_button.isEnabled()
+    assert not window.run_normalization_action.isEnabled()
     assert not window.determine_parameters_button.isEnabled()
     assert not window.determine_parameters_hint.isHidden()
     assert "Open a Helix file" in window.determine_parameters_hint.text()
@@ -964,8 +997,8 @@ def test_input_browse_prompts_before_discarding_preset_adjustments(monkeypatch, 
     answers = iter([QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Discard])
     monkeypatch.setattr(
         QFileDialog,
-        "getOpenFileName",
-        lambda *args, **kwargs: ("/tmp/new.hlx", ""),
+        "getOpenFileNames",
+        lambda *args, **kwargs: (["/tmp/new.hlx"], ""),
     )
     monkeypatch.setattr(main_window, "QMessageBox", _FakeSaveChangesMessageBox)
     _FakeSaveChangesMessageBox.instances = []
@@ -1004,8 +1037,8 @@ def test_input_browse_does_not_prompt_for_clean_preset_table(monkeypatch, app) -
     window.input_path.setText("/tmp/original.hls")
     monkeypatch.setattr(
         QFileDialog,
-        "getOpenFileName",
-        lambda *args, **kwargs: ("/tmp/new.hlx", ""),
+        "getOpenFileNames",
+        lambda *args, **kwargs: (["/tmp/new.hlx"], ""),
     )
     monkeypatch.setattr(
         QMessageBox,
@@ -1028,8 +1061,8 @@ def test_startup_open_button_loads_like_toolbar_open(tmp_path, monkeypatch, app)
     path = str(input_file)
     monkeypatch.setattr(
         QFileDialog,
-        "getOpenFileName",
-        lambda *args, **kwargs: (path, ""),
+        "getOpenFileNames",
+        lambda *args, **kwargs: ([path], ""),
     )
 
     window.preset_empty_open_button.click()

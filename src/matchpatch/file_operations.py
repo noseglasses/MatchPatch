@@ -28,10 +28,12 @@ def join_preset_files(
     output_path: Path,
     *,
     slot_ids: list[int] | None = None,
+    log_callback: Callable[[str], None] | None = None,
     get_profile: Callable[[str], DeviceProfile] = get_device_profile,
 ) -> JoinPresetFilesResult:
     profile = get_profile(device)
     handler = profile.create_patch_file_handler(PROJECT_DIR)
+    handler.set_log_callback(log_callback)
     capabilities = handler.file_capabilities()
 
     if not capabilities.joins_presets_to_setlist:
@@ -54,10 +56,12 @@ def split_setlist_file(
     *,
     selected_ids: list[int] | None = None,
     original_filenames: Mapping[int, str] | None = None,
+    log_callback: Callable[[str], None] | None = None,
     get_profile: Callable[[str], DeviceProfile] = get_device_profile,
 ) -> SplitSetlistFileResult:
     profile = get_profile(device)
     handler = profile.create_patch_file_handler(PROJECT_DIR)
+    handler.set_log_callback(log_callback)
     capabilities = handler.file_capabilities()
 
     if not capabilities.splits_setlist_to_presets:

@@ -22,7 +22,9 @@ Useful background:
 ## Steps
 
 1. Open MatchPatch.
-2. Open your `.hls` setlist.
+2. Open your `.hls` setlist. You may also select several `.hlx` preset files
+   together; MatchPatch will show them as one temporary setlist in the preset
+   table.
 3. Wait for the preset table to appear.
 4. Review the listed presets. MatchPatch shows only non-empty presets.
 5. Choose which presets to measure:
@@ -47,6 +49,26 @@ Useful background:
 18. Listen through the setlist in a real playing context.
 
 ![Loaded setlist with selected presets](../assets/screenshots/loaded-setlist.png)
+
+
+## Opening Several `.hlx` Presets
+
+Use File > Open and select more than one `.hlx` file when you want to work on
+separate preset files as a group. MatchPatch joins them into a temporary setlist
+view for the table and for measurement.
+
+Selection rules:
+
+- several selected files must all be `.hlx` presets;
+- one `.hls` setlist can be opened by itself;
+- `.hls` and `.hlx` files cannot be mixed in one Open selection.
+
+Save behavior is different for this mode:
+
+- Save writes each edited preset back to the original `.hlx` file it came from;
+- the first overwrite prompt includes an "overwrite them all" checkbox so you
+  can approve the whole batch;
+- Save As writes one `.hls` setlist containing all open presets.
 
 
 (help-preset-table-legend)=

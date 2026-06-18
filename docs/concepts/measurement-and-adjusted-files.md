@@ -59,12 +59,19 @@ In the GUI:
 
 Use Save As when you want to keep the original file untouched.
 
+When several `.hlx` presets are opened together, MatchPatch treats them as a
+temporary setlist while you work. Save writes the edited presets back to their
+original `.hlx` files. Save As writes one new `.hls` setlist containing all open
+presets.
+
 ## File Extensions
 
 The output file should keep the same extension as the input:
 
 - `.hls` setlists save as `.hls`;
 - `.hlx` presets save as `.hlx`.
+- multiple `.hlx` presets opened together save back to multiple `.hlx` files
+  with Save, but Save As uses `.hls`.
 
 MatchPatch will warn you if the extension does not match.
 

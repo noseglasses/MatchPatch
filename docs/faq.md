@@ -139,6 +139,17 @@ during measurement.
 
 See [Normalize A Single Preset](workflows/normalize-single-preset.md).
 
+## Can I Open Several `.hlx` Presets Together?
+
+Yes. Use File > Open and select only `.hlx` files. MatchPatch shows those
+presets together as a temporary setlist in the preset table.
+
+Save overwrites the original `.hlx` files. The first overwrite prompt lets you
+approve overwriting the rest of the batch. Save As writes one `.hls` setlist
+instead.
+
+Do not mix `.hlx` and `.hls` files in one Open selection.
+
 ## Should I Normalize Before Or After Rehearsal?
 
 Both can help.

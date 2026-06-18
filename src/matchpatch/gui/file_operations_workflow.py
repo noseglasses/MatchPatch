@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -45,6 +46,8 @@ class FileOperationWindow(Protocol):
     def _log(self, message: str, level: str) -> None: ...
 
     def _open_input_path(self, path: str) -> None: ...
+
+    def _mark_joined_setlist_staged(self, path: Path) -> None: ...
 
     def _set_optional_widget_enabled(self, name: str, enabled: bool) -> None: ...
 
@@ -132,6 +135,21 @@ def choose_join_output_path(
     return output_path if output_path.suffix.lower() == suffix else output_path.with_suffix(suffix)
 
 
+def temporary_join_output_path(
+    file_types: Iterable[DeviceFileType] = (),
+) -> Path:
+    suffix = _kind_extension(file_types, "setlist", ".hls")
+    temporary = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        prefix="matchpatch_joined_",
+        suffix=suffix,
+        delete=False,
+    )
+    temporary.close()
+    return Path(temporary.name)
+
+
 def choose_split_output_dir(parent: QWidget) -> Path | None:
     path = QFileDialog.getExistingDirectory(parent, "Choose split output directory")
     return Path(path) if path else None
@@ -167,22 +185,26 @@ def join_preset_files(window: FileOperationWindow) -> bool:
     preset_paths = choose_join_preset_paths(parent, file_types)
     if not preset_paths:
         return False
-    output_path = choose_join_output_path(parent, file_types)
-    if output_path is None:
-        return False
+    output_path = temporary_join_output_path(file_types)
 
     try:
         result = file_operations.join_preset_files(
             window.device.currentData(),
             preset_paths,
             output_path,
+            log_callback=lambda message: window._log(message, "info"),
         )
     except Exception as exc:  # noqa: BLE001
+        output_path.unlink(missing_ok=True)
         window.show_error(str(exc))
         return False
 
-    window._log(f"Joined preset files: {result.output_path.resolve()}", "success")
+    window._log(
+        f"Joined {len(preset_paths)} preset file(s) into the preset table",
+        "success",
+    )
     window._open_input_path(str(result.output_path))
+    window._mark_joined_setlist_staged(result.output_path)
     return True
 
 
@@ -217,6 +239,7 @@ def split_setlist(
             output_dir,
             selected_ids=selected_ids,
             original_filenames=filenames,
+            log_callback=lambda message: window._log(message, "info"),
         )
     except Exception as exc:  # noqa: BLE001
         window.show_error(str(exc))

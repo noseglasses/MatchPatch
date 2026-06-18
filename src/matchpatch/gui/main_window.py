@@ -70,7 +70,14 @@ from matchpatch.diagnostics import (
     write_diagnostic_bundle,
 )
 from matchpatch.gui import diagnostics_panel as gui_diagnostics
-from matchpatch.gui import file_operations_workflow, file_type_filters, window_layout, window_state
+from matchpatch.gui import (
+    file_operations_workflow,
+    file_type_filters,
+    multi_hlx_workflow,
+    save_dialogs,
+    window_layout,
+    window_state,
+)
 from matchpatch.gui import help as gui_help
 from matchpatch.gui.advanced_settings import (
     GuiSettingsBinder,
@@ -224,7 +231,6 @@ _preflight_headline = gui_diagnostics.preflight_headline
 
 __all__ = ["MainWindow"]
 
-RECENT_FILES_SETTINGS_KEY = window_state.RECENT_FILES_SETTINGS_KEY
 MAX_RECENT_FILES = window_state.MAX_RECENT_FILES
 TOOLBAR_VERTICAL_PADDING = window_layout.TOOLBAR_VERTICAL_PADDING
 
@@ -275,6 +281,9 @@ class MainWindow(QMainWindow):
         self._preset_table_modified = False
         self._preset_table_clean_signature: tuple[tuple[str, ...], ...] = ()
         self._loaded_input_path = ""
+        self._staged_joined_setlist_path: Path | None = None
+        self._multi_hlx_output_paths_by_id: dict[int, Path] = {}
+        self._multi_hlx_input_count = 0
         self._preset_load_discard_confirmed = False
         self._manual_cell_editor: QLineEdit | None = None
         self._manual_cell_target: tuple[int, int] | None = None
@@ -681,12 +690,12 @@ class MainWindow(QMainWindow):
         self.loading_controller.refresh_backend_choices()
 
     def browse_input(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Choose patch file",
             filter=file_type_filters.open_patch_filter_for_device(self.device.currentData()),
         )
-        self._open_input_path(path)
+        multi_hlx_workflow.open_input_paths(self._multi_hlx_window(), paths)
 
     def _recent_file_paths(self) -> list[str]:
         return recent_file_paths(self.settings)
@@ -728,6 +737,9 @@ class MainWindow(QMainWindow):
         ):
             return
         self._preset_load_discard_confirmed = True
+        self._staged_joined_setlist_path = None
+        self._multi_hlx_output_paths_by_id = {}
+        self._multi_hlx_input_count = 0
         self.input_path.setText(path)
         try:
             self.load_assignments()
@@ -748,49 +760,21 @@ class MainWindow(QMainWindow):
         return answer in {QMessageBox.StandardButton.Discard, QMessageBox.StandardButton.Yes}
 
     def _choose_save_as_path(self, *, accept_label: str = "Save as") -> Path | None:
-        suffix = Path(self.input_path.text()).suffix.lower()
-        file_filter = file_type_filters.helix_save_file_filter(self.device.currentData(), suffix)
-        if file_filter is None:
-            self.show_error("Open a Helix .hls or .hlx file before saving")
-            return None
-        dialog = QFileDialog(self, "Save Helix file as")
-        dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setNameFilter(file_filter)
-        dialog.setLabelText(QFileDialog.DialogLabel.Accept, accept_label)
-        path = dialog.selectedFiles()[0] if dialog.exec() and dialog.selectedFiles() else ""
-        if not path:
-            return None
-        save_path = Path(path)
-        if save_path.suffix.lower() != suffix:
-            self.show_error(f"Saved file must use the {suffix} extension")
-            return None
-        return save_path
+        return save_dialogs.choose_save_as_path(
+            self,
+            input_path_text=self.input_path.text(),
+            device_name=self.device.currentData(),
+            show_error=self.show_error,
+            accept_label=accept_label,
+        )
 
     def _choose_measurement_save_path(self) -> Path | None:
-        input_path = Path(self.input_path.text())
-        suffix = input_path.suffix.lower()
-        file_filter = file_type_filters.helix_save_file_filter(self.device.currentData(), suffix)
-        if file_filter is None:
-            self.show_error("Open a Helix .hls or .hlx file before saving a measurement file")
-            return None
-        suggested_path = input_path.with_name(input_path.stem + "_measurement" + suffix)
-        dialog = QFileDialog(self, "Save measurement file")
-        dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setNameFilter(file_filter)
-        dialog.selectFile(str(suggested_path))
-        dialog.setLabelText(QFileDialog.DialogLabel.Accept, "Save")
-        path = dialog.selectedFiles()[0] if dialog.exec() and dialog.selectedFiles() else ""
-        if not path:
-            return None
-        save_path = Path(path)
-        if save_path.suffix.lower() != suffix:
-            self.show_error(f"Measurement file must use the {suffix} extension")
-            return None
-        return save_path
+        return save_dialogs.choose_measurement_save_path(
+            self,
+            input_path=Path(self.input_path.text()),
+            device_name=self.device.currentData(),
+            show_error=self.show_error,
+        )
 
     def browse_output(self) -> None:
         path = self._choose_save_as_path(accept_label="Save")
@@ -1607,6 +1591,10 @@ class MainWindow(QMainWindow):
         if not self.input_path.text().strip():
             self.show_error("Open a Helix .hls or .hlx file before saving")
             return False
+        if self._multi_hlx_output_paths_by_id:
+            return multi_hlx_workflow.save_multi_hlx_files(self._multi_hlx_window())
+        if active_path == self._staged_joined_setlist_path:
+            return self.save_active_file_as()
         return self._save_to_path(active_path)
 
     def save_active_file_as(self) -> bool:
@@ -1705,11 +1693,20 @@ class MainWindow(QMainWindow):
     def _activate_saved_file_without_reloading_preset_table(self, path: Path) -> None:
         self.input_path.setText(str(path))
         self._loaded_input_path = str(path)
+        self._staged_joined_setlist_path = None
+        self._multi_hlx_output_paths_by_id = {}
+        self._multi_hlx_input_count = 0
         self._set_active_file(path)
         self._store_recent_file(path)
         self._load_metadata()
         self._reset_preset_table_modified()
         self._refresh_file_actions()
+
+    def _mark_joined_setlist_staged(self, path: Path) -> None:
+        multi_hlx_workflow.mark_joined_setlist_staged(self._multi_hlx_window(), path)
+
+    def _multi_hlx_window(self) -> multi_hlx_workflow.MultiHlxWindow:
+        return cast(multi_hlx_workflow.MultiHlxWindow, self)
 
     def _set_active_file(self, path: Path) -> None:
         self.setWindowTitle(active_file_title(path))
@@ -1746,6 +1743,10 @@ class MainWindow(QMainWindow):
             project_dir=Path(__file__).resolve().parents[3],
         )
         self._set_optional_widget_enabled("start_button", action_state.start_enabled)
+        self._set_optional_widget_enabled(
+            "run_normalization_action",
+            action_state.start_enabled,
+        )
         self._refresh_determine_parameters_action(action_state)
         self._set_optional_widget_enabled(
             "record_output_button",

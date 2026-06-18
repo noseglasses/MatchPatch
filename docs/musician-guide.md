@@ -113,6 +113,16 @@ A setlist shows multiple preset rows. A single preset shows one row and needs a
 temporary Helix slot, such as `12A`, so MatchPatch knows where to steer the
 Helix during measurement.
 
+File > Open can also open several `.hlx` preset files at once. In that case,
+MatchPatch joins the selected presets into one temporary setlist view and shows
+them together in the preset table. The selection must contain only `.hlx` files:
+do not mix `.hlx` presets with an `.hls` setlist, and do not select more than
+one `.hls` setlist at a time.
+
+When several `.hlx` files are open together, Save writes each edited preset back
+to its original `.hlx` file. Save As writes one new `.hls` setlist containing all
+open presets.
+
 Workflows:
 
 - [Normalize A Setlist](workflows/normalize-setlist.md)

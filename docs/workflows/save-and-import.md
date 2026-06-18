@@ -23,6 +23,10 @@ Save writes changes to the active Helix file.
 Use Save when you are comfortable replacing the active file and you already have
 a backup.
 
+If you opened several `.hlx` presets at once, Save writes each edited preset
+back to its original `.hlx` file. The first overwrite prompt includes a checkbox
+for approving the rest of the batch without being asked for every file.
+
 (help-save-as)=
 ## Save As
 
@@ -30,6 +34,10 @@ Save As writes a new Helix file.
 
 This is the safer choice for most users because it keeps the original file
 untouched.
+
+If you opened several `.hlx` presets at once, Save As writes one `.hls` setlist
+that contains all of those open presets. It does not write several separate
+`.hlx` files.
 
 Example:
 
@@ -56,6 +64,8 @@ Keep the same file type:
 
 - `.hls` setlist saves as `.hls`;
 - `.hlx` preset saves as `.hlx`.
+- several open `.hlx` presets save individually with Save, but Save As writes an
+  `.hls` setlist.
 
 MatchPatch warns you if the saved file extension does not match.
 

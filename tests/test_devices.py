@@ -264,6 +264,10 @@ class FileOperationsHandler(MinimalHandler):
     def __init__(self) -> None:
         self.join_calls = []
         self.split_calls = []
+        self.log_callback = None
+
+    def set_log_callback(self, callback) -> None:
+        self.log_callback = callback
 
     def file_capabilities(self) -> FileOperationCapabilities:
         return FileOperationCapabilities(
@@ -574,16 +578,20 @@ def test_string_target_diff_api_can_report_changed_subdivisions() -> None:
 
 def test_file_operations_join_validates_capabilities_and_delegates(tmp_path) -> None:
     handler = FileOperationsHandler()
+    messages = []
+    log_callback = messages.append
 
     result = file_operations.join_preset_files(
         "files-device",
         [tmp_path / "one.preset"],
         tmp_path / "joined.setlist",
         slot_ids=[1],
+        log_callback=log_callback,
         get_profile=lambda device: FileOperationsProfile(handler),
     )
 
     assert result.output_path == tmp_path / "joined.setlist"
+    assert handler.log_callback is log_callback
     assert handler.join_calls == [([tmp_path / "one.preset"], tmp_path / "joined.setlist", [1])]
 
     with pytest.raises(ValueError, match="does not support joining"):
