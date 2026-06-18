@@ -216,12 +216,13 @@ class WindowLoadingController:
         try:
             profile = self.get_profile(window.device.currentData())
             handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+            if handler.file_kind(path) == "unknown":
+                self._show_no_assignments_loaded()
+                return
             handler.validate_input(path)
             assignments = handler.list_assignments(path)
         except Exception as exc:  # noqa: BLE001
-            window._show_preset_empty_state()
-            window.presets.updateGeometry()
-            window._schedule_resize_for_content()
+            self._show_no_assignments_loaded()
             window.show_error(str(exc))
             return
 
@@ -245,6 +246,9 @@ class WindowLoadingController:
         try:
             profile = self.get_profile(window.device.currentData())
             handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+            if handler.file_kind(path) == "unknown":
+                self._show_no_assignments_loaded()
+                return
             handler.validate_input(path)
             with window._sorting_paused():
                 window._adjusted_presets.clear()
@@ -273,9 +277,7 @@ class WindowLoadingController:
                     )
                 window._refresh_preset_table_editable_flags()
         except Exception as exc:  # noqa: BLE001
-            window._show_preset_empty_state()
-            window.presets.updateGeometry()
-            window._schedule_resize_for_content()
+            self._show_no_assignments_loaded()
             window.show_error(str(exc))
             return
 
@@ -287,6 +289,12 @@ class WindowLoadingController:
         window.preset_hint.setText("Select the presets to normalize.")
         window._set_preset_csv_buttons_enabled(window.preset_table.rowCount() > 0)
         QTimer.singleShot(0, window._fit_advanced_splitter_width)
+        window._schedule_resize_for_content()
+
+    def _show_no_assignments_loaded(self) -> None:
+        window = self.window
+        window._show_preset_empty_state()
+        window.presets.updateGeometry()
         window._schedule_resize_for_content()
 
     @staticmethod

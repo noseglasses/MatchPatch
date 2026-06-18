@@ -23,7 +23,7 @@ from matchpatch.midi import midi_output_names
 
 
 def load_legacy_preset_handling():
-    return importlib.import_module("matchpatch.devices.helix_preset_handling")
+    return importlib.import_module("matchpatch.devices.helix.preset_handling")
 
 
 def make_handler(tmp_path: Path) -> HelixPatchFileHandler:
@@ -250,7 +250,7 @@ def test_split_setlist_file_writes_helper_results(tmp_path, monkeypatch) -> None
             seen["original_filenames"] = original_filenames
             return [("../Lead.hlx", {"meta": {"name": "Lead"}, "tone": {}})]
 
-    monkeypatch.setattr(helix_module, "_load_helix_file_ops", lambda: Helper)
+    monkeypatch.setattr(helix_module, "_load_helix_file_operations", lambda: Helper)
 
     created = handler.split_setlist_file(
         Path("set.hls"),
@@ -470,7 +470,7 @@ def test_helix_module_runner_builds_subprocess_call(tmp_path, monkeypatch) -> No
     assert command[0][:3] == [
         sys.executable,
         "-m",
-        "matchpatch.devices.helix_preset_handling",
+        "matchpatch.devices.helix.preset_handling",
     ]
     assert command[0][-1] == "--list-presets"
     assert options["stdout"] is subprocess.PIPE
@@ -482,7 +482,7 @@ def test_frozen_helix_module_runner_executes_in_process(tmp_path, monkeypatch) -
     original_argv = sys.argv[:]
 
     def fake_run_module(module, run_name):
-        assert module == "matchpatch.devices.helix_preset_handling"
+        assert module == "matchpatch.devices.helix.preset_handling"
         assert run_name == "__main__"
         print("args=" + ",".join(sys.argv[1:]))
         print("error stream", file=sys.stderr)
@@ -497,7 +497,7 @@ def test_frozen_helix_module_runner_executes_in_process(tmp_path, monkeypatch) -
 
     completed = handler._run("--list-presets", capture=True)
 
-    assert completed.args == ["matchpatch.devices.helix_preset_handling", "--list-presets"]
+    assert completed.args == ["matchpatch.devices.helix.preset_handling", "--list-presets"]
     assert completed.returncode == 0
     assert completed.stdout == "args=--list-presets\n"
     assert completed.stderr == "error stream\n"

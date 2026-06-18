@@ -36,14 +36,6 @@ Repository = "https://github.com/noseglasses/MatchPatch.git"
 matchpatch = "matchpatch.cli:main"
 matchpatch-gui = "matchpatch.gui.app:main"
 
-[project.entry-points."matchpatch.devices"]
-# Third-party packages can register device profiles here, for example:
-# my-device = "my_package.matchpatch_plugin:DeviceProfile"
-# Built-in profiles are registered directly in matchpatch.devices.registry.
-
-[project.entry-points."matchpatch.device_gui_panels"]
-# Optional GUI-only panel factories for device plugins.
-
 [dependency-groups]
 docs = [
     "furo>=2024.8.6",
@@ -102,8 +94,8 @@ select = ["ANN", "C901", "E4", "E7", "E9", "F", "I"]
 max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
-"src/matchpatch/devices/helix_file_ops.py" = ["ANN"]
-"src/matchpatch/devices/helix_preset_handling.py" = ["ANN", "C901"]
+"src/matchpatch/devices/helix/file_ops.py" = ["ANN"]
+"src/matchpatch/devices/helix/preset_handling.py" = ["ANN", "C901"]
 "tests/**" = ["ANN"]
 
 [tool.ty.src]

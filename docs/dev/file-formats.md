@@ -13,7 +13,7 @@ The wrapper includes:
 - `encoded_data`: base64-encoded zlib-compressed JSON text.
 - compression metadata such as `decompressed_size` and `crc32`.
 
-`matchpatch.devices.helix_preset_handling` decodes `encoded_data`, edits the
+`matchpatch.devices.helix.preset_handling` decodes `encoded_data`, edits the
 decompressed JSON, then rebuilds the wrapper by replacing `encoded_data`,
 `decompressed_size`, and `crc32`. Other wrapper fields are preserved.
 
@@ -134,7 +134,7 @@ CSV files are written with UTF-8 and read with UTF-8-SIG so a BOM is tolerated.
 
 ## Measurement CSV: Helix Legacy Adapter
 
-`matchpatch.devices.helix_preset_handling` expects a `HelixPreset` column
+`matchpatch.devices.helix.preset_handling` expects a `HelixPreset` column
 instead of `DevicePatch`. `HelixPatchFileHandler.apply_analysis_csv` therefore writes a
 temporary adapter CSV before invoking the packaged Helix utility module.
 

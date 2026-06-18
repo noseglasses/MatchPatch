@@ -147,8 +147,11 @@ with configured USB mappings, and trims pre-roll/post-roll using
   automation output paths.
 - `DeviceController` activates presets and reapplies snapshots.
 
-The registry in `matchpatch.devices.registry` currently registers only
-`helix`.
+The registry in `matchpatch.devices.registry` reads the explicit
+`DEVICE_PROFILES` list in `matchpatch.devices.available`. To add a device,
+create a sibling package under `matchpatch.devices` and add one profile
+instance to that list. The demo device in `matchpatch.devices.demo` is the
+reference implementation for this flow.
 
 ## Helix Profile
 
@@ -168,7 +171,7 @@ The registry in `matchpatch.devices.registry` currently registers only
 changes, where internal preset ID `1` maps to program `0`. Snapshots use CC 69
 with values `0..7`.
 
-`HelixPatchFileHandler` runs `matchpatch.devices.helix_preset_handling` with the
+`HelixPatchFileHandler` runs `matchpatch.devices.helix.preset_handling` with the
 current Python interpreter in development, and in-process in frozen builds. It
 delegates:
 
@@ -184,7 +187,7 @@ or replaces `HelixPreset`.
 
 ## Helix File Processing
 
-`matchpatch.devices.helix_preset_handling` understands `.hls`, `.hlx`, and unpacked `.json`.
+`matchpatch.devices.helix.preset_handling` understands `.hls`, `.hlx`, and unpacked `.json`.
 Setlists are stored as JSON wrappers whose `encoded_data` contains base64 zlib
 data; the script preserves wrapper fields while replacing encoded data, size,
 and CRC. Presets are JSON files and may contain either a top-level preset or a

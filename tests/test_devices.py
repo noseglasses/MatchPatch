@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sys
+import json
 from pathlib import Path
 
 import pytest
@@ -26,6 +26,7 @@ from matchpatch.devices.base import (
     TargetSelection,
     validate_snapshot_count,
 )
+from matchpatch.devices.demo import DemoPatchFileHandler
 
 
 def test_helix_profile_defines_processor_boundaries() -> None:
@@ -298,9 +299,9 @@ class FileOperationsHandler(MinimalHandler):
         return [output_dir / "one.preset"]
 
 
-class PluginProfile(DeviceProfile):
-    name = "plugin-device"
-    display_name = "Plugin Device"
+class BasicProfile(DeviceProfile):
+    name = "basic-device"
+    display_name = "Basic Device"
 
     def create_patch_file_handler(self, project_dir: Path) -> PatchFileHandler:
         return MinimalHandler()
@@ -315,7 +316,7 @@ class PluginProfile(DeviceProfile):
         return EmptyController()
 
 
-class FileOperationsProfile(PluginProfile):
+class FileOperationsProfile(BasicProfile):
     name = "files-device"
     display_name = "Files Device"
 
@@ -326,7 +327,7 @@ class FileOperationsProfile(PluginProfile):
         return self.handler
 
 
-class OfflineOnlyProfile(PluginProfile):
+class OfflineOnlyProfile(BasicProfile):
     name = "offline-device"
     display_name = "Offline Device"
 
@@ -339,12 +340,12 @@ class OfflineOnlyProfile(PluginProfile):
         ).names()
 
 
-class PermissiveNamingProfile(PluginProfile):
+class PermissiveNamingProfile(BasicProfile):
     name = "permissive-names"
     display_name = "Permissive Names"
 
 
-class RestrictiveNamingProfile(PluginProfile):
+class RestrictiveNamingProfile(BasicProfile):
     name = "restrictive-names"
     display_name = "Restrictive Names"
 
@@ -359,25 +360,8 @@ class RestrictiveNamingProfile(PluginProfile):
         )
 
 
-class EntryPoint:
-    def __init__(self, name: str, value) -> None:
-        self.name = name
-        self.value = value
-
-    def load(self):
-        if isinstance(self.value, BaseException):
-            raise self.value
-        return self.value
-
-
-class EntryPoints(list):
-    def select(self, *, group: str):
-        assert group == registry.ENTRY_POINT_GROUP
-        return self
-
-
 def test_default_device_capabilities_are_backward_compatible() -> None:
-    profile = PluginProfile()
+    profile = BasicProfile()
     handler = profile.create_patch_file_handler(Path("."))
     descriptors = {descriptor.name: descriptor for descriptor in profile.setting_descriptors()}
 
@@ -392,7 +376,7 @@ def test_default_device_capabilities_are_backward_compatible() -> None:
     assert descriptors["midi_output"].default is None
     assert descriptors["midi_channel"].default == 0
     profile.validate_settings({})
-    profile.validate_settings({"unknown_plugin_setting": object()})
+    profile.validate_settings({"unknown_device_setting": object()})
     assert handler.file_capabilities().reads_setlist_files is False
     assert handler.file_kind(Path("anything")) == "unknown"
 
@@ -596,10 +580,10 @@ def test_file_operations_join_validates_capabilities_and_delegates(tmp_path) -> 
 
     with pytest.raises(ValueError, match="does not support joining"):
         file_operations.join_preset_files(
-            "plugin-device",
+            "basic-device",
             [tmp_path / "one.preset"],
             tmp_path / "joined.setlist",
-            get_profile=lambda device: PluginProfile(),
+            get_profile=lambda device: BasicProfile(),
         )
 
 
@@ -622,70 +606,109 @@ def test_file_operations_split_validates_capabilities_and_delegates(tmp_path) ->
 
     with pytest.raises(ValueError, match="does not support splitting"):
         file_operations.split_setlist_file(
-            "plugin-device",
+            "basic-device",
             tmp_path / "joined.setlist",
             tmp_path / "presets",
-            get_profile=lambda device: PluginProfile(),
+            get_profile=lambda device: BasicProfile(),
         )
 
 
-def test_plugin_device_profiles_are_discovered(monkeypatch) -> None:
-    monkeypatch.setattr(
-        registry.metadata,
-        "entry_points",
-        lambda: EntryPoints([EntryPoint("plugin", PluginProfile)]),
-    )
-
-    assert get_device_profile("plugin-device").display_name == "Plugin Device"
+def test_builtin_device_profiles_are_listed_from_static_registry() -> None:
+    assert get_device_profile("demo-device").display_name == "Demo Device"
     assert [profile.name for profile in registry.list_device_profiles()] == [
         "helix",
-        "plugin-device",
+        "demo-device",
     ]
 
 
-def test_plugin_load_errors_are_reported_for_explicit_lookup(monkeypatch) -> None:
-    monkeypatch.setattr(
-        registry.metadata,
-        "entry_points",
-        lambda: EntryPoints([EntryPoint("broken", RuntimeError("boom"))]),
-    )
-
-    assert [profile.name for profile in registry.list_device_profiles()] == ["helix"]
-    assert registry.plugin_load_errors() == {"broken": "boom"}
-    with pytest.raises(ValueError, match="Device plugin load errors: broken: boom"):
-        get_device_profile("missing")
-
-
-def test_duplicate_plugin_device_names_are_reported(monkeypatch) -> None:
-    class DuplicateProfile(PluginProfile):
+def test_duplicate_builtin_device_names_are_reported(monkeypatch) -> None:
+    class DuplicateProfile(BasicProfile):
         name = "helix"
 
-    monkeypatch.setattr(
-        registry.metadata,
-        "entry_points",
-        lambda: EntryPoints([EntryPoint("duplicate", DuplicateProfile())]),
-    )
+    monkeypatch.setattr(registry, "DEVICE_PROFILES", (DuplicateProfile(), DuplicateProfile()))
 
-    assert registry.plugin_load_errors() == {"duplicate": "duplicate device profile name 'helix'"}
+    with pytest.raises(ValueError, match="duplicate device profile name 'helix'"):
+        registry.list_device_profiles()
 
 
-def test_example_device_plugin_imports_and_defines_entry_point_contract() -> None:
-    example_src = Path(__file__).resolve().parents[1] / "examples" / "device_plugin" / "src"
-    sys.path.insert(0, str(example_src))
-    try:
-        from matchpatch_example_device import ExampleDeviceProfile
-    finally:
-        sys.path.remove(str(example_src))
-
-    profile = ExampleDeviceProfile()
+def test_demo_device_is_registered_and_defines_example_contract() -> None:
+    profile = get_device_profile("demo-device")
     handler = profile.create_patch_file_handler(Path("."))
 
-    assert profile.name == "example-device"
-    assert profile.display_name == "Example Device"
-    assert profile.file_capabilities().reads_setlist_files
-    assert handler.file_kind(Path("demo.examplebank")) == "setlist"
-    assert handler.file_types()[0].name_filter() == "Example Device Banks (*.examplebank)"
-    assert handler.parse_patch_set("1, 2") == [1, 2]
-    assert handler.automation_output_path(Path("demo.examplebank"), "_measurement") == Path(
-        "demo_measurement.examplebank"
+    assert profile.name == "demo-device"
+    assert profile.display_name == "Demo Device"
+    assert not profile.supports_normalization()
+    assert "cannot normalize files" in profile.normalization_unavailable_message()
+    assert profile.file_capabilities() == FileOperationCapabilities(
+        reads_setlist_files=True,
+        writes_setlist_files=True,
     )
+    assert handler.file_kind(Path("demo.demobank")) == "setlist"
+    assert handler.file_types()[0].name_filter() == "Demo Device Banks (*.demobank)"
+    assert handler.parse_patch_set("1, 2") == [1, 2]
+    assert handler.parse_target_set("preset:clean, preset:lead") == [
+        "preset:clean",
+        "preset:lead",
+    ]
+    assert handler.automation_output_path(Path("demo.demobank"), "_measurement") == Path(
+        "demo_measurement.demobank"
+    )
+
+
+def test_demo_device_handler_reads_targets_and_writes_adjustments(tmp_path) -> None:
+    input_path = tmp_path / "show.demobank"
+    output_path = tmp_path / "show-adjusted.demobank"
+    original_data = {
+        "device": "demo",
+        "metadata": {"keep": "unchanged"},
+        "presets": [
+            {
+                "id": "preset:clean",
+                "number": 1,
+                "name": "Clean",
+                "unrelated": {"stays": True},
+                "scenes": [
+                    {
+                        "id": "scene:intro",
+                        "name": "Intro",
+                        "output_level_db": -6.0,
+                        "bypass": False,
+                    },
+                    {
+                        "id": "scene:solo",
+                        "name": "Solo",
+                        "output_level_db": -3.0,
+                        "bypass": True,
+                    },
+                ],
+            }
+        ],
+    }
+    input_path.write_text(json.dumps(original_data), encoding="utf-8")
+    handler = DemoPatchFileHandler()
+
+    targets = handler.list_targets(input_path)
+    gain_points = handler.list_gain_points(input_path, "preset:clean", "scene:intro")
+    handler.apply_gain_adjustments(
+        input_path,
+        output_path,
+        [GainAdjustment("preset:clean", "scene:intro", "main-output", 1.5)],
+    )
+
+    adjusted_data = json.loads(output_path.read_text(encoding="utf-8"))
+    input_data_after_write = json.loads(input_path.read_text(encoding="utf-8"))
+
+    assert [(target.id, target.display_label, target.name) for target in targets] == [
+        ("preset:clean", "D001", "Clean")
+    ]
+    assert [(scene.id, scene.display_label) for scene in targets[0].subdivisions] == [
+        ("scene:intro", "Intro"),
+        ("scene:solo", "Solo"),
+    ]
+    assert [(point.id, point.current_db) for point in gain_points] == [("main-output", -6.0)]
+    assert adjusted_data["presets"][0]["scenes"][0]["output_level_db"] == -4.5
+    assert adjusted_data["presets"][0]["scenes"][0]["bypass"] is False
+    assert adjusted_data["presets"][0]["scenes"][1] == original_data["presets"][0]["scenes"][1]
+    assert adjusted_data["presets"][0]["unrelated"] == {"stays": True}
+    assert adjusted_data["metadata"] == {"keep": "unchanged"}
+    assert input_data_after_write == original_data

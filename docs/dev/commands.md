@@ -203,15 +203,15 @@ and visible audio/MIDI endpoints.
 Run from the repository root:
 
 ```bash
-python3 -m matchpatch.devices.helix_preset_handling --help
+python3 -m matchpatch.devices.helix.preset_handling --help
 ```
 
 Useful integrated operations:
 
 ```bash
-python3 -m matchpatch.devices.helix_preset_handling -i setlist.hls -o setlist_measurement.hls --measurement
-python3 -m matchpatch.devices.helix_preset_handling -i setlist.hls --list-presets
-python3 -m matchpatch.devices.helix_preset_handling -i current.hls --diff-presets previous.hls
+python3 -m matchpatch.devices.helix.preset_handling -i setlist.hls -o setlist_measurement.hls --measurement
+python3 -m matchpatch.devices.helix.preset_handling -i setlist.hls --list-presets
+python3 -m matchpatch.devices.helix.preset_handling -i current.hls --diff-presets previous.hls
 ```
 
 ## Build

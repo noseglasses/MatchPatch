@@ -9,11 +9,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QCoreApplication, QSettings
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from matchpatch.devices.base import DeviceSettingDescriptor
+from matchpatch.devices.registry import get_device_profile
 from matchpatch.gui import main_window
+from matchpatch.gui.device_panels import create_settings_panel
 from matchpatch.gui.main_window import MainWindow
+from matchpatch.gui.normalization_workflow import NormalizationWorkflowController
 from matchpatch.gui.settings_renderer import DescriptorSettingsPanel
 
 
@@ -123,6 +126,84 @@ measurement_wait_seconds = 0.9
     ]
 
     window.close()
+
+
+def test_demo_device_uses_descriptor_settings_panel(app) -> None:
+    profile = get_device_profile("demo-device")
+    panel = create_settings_panel(profile, QWidget())
+
+    assert isinstance(panel, DescriptorSettingsPanel)
+    panel.populate(SimpleNamespace())
+    assert panel.controls["sample_rate"].value() == 48000
+    assert panel.controls["input_mapping"].text() == "1,2"
+    assert panel.controls["output_mapping"].text() == "1,2"
+    assert panel.controls["demo_mode"].currentText() == "offline"
+    assert "preset_wait" not in panel.controls
+    assert "snapshot_wait" not in panel.controls
+    assert "measurement_wait" not in panel.controls
+
+
+def test_main_window_lists_demo_device_without_changing_default(app) -> None:
+    window = MainWindow()
+
+    assert window.device.currentData() == "helix"
+    assert window.device.findData("demo-device") >= 0
+    assert "demo-device" in window.device_panels
+
+    window.close()
+
+
+def test_selecting_demo_device_does_not_show_error_popup(monkeypatch, app) -> None:
+    window = MainWindow()
+    critical_messages = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: critical_messages.append(args))
+
+    window.device.setCurrentIndex(window.device.findData("demo-device"))
+    app.processEvents()
+
+    assert critical_messages == []
+    assert window.device.currentData() == "demo-device"
+
+    window.close()
+
+
+def test_demo_device_ignores_incompatible_opened_setlist_without_popup(
+    monkeypatch,
+    app,
+    tmp_path,
+) -> None:
+    window = MainWindow()
+    critical_messages = []
+    input_path = tmp_path / "helix-setlist.hls"
+    input_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: critical_messages.append(args))
+    window.device.setCurrentIndex(window.device.findData("demo-device"))
+    app.processEvents()
+    window.input_path.setText(str(input_path))
+
+    window.load_assignments()
+
+    assert critical_messages == []
+    assert window.preset_table.rowCount() == 0
+
+    window.close()
+
+
+def test_demo_device_normalization_shows_clear_unavailable_message(monkeypatch, app) -> None:
+    window = SimpleNamespace(
+        device=SimpleNamespace(currentData=lambda: "demo-device"),
+        worker=None,
+    )
+    messages = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args))
+
+    NormalizationWorkflowController(window).start_normalization()
+
+    assert len(messages) == 1
+    assert messages[0][1] == "Normalization unavailable"
+    assert "Demo Device" in messages[0][2]
+    assert "cannot normalize files" in messages[0][2]
+    assert window.worker is None
 
 
 def test_descriptor_settings_panel_renders_all_descriptor_kinds(app) -> None:

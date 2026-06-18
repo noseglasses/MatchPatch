@@ -895,7 +895,7 @@ def _select_audio_transport_factory(
     if mode == "offline":
         raise NotImplementedError(
             "The offline measurement backend is not implemented yet; "
-            "install or enable a plugin-provided offline audio transport factory"
+            "enable a device-provided offline audio transport factory"
         )
     raise ValueError(
         f"Backend {mode!r} is supported by {profile.display_name}, "

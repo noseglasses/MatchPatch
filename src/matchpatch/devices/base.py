@@ -48,6 +48,7 @@ class DeviceSettingDescriptor:
     minimum: int | float | None = None
     maximum: int | float | None = None
     required: bool = False
+    show_in_gui: bool = True
 
 
 @dataclass(frozen=True)
@@ -762,12 +763,20 @@ class DeviceProfile(ABC):
         return MeasurementBackendCapabilities().names()
 
     def audio_transport_factories(self) -> tuple[AudioTransportFactory, ...]:
-        """Return plugin-provided audio transport factories for this device."""
+        """Return device-provided audio transport factories for this device."""
         return ()
 
     def diagnostics_provider(self) -> DiagnosticsProvider | None:
         """Return optional device-specific preflight diagnostics."""
         return None
+
+    def supports_normalization(self) -> bool:
+        """Return whether this profile can run the normalization workflow."""
+        return True
+
+    def normalization_unavailable_message(self) -> str:
+        """Explain why normalization is unavailable when ``supports_normalization`` is false."""
+        return f"{self.display_name} cannot normalize files."
 
     def naming_rules(self) -> NamingRules:
         return NamingRules(

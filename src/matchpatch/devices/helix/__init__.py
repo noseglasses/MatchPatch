@@ -17,7 +17,6 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from matchpatch.devices import helix_file_ops
 from matchpatch.devices.base import (
     AudioRouting,
     DeviceController,
@@ -35,6 +34,7 @@ from matchpatch.devices.base import (
     PatchFileHandler,
     SteeringOptions,
 )
+from matchpatch.devices.helix import file_ops
 from matchpatch.midi import midi_output_names
 
 HELIX_NAME_PATTERN = re.compile(r"""^[A-Za-z0-9\-_+=!@#$&()?:'",./ ]*$""")
@@ -44,7 +44,7 @@ HELIX_NAME_CHAR_PATTERN = re.compile(r"""[A-Za-z0-9\-_+=!@#$&()?:'",./ ]""")
 class HelixPatchFileHandler(PatchFileHandler):
     def __init__(self, project_dir: Path) -> None:
         self.project_dir = project_dir
-        self.module = "matchpatch.devices.helix_preset_handling"
+        self.module = "matchpatch.devices.helix.preset_handling"
         self.log_callback: Callable[[str], None] | None = None
 
     def set_log_callback(self, callback: Callable[[str], None] | None) -> None:
@@ -237,7 +237,7 @@ class HelixPatchFileHandler(PatchFileHandler):
             raise ValueError(f"Helix split input must be an .hls file: {input_path}")
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        split_presets = _load_helix_file_ops().split_setlist_to_preset_data(
+        split_presets = _load_helix_file_operations().split_setlist_to_preset_data(
             input_path,
             selected_ids=selected_ids,
             original_filenames=original_filenames,
@@ -762,8 +762,8 @@ def _error_details(exc: subprocess.CalledProcessError) -> str:
     return lines[-1].strip() if lines else ""
 
 
-def _load_helix_file_ops() -> Any:  # noqa: ANN401
-    return helix_file_ops
+def _load_helix_file_operations() -> Any:  # noqa: ANN401
+    return file_ops
 
 
 def _assignment_gain_points(assignment: Mapping[str, object]) -> tuple[GainPoint, ...]:

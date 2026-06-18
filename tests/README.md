@@ -69,7 +69,7 @@ fixtures. Important recurring fixtures/helpers:
 - `capsys`: asserts CLI stdout/stderr and error reporting.
 - `app` fixture in GUI tests: module-scoped `QApplication`, with
   `QT_QPA_PLATFORM=offscreen`.
-- `load_legacy_preset_handling`: imports `matchpatch.devices.helix_preset_handling`
+- `load_legacy_preset_handling`: imports `matchpatch.devices.helix.preset_handling`
   so Helix file behavior can be tested through the packaged module.
 - `FakePatchFileHandler`, `FakeDeviceProfile`, and GUI-local fake dialogs/workers
   isolate workflow and UI behavior from real files and devices.

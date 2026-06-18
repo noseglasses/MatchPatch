@@ -67,7 +67,7 @@ Normal users should not need this section.
 - [Developer Notes](developer-notes.md)
 - [Existing technical docs](dev/architecture.md)
 - [Development Commands](dev/commands.md)
-- [Device Plugins](device_plugins.md)
+- [Adding Devices](adding-devices.md)
 - [Release Checklist](dev/release.md)
 
 ```{toctree}
@@ -108,7 +108,7 @@ glossary
 developer-notes
 dev/architecture
 dev/commands
-device_plugins
+adding-devices
 dev/file-formats
 dev/release
 ```

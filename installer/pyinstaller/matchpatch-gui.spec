@@ -31,7 +31,7 @@ a = Analysis(
     binaries=[],
     datas=asset_datas(),
     hiddenimports=[
-        "matchpatch.devices.helix_preset_handling",
+        "matchpatch.devices.helix.preset_handling",
         "mido.backends.rtmidi",
         "rtmidi",
     ],

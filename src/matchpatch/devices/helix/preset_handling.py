@@ -10,23 +10,23 @@ import re
 import sys
 from dataclasses import dataclass
 
-from matchpatch.devices.helix_file_ops import (  # noqa: F401
+from matchpatch.devices.helix.file_ops import (  # noqa: F401
     build_hls_text,
     build_new_hls_text,
     decode_hls_text,
     join_preset_files_to_setlist,
     split_setlist_to_preset_data,
 )
-from matchpatch.devices.helix_file_ops import (
+from matchpatch.devices.helix.file_ops import (
     helix_to_preset_index as helix_to_preset_index,
 )
-from matchpatch.devices.helix_file_ops import (
+from matchpatch.devices.helix.file_ops import (
     load_preset_file as load_preset_file,
 )
-from matchpatch.devices.helix_file_ops import (
+from matchpatch.devices.helix.file_ops import (
     load_setlist_file as load_setlist_file,
 )
-from matchpatch.devices.helix_file_ops import (
+from matchpatch.devices.helix.file_ops import (
     safe_preset_filename as safe_preset_filename,
 )
 

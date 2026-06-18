@@ -13,7 +13,7 @@ import pytest
 
 
 def _load_legacy_module() -> ModuleType:
-    return importlib.import_module("matchpatch.devices.helix_preset_handling")
+    return importlib.import_module("matchpatch.devices.helix.preset_handling")
 
 
 def _preset(name: str) -> dict:
