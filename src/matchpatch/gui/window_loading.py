@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QTableWidgetItem
+from PySide6.QtWidgets import QMessageBox, QTableWidgetItem
 
 from matchpatch.config import config_value, load_config
 from matchpatch.custom_adjustments import CustomAdjustments, load_custom_adjustments_file
@@ -28,15 +28,79 @@ class WindowLoadingController:
     ) -> None:
         self.window: Any = window
         self.get_profile = get_profile
+        self._previous_device_index = 0
 
     def device_changed(self) -> None:
         window = self.window
+        current_index = window.device.currentIndex()
+        if not self._confirm_device_change_discards_loaded_state():
+            signals_blocked = window.device.blockSignals(True)
+            try:
+                window.device.setCurrentIndex(self._previous_device_index)
+            finally:
+                window.device.blockSignals(signals_blocked)
+            return
+
+        self._clear_loaded_state_after_device_change()
         name = window.device.currentData()
         panel = window.device_panels.get(name)
         if panel is not None:
             window.device_stack.setCurrentWidget(panel)
         self.refresh_backend_choices()
         window.load_defaults()
+        self._previous_device_index = current_index
+
+    def _confirm_device_change_discards_loaded_state(self) -> bool:
+        if not self._device_change_has_discardable_loaded_state():
+            return True
+
+        answer = QMessageBox.question(
+            self.window,
+            "Discard loaded preset table",
+            "Changing the device will discard the loaded preset table, adjustments, "
+            "and normalization results.\n\nDiscard these changes and continue?",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer in {QMessageBox.StandardButton.Discard, QMessageBox.StandardButton.Yes}
+
+    def _device_change_has_discardable_loaded_state(self) -> bool:
+        window = self.window
+        if not window._loaded_input_path or window.preset_table.rowCount() == 0:
+            return False
+        return (
+            window._preset_table_has_unsaved_changes()
+            or window.completed_request is not None
+            or window.completed_result is not None
+            or bool(window._adjusted_presets)
+        )
+
+    def _clear_loaded_state_after_device_change(self) -> None:
+        window = self.window
+        if not window._loaded_input_path and window.preset_table.rowCount() == 0:
+            return
+
+        window._discard_completed_export()
+        window.input_path.clear()
+        window.output_path.clear()
+        window._loaded_input_path = ""
+        window._staged_joined_setlist_path = None
+        window._multi_hlx_output_paths_by_id = {}
+        window._multi_hlx_input_count = 0
+        window._adjusted_presets.clear()
+        window.preset_snapshot_positions.clear()
+        window._recording_paths.clear()
+        window.preset_table_controller.clear_bad_lufs_highlights()
+        window._clear_normalization_focus()
+        window._reset_comparison_file_selection()
+        window.preset_table.setRowCount(0)
+        window._set_metadata({})
+        window._show_preset_empty_state()
+        window._set_active_file(Path())
+        window._set_phase("ready")
+        window._set_preset_csv_buttons_enabled(False)
+        window._reset_preset_table_modified()
+        window._refresh_file_actions()
 
     def backend_changed(self) -> None:
         window = self.window
@@ -78,6 +142,7 @@ class WindowLoadingController:
 
         try:
             config = load_config(window.config_path.text().strip() or None)
+            self._select_configured_device(config)
             window._loading_defaults = True
             try:
                 window.backend.setCurrentText(
@@ -176,6 +241,38 @@ class WindowLoadingController:
             }
         )
         window._refresh_backend_tooltip()
+
+    def _select_configured_device(self, config: dict[str, Any]) -> None:
+        configured_device = config_value(config, "normalize", "device")
+        if configured_device is None:
+            return
+        if not isinstance(configured_device, str) or not configured_device:
+            raise ValueError("Configured default device must be a non-empty string")
+
+        window = self.window
+        current_device = window.device.currentData()
+        if configured_device == current_device:
+            return
+
+        index = window.device.findData(configured_device)
+        if index < 0:
+            profile = self.get_profile(configured_device)
+            add_profile = getattr(window, "_add_device_profile", None)
+            if add_profile is None:
+                raise ValueError(f"Configured default device is not available: {configured_device}")
+            index = add_profile(profile)
+
+        signals_blocked = window.device.blockSignals(True)
+        try:
+            window.device.setCurrentIndex(index)
+        finally:
+            window.device.blockSignals(signals_blocked)
+
+        panel = window.device_panels.get(configured_device)
+        if panel is not None:
+            window.device_stack.setCurrentWidget(panel)
+        self.refresh_backend_choices()
+        self._previous_device_index = index
 
     def load_assignments(self) -> None:
         window = self.window

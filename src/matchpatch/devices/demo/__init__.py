@@ -436,7 +436,7 @@ class DemoDeviceProfile(DeviceProfile):
         and wait times. The demo uses zero waits and no output because it cannot
         steer real hardware.
         """
-        return SteeringOptions(None, 0, 0.0, 0.0, 0.0)
+        return SteeringOptions(None, 1, 0.0, 0.0, 0.0)
 
     def create_controller(self, options: SteeringOptions) -> DeviceController:
         """Create the runtime controller used during measurement.

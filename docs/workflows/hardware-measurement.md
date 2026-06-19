@@ -1,19 +1,20 @@
 (help-hardware-measurement)=
 # Hardware Measurement
 
-Use hardware mode when you want MatchPatch to measure your real Helix.
+Use hardware mode when you want MatchPatch to measure your real Line 6 Helix or
+Pod Go.
 
 Hardware mode gives the results you should use for rehearsal, stage preparation,
 and final setlist balancing.
 
 ## Before You Start
 
-- Connect the Helix by USB.
-- Make sure the Helix is powered on.
-- Make sure your computer can see the Helix audio device.
-- Make sure your computer can see the Helix MIDI output.
+- Connect the processor by USB.
+- Make sure the processor is powered on.
+- Make sure your computer can see the processor audio device.
+- Make sure your computer can see the processor MIDI output.
 - Have a reference DI WAV ready.
-- Back up your original `.hls` or `.hlx` file.
+- Back up your original `.hls`, `.hlx`, `.pgs`, or `.pgp` file.
 - Run preflight check from Advanced > Diagnostics before your first hardware
   measurement.
 
@@ -25,11 +26,11 @@ See also:
 
 ## What Hardware Mode Does
 
-MatchPatch sends the reference DI to the Helix, switches presets and snapshots,
+MatchPatch sends the reference DI to the processor, switches presets and snapshots,
 records the processed sound, and measures the loudness.
 
-The Helix is doing the real tone work. MatchPatch is listening and calculating
-the output-level changes.
+The processor is doing the real tone work. MatchPatch is listening and
+calculating the output-level changes.
 
 ## Check The Backend
 
@@ -59,7 +60,7 @@ bundle in a bug report.
 (help-hardware-routing)=
 ## Check Audio Routing
 
-In the Helix device settings, check:
+In the selected device settings, check:
 
 - Audio device.
 - Recording channels.
@@ -67,10 +68,10 @@ In the Helix device settings, check:
 - Sample rate.
 - Block size.
 
-For many Helix setups:
+For many Helix and Pod Go setups:
 
-- processed Helix audio returns on USB `1/2`;
-- the reference DI is sent to Helix USB `3/4`.
+- processed audio returns on USB `1/2`;
+- the reference DI is sent to processor USB `3/4`.
 
 Your own system may differ.
 
@@ -79,7 +80,7 @@ Your own system may differ.
 (help-midi-steering)=
 ## Check MIDI Steering
 
-In the Helix device settings, check:
+In the selected device settings, check:
 
 - MIDI output.
 - MIDI channel.
@@ -98,7 +99,7 @@ available.
 If the check succeeds, measurement continues.
 
 If the check fails, MatchPatch shows an error. Check USB connection, audio
-device name, MIDI output name, and whether the Helix is powered on. The error
+device name, MIDI output name, and whether the processor is powered on. The error
 uses the same structured hardware checks that Preflight and diagnostic bundles
 save for troubleshooting.
 
@@ -108,16 +109,16 @@ save for troubleshooting.
 
 The toolbar can record measured output and play it back.
 
-Use this to confirm MatchPatch actually recorded the processed Helix signal. If
+Use this to confirm MatchPatch actually recorded the processed signal. If
 you hear silence or the wrong sound, check routing before trusting the results.
 
 ## What Success Looks Like
 
 - Hardware check passes.
-- Presets switch on the Helix during measurement.
+- Presets switch on the processor during measurement.
 - Snapshot changes happen during measurement.
 - The loudness bar updates.
-- Recorded-output playback sounds like the processed Helix tone.
+- Recorded-output playback sounds like the processed tone.
 - The result table does not show unexpected red warnings.
 
 ## If Something Goes Wrong

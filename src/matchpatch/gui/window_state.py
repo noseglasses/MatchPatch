@@ -59,8 +59,16 @@ def store_recent_file(settings: QSettings, path: PurePath) -> list[str]:
     return recent
 
 
-def recent_file_items(settings: QSettings) -> list[RecentFileItem]:
-    return [recent_file_item(path_text) for path_text in recent_file_paths(settings)]
+def recent_file_items(
+    settings: QSettings,
+    extensions: set[str] | frozenset[str] | tuple[str, ...] = (),
+) -> list[RecentFileItem]:
+    allowed_extensions = {extension.lower() for extension in extensions}
+    return [
+        recent_file_item(path_text)
+        for path_text in recent_file_paths(settings)
+        if not allowed_extensions or _display_path(path_text).suffix.lower() in allowed_extensions
+    ]
 
 
 def recent_file_item(path_text: str) -> RecentFileItem:

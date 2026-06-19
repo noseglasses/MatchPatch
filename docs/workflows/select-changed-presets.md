@@ -10,20 +10,21 @@ changed snapshots measurable. Unchanged snapshots are grey and marked with the
 
 ## Before You Start
 
-- Have the current `.hls` setlist.
-- Have the previous `.hls` setlist.
+- Have the current `.hls` or `.pgs` setlist.
+- Have the previous `.hls` or `.pgs` setlist.
 - Make sure both files are versions of the same setlist.
 - Back up the current file.
 
 > Warning:
-> This workflow is for `.hls` setlists. It is not for single `.hlx` presets.
+> This workflow is for `.hls` and `.pgs` setlists. It is not for single-preset
+> files.
 
 ## Steps
 
 1. Open MatchPatch.
-2. Open the current `.hls` setlist.
+2. Open the current `.hls` or `.pgs` setlist.
 3. Click Select changed.
-4. Choose the previous `.hls` setlist.
+4. Choose the previous setlist for the same device family.
 5. Review which snapshots are still measurable.
 6. Manually check or uncheck presets if needed.
 7. Run normalization.
@@ -62,7 +63,8 @@ You can still select presets manually.
 ## If Something Goes Wrong
 
 - If no presets are selected, confirm you chose the correct previous setlist.
-- If the file is rejected, confirm both files are `.hls`.
+- If the file is rejected, confirm both files are the same supported setlist
+  type.
 - If the selected presets look wrong, adjust the checkboxes manually.
 - If you are unsure, run [Normalize A Setlist](normalize-setlist.md) with a
   manual preset selection.

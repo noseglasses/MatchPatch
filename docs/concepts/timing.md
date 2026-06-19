@@ -1,7 +1,7 @@
 (help-timing)=
 # Measurement Timing
 
-Timing gives the Helix and the audio system time to settle before MatchPatch
+Timing gives the processor and the audio system time to settle before MatchPatch
 records and measures a snapshot.
 
 This matters because preset changes, snapshot changes, audio latency, delay
@@ -21,8 +21,8 @@ latency and short tails.
 
 ### Round-Trip Latency
 
-The time it takes for audio to leave the computer, pass through the Helix, and
-return to the computer.
+The time it takes for audio to leave the computer, pass through the processor,
+and return to the computer.
 
 ### Preset Wait
 

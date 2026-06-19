@@ -15,14 +15,14 @@ Start with the checklist below, then find the problem that matches what you see.
 1. Open Advanced > Diagnostics and click Run preflight check before a first
    hardware run or after changing device settings.
 2. Confirm the correct backend:
-   - loopback for testing without Helix;
-   - hardware for real Helix measurement.
-3. If using hardware, confirm the Helix is connected and powered on.
+   - loopback for testing without hardware;
+   - hardware for real processor measurement.
+3. If using hardware, confirm the processor is connected and powered on.
 4. Confirm the Reference DI path points to an existing WAV.
-5. Confirm playback and recording channels match your Helix routing.
+5. Confirm playback and recording channels match your processor routing.
 6. Confirm MIDI output and MIDI channel are correct.
 7. Confirm selected presets have snapshots that are not all ignored.
-8. If using a single `.hlx`, confirm the temporary slot is filled in.
+8. If using a single preset file, confirm the temporary slot is filled in.
 
 ## Preflight And Diagnostics
 
@@ -57,8 +57,8 @@ CSV contents.
 
 When sharing a bug report, attach the `.zip` created by Export diagnostic bundle
 and describe what you clicked immediately before the problem. If the issue is
-hardware-related, also mention whether the Helix was visible to Windows as both
-an audio device and a MIDI output.
+hardware-related, also mention whether the processor was visible to Windows as
+both an audio device and a MIDI output.
 
 ## Red Highlighted Rows
 
@@ -70,7 +70,7 @@ One or more preset rows or snapshot cells are red after measurement.
 
 MatchPatch could not safely calculate a normal adjustment. It may have recorded
 silence, received unusable loudness data, or calculated an output level outside
-the Helix range.
+the processor range.
 
 ### What To Try
 
@@ -98,21 +98,48 @@ The GUI shows a hardware error, or measurement does not start in hardware mode.
 
 ### Likely Cause
 
-MatchPatch cannot see the Helix audio device, MIDI output, or native hardware
+MatchPatch cannot see the processor audio device, MIDI output, or native hardware
 setup.
 
 ### What To Try
 
-1. Check that the Helix is powered on.
+1. Check that the processor is powered on.
 2. Check the USB cable.
-3. Check that the Helix appears as an audio device.
-4. Check that the Helix appears as a MIDI output.
+3. Check that the processor appears as an audio device.
+4. Check that the processor appears as a MIDI output.
 5. In Advanced > Device, make the Audio device and MIDI output names more
    specific.
 6. If you only want to learn the app, switch Backend to `loopback`.
 
 
 See [Hardware Measurement](workflows/hardware-measurement.md).
+
+## Presets Do Not Switch On Pod Go
+
+### What You See
+
+Snapshots change during measurement, but Pod Go presets stay on the same slot.
+In MIDI-OX, MatchPatch sends messages like `C0 00`, `C0 01`, or `C0 02`,
+followed by `B0 45 00` through `B0 45 03`.
+
+### Likely Cause
+
+Those messages are the expected Pod Go steering commands: Program Change selects
+the preset slot, and CC 69 selects snapshots. If snapshots move but presets do
+not, the Pod Go is receiving snapshot CC messages but ignoring Program Change,
+or the loopMIDI/MIDI-OX route is showing the messages without forwarding them to
+the Pod Go.
+
+### What To Try
+
+1. On the Pod Go, open Global Settings > MIDI/Tempo.
+2. Enable MIDI Program Change receive.
+3. Confirm the Pod Go MIDI base channel matches MatchPatch's MIDI channel, or
+   set the Pod Go to receive on all channels.
+4. If MatchPatch is sending to a loopMIDI port for capture, configure MIDI-OX to
+   route that input to the real `POD Go` MIDI output.
+5. If MatchPatch sends directly to `POD Go`, use MIDI-OX only for observation,
+   not as the selected MatchPatch MIDI output.
 
 ## Native Windows Environment Missing
 
@@ -192,7 +219,8 @@ rate.
 
 ### What To Try
 
-1. Use a reference DI recorded at the same sample rate as the Helix audio setup.
+1. Use a reference DI recorded at the same sample rate as the processor audio
+   setup.
 2. Or change the Sample rate in Advanced > Device to match the WAV and hardware.
 3. Try again.
 
@@ -213,7 +241,7 @@ The Audio device field is empty, too broad, or does not match the device name.
 2. Make the Audio device field more specific.
 3. If multiple similar devices are visible, use the exact name shown by your
    system.
-4. Reconnect the Helix and restart the app if the device list changed.
+4. Reconnect the processor and restart the app if the device list changed.
 
 ## Wrong Channel Mapping
 
@@ -231,7 +259,7 @@ recording the wrong return channels.
 1. Open Advanced > Device.
 2. Check Recording channels.
 3. Check Playback channels.
-4. Try the normal Helix idea:
+4. Try the usual Line 6 hardware idea:
    - Recording channels: `1,2`;
    - Playback channels: `3,4`.
 5. Use recorded-output playback to confirm signal.
@@ -262,7 +290,7 @@ selection does not match the loaded file.
 
 See [Snapshots, Solos, And Ignored Snapshots](concepts/snapshots-solos-and-ignored.md).
 
-## `.hlx` Temporary Slot Missing
+## Single-Preset Temporary Slot Missing
 
 ### What You See
 
@@ -270,7 +298,8 @@ The GUI warns that a preset ID is required, or highlights the Preset cell.
 
 ### Likely Cause
 
-A single `.hlx` preset needs one temporary Helix slot for measurement.
+A single `.hlx` or `.pgp` preset needs one temporary device slot for
+measurement.
 
 ### What To Try
 
@@ -296,6 +325,8 @@ The saved file extension does not match the input.
 
 - Save `.hls` setlists as `.hls`.
 - Save `.hlx` presets as `.hlx`.
+- Save `.pgs` setlists as `.pgs`.
+- Save `.pgp` presets as `.pgp`.
 - Use Save As and choose a matching filename.
 
 See [Save And Import Files](workflows/save-and-import.md).
@@ -312,22 +343,22 @@ The previous file does not have the same extension as the current file.
 
 ### What To Try
 
-1. Open the current `.hls` setlist.
+1. Open the current `.hls` or `.pgs` setlist.
 2. Click Select changed.
-3. Choose an older `.hls` version of that same setlist.
+3. Choose an older setlist of the same file type.
 
 See [Select Changed Presets](workflows/select-changed-presets.md).
 
-## Invalid Helix Name
+## Invalid Device Name
 
 ### What You See
 
-A table edit or CSV import complains about a Helix name.
+A table edit or CSV import complains about a device name.
 
 ### Likely Cause
 
-The preset or snapshot name contains a character the Helix file workflow does
-not allow, or the name is too long.
+The preset or snapshot name contains a character the selected device workflow
+does not allow, or the name is too long.
 
 ### What To Try
 
@@ -353,8 +384,8 @@ Common reasons:
 
 - silence was recorded;
 - wrong USB channels;
-- the Helix did not switch as expected;
-- the reference DI did not reach the Helix;
+- the processor did not switch as expected;
+- the reference DI did not reach the processor;
 - the measured audio was too short for the analysis window;
 - timing was too fast for effect trails.
 
@@ -373,7 +404,7 @@ See [Measurement Timing](concepts/timing.md).
 
 ### What You See
 
-MatchPatch warns that the resulting output level would be outside the Helix
+MatchPatch warns that the resulting output level would be outside the processor
 range.
 
 ### Likely Cause
@@ -392,17 +423,18 @@ The measurement was probably invalid, often because silence was recorded.
 
 ### What You See
 
-MatchPatch says the Helix snapshot-assigned property limit would be exceeded.
+MatchPatch says the selected device's snapshot-assigned property limit would be
+exceeded.
 
 ### Likely Cause
 
-The preset already uses close to Helix's limit of 64 snapshot-assigned
-properties. MatchPatch needs to assign the output block level to snapshots before
-it can balance snapshot loudness.
+The preset already uses close to the selected device's snapshot-assigned
+property limit. MatchPatch needs to assign the output block level to snapshots
+before it can balance snapshot loudness.
 
 ### What To Try
 
-1. Open the preset in HX Edit or on the Helix.
+1. Open the preset in the matching editor or on the processor.
 2. Remove unused snapshot assignments from blocks or parameters.
 3. Save the preset or setlist.
 4. Run MatchPatch again.
@@ -462,7 +494,7 @@ The CSV does not match the current table.
 2. Make sure the snapshot count is the same.
 3. Make sure preset IDs still exist in the table.
 4. Check that gain values are numbers.
-5. Check that names are short and Helix-safe.
+5. Check that names are short and valid for the selected device.
 
 
 See [Manual Editing And CSV](workflows/manual-editing-and-csv.md).
@@ -508,7 +540,7 @@ adjustment.
 Rerun measurement when:
 
 - routing was wrong;
-- the Helix was not connected correctly;
+- the processor was not connected correctly;
 - a red row was caused by silence;
 - timing was too fast;
 - you changed the preset tone;

@@ -97,12 +97,61 @@ def test_helix_setting_descriptors_match_current_defaults() -> None:
     assert descriptors["blocksize"].minimum == 0
     assert descriptors["midi_output"].default == "Helix"
     assert descriptors["midi_output"].cli_flags == ("--steering-output", "--midi-output")
-    assert descriptors["midi_channel"].default == 0
-    assert descriptors["midi_channel"].minimum == 0
-    assert descriptors["midi_channel"].maximum == 15
+    assert descriptors["midi_channel"].default == 1
+    assert descriptors["midi_channel"].minimum == 1
+    assert descriptors["midi_channel"].maximum == 16
     assert descriptors["preset_wait"].default == 0.5
     assert descriptors["snapshot_wait"].default == 0.2
     assert descriptors["measurement_wait"].default == 0.1
+
+    profile.validate_settings(
+        {name: descriptor.default for name, descriptor in descriptors.items()}
+    )
+
+
+def test_podgo_profile_defines_line6_processor_boundaries() -> None:
+    profile = get_device_profile("podgo")
+    routing = profile.default_audio_routing()
+    steering = profile.default_steering_options()
+    handler = profile.create_patch_file_handler(Path("."))
+    file_types = handler.file_types()
+
+    assert profile.display_name == "Line 6 Pod Go"
+    assert profile.snapshot_count == 4
+    assert profile.max_snapshot_count == 4
+    assert profile.terminology().device == "Pod Go"
+    assert routing.device == "POD Go"
+    assert routing.sample_rate == 48000
+    assert routing.input_mapping == (1, 2)
+    assert routing.output_mapping == (3, 4)
+    assert steering.output == "POD Go"
+    assert steering.channel == 1
+    assert handler.file_kind(Path("tone.pgp")) == "preset"
+    assert handler.file_kind(Path("setlist.pgs")) == "setlist"
+    assert handler.file_kind(Path("tone.hlx")) == "unknown"
+    assert handler.parse_patch_set("01A,32D") == [1, 128]
+    assert handler.format_patch_id(128) == "32D"
+    assert profile.format_patch_id(1) == "01A"
+    assert [file_type.name_filter() for file_type in file_types] == [
+        "Pod Go .pgs (*.pgs)",
+        "Pod Go .pgp (*.pgp)",
+    ]
+
+
+def test_podgo_setting_descriptors_use_podgo_defaults() -> None:
+    profile = get_device_profile("podgo")
+    descriptors = {descriptor.name: descriptor for descriptor in profile.setting_descriptors()}
+
+    assert descriptors["audio_device"].default == "POD Go"
+    assert descriptors["audio_device"].config_path == ("devices", "podgo", "audio", "device")
+    assert descriptors["sample_rate"].default == 48000
+    assert descriptors["input_mapping"].default == (1, 2)
+    assert descriptors["output_mapping"].default == (3, 4)
+    assert descriptors["midi_output"].default == "POD Go"
+    assert descriptors["midi_output"].config_path == ("devices", "podgo", "steering", "output")
+    assert descriptors["preset_wait"].show_in_gui is False
+    assert descriptors["snapshot_wait"].show_in_gui is False
+    assert descriptors["measurement_wait"].show_in_gui is False
 
     profile.validate_settings(
         {name: descriptor.default for name, descriptor in descriptors.items()}
@@ -115,8 +164,8 @@ def test_device_setting_validation_rejects_wrong_kind_and_range() -> None:
     with pytest.raises(ValueError, match="sample_rate must be an integer"):
         profile.validate_settings({"sample_rate": "48000"})
 
-    with pytest.raises(ValueError, match="midi_channel must not exceed 15"):
-        profile.validate_settings({"midi_channel": 16})
+    with pytest.raises(ValueError, match="midi_channel must not exceed 16"):
+        profile.validate_settings({"midi_channel": 17})
 
     with pytest.raises(ValueError, match="blocksize must be at least 0"):
         profile.validate_settings({"blocksize": -1})
@@ -130,8 +179,13 @@ def test_helix_profile_rejects_more_than_eight_snapshots() -> None:
         validate_snapshot_count(get_device_profile("helix"), 9)
 
 
+def test_podgo_profile_rejects_more_than_four_snapshots() -> None:
+    with pytest.raises(ValueError, match="Line 6 Pod Go must not exceed 4"):
+        validate_snapshot_count(get_device_profile("podgo"), 5)
+
+
 def test_unknown_device_profile_lists_supported_devices() -> None:
-    with pytest.raises(ValueError, match="Unsupported device 'unknown'.*helix"):
+    with pytest.raises(ValueError, match="Unsupported device 'unknown'.*helix.*podgo"):
         get_device_profile("unknown")
 
 
@@ -310,7 +364,7 @@ class BasicProfile(DeviceProfile):
         return AudioRouting(None, 48000, (1, 2), (1, 2))
 
     def default_steering_options(self) -> SteeringOptions:
-        return SteeringOptions(None, 0, 0.0, 0.0, 0.0)
+        return SteeringOptions(None, 1, 0.0, 0.0, 0.0)
 
     def create_controller(self, options: SteeringOptions) -> DeviceController:
         return EmptyController()
@@ -374,7 +428,7 @@ def test_default_device_capabilities_are_backward_compatible() -> None:
     assert descriptors["input_mapping"].default == (1, 2)
     assert descriptors["output_mapping"].default == (1, 2)
     assert descriptors["midi_output"].default is None
-    assert descriptors["midi_channel"].default == 0
+    assert descriptors["midi_channel"].default == 1
     profile.validate_settings({})
     profile.validate_settings({"unknown_device_setting": object()})
     assert handler.file_capabilities().reads_setlist_files is False
@@ -617,6 +671,7 @@ def test_builtin_device_profiles_are_listed_from_static_registry() -> None:
     assert get_device_profile("demo-device").display_name == "Demo Device"
     assert [profile.name for profile in registry.list_device_profiles()] == [
         "helix",
+        "podgo",
         "demo-device",
     ]
 

@@ -96,6 +96,7 @@ def default_config() -> Config:
     policy = NormalizationPolicy()
     config: Config = {
         "normalize": {
+            "device": "helix",
             "backend": "hardware",
             "windows_python": str(DEFAULT_WINDOWS_PYTHON),
             "reference_di": str(DEFAULT_REFERENCE_DI),
@@ -118,7 +119,6 @@ def default_config() -> Config:
             "measured_snapshots": policy.snapshot_count,
             "solo_regex": policy.solo_regex,
             "ignore_snapshot_regex": policy.ignore_snapshot_regex,
-            "ignore_preset_regex": policy.ignore_preset_regex,
             "solo_gain_bump_db": policy.solo_gain_bump_db,
             "crest_factor_reference_db": policy.crest_factor_reference_db,
             "crest_factor_correction_ratio": policy.crest_factor_correction_ratio,
@@ -131,7 +131,11 @@ def default_config() -> Config:
     devices = config["devices"]
     assert isinstance(devices, dict)
     for profile in list_device_profiles():
-        devices[profile.name] = _default_device_config(profile.setting_descriptors())
+        device_config = _default_device_config(profile.setting_descriptors())
+        device_config["policy"] = {
+            "hide_preset_regex": profile.default_ignore_preset_regex(),
+        }
+        devices[profile.name] = device_config
 
     return config
 

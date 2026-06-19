@@ -6,14 +6,14 @@
 :width: 220px
 ```
 
-Start here if you want to balance Helix preset and snapshot loudness with
-MatchPatch.
+Start here if you want to balance supported Line 6 preset and snapshot loudness
+with MatchPatch.
 
 MatchPatch measures your presets, calculates output-level changes, and helps you
-save an adjusted Helix file.
+save an adjusted processor file.
 
 > Warning:
-> Keep a backup of your original `.hls` or `.hlx` before saving or importing
+> Keep a backup of your original processor file before saving or importing
 > adjusted files.
 
 ## Where Should I Go?
@@ -24,7 +24,7 @@ save an adjusted Helix file.
 | Read the main user manual | [Musician Guide](musician-guide.md) |
 | Balance a full setlist | [Normalize A Setlist](workflows/normalize-setlist.md) |
 | Balance one preset | [Normalize A Single Preset](workflows/normalize-single-preset.md) |
-| Test without connecting a Helix | [Test Without Hardware](workflows/test-without-hardware.md) |
+| Test without connecting hardware | [Test Without Hardware](workflows/test-without-hardware.md) |
 | Fix a problem | [Troubleshooting](troubleshooting.md) |
 | Look up a short answer | [FAQ](faq.md) |
 | Look up a term | [Glossary](glossary.md) |
@@ -53,12 +53,15 @@ save an adjusted Helix file.
 - [Measurement Timing](concepts/timing.md)
 - [Reading Results](concepts/reading-results.md)
 
-## Supported Files
+## Supported Devices And Files
 
-MatchPatch currently focuses on Line 6 Helix files:
+MatchPatch currently supports Line 6 Helix and Line 6 Pod Go equally in the
+normal GUI and CLI workflows. Supported file types are:
 
-- `.hls` setlists;
-- `.hlx` single presets.
+- Helix `.hls` setlists;
+- Helix `.hlx` single presets;
+- Pod Go `.pgs` setlists;
+- Pod Go `.pgp` single presets.
 
 ## For Maintainers
 

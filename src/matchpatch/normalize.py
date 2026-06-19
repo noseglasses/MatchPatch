@@ -128,9 +128,21 @@ def _normalization_policy(config: Config, args: argparse.Namespace) -> Normaliza
                 prefer(
                     args.ignore_preset_regex,
                     config,
+                    "devices",
+                    args.device,
                     "policy",
-                    "ignore_preset_regex",
-                    default=NormalizationPolicy().ignore_preset_regex,
+                    "hide_preset_regex",
+                    default=config_value(
+                        config,
+                        "policy",
+                        "hide_preset_regex",
+                        default=config_value(
+                            config,
+                            "policy",
+                            "ignore_preset_regex",
+                            default=profile.default_ignore_preset_regex(),
+                        ),
+                    ),
                 ),
             )
         ),
@@ -881,7 +893,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--target-lufs", type=float)
     parser.add_argument("--solo-regex")
     parser.add_argument("--ignore-snapshot-regex")
-    parser.add_argument("--ignore-preset-regex")
+    parser.add_argument("--hide-preset-regex", dest="ignore_preset_regex")
+    parser.add_argument("--ignore-preset-regex", dest="ignore_preset_regex", help=argparse.SUPPRESS)
     parser.add_argument("--solo-gain-bump-db", type=float)
     parser.add_argument("--snapshot-count", type=int)
     parser.add_argument("--backend")

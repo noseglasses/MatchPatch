@@ -66,7 +66,7 @@ Common reasons include:
 
 - silence was recorded;
 - routing was wrong;
-- the output level would go outside the Helix range;
+- the output level would go outside the processor range;
 - the measurement did not produce usable loudness data.
 
 > Warning:
@@ -79,7 +79,7 @@ Common reasons include:
 If recorded-output capture is enabled, snapshot cells may show a small playback
 button. Use it to hear what MatchPatch recorded.
 
-This can help confirm whether the Helix signal was captured correctly.
+This can help confirm whether the processor signal was captured correctly.
 
 ## When To Save
 
@@ -92,8 +92,8 @@ Save when:
 
 If something looks wrong, fix the cause and rerun the affected presets.
 
-After importing the adjusted file into Helix, listen through the setlist in a
-real playing context.
+After importing the adjusted file into the matching processor, listen through
+the setlist in a real playing context.
 
 
 ## Next Step

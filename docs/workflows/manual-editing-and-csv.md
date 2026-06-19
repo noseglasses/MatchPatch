@@ -9,7 +9,7 @@ saving.
 
 ## Before You Start
 
-- Open a Helix setlist or preset.
+- Open a Helix or Pod Go setlist or preset.
 - Back up the original file.
 - Run measurement first if you want to edit measured gain results.
 
@@ -25,8 +25,8 @@ For setlists:
 2. Check Edit manually below the preset table.
 3. Double-click a preset name, snapshot name, or gain adjustment cell.
 
-For a single `.hlx` preset, the temporary Preset slot can be edited without
-turning on Edit manually.
+For a single `.hlx` or `.pgp` preset, the temporary Preset slot can be edited
+without turning on Edit manually.
 
 
 ## Editing A Cell
@@ -43,8 +43,8 @@ You can edit:
 - snapshot names;
 - gain adjustment values.
 
-Preset and snapshot names are cleaned to fit Helix rules. Long names may be
-shortened.
+Preset and snapshot names are cleaned to fit the selected device rules. Long
+names may be shortened.
 
 ## Manual Gain Example
 
@@ -71,7 +71,8 @@ The CSV buttons below the table let you save and load the preset table.
 
 Use this when you want to review or edit table results outside MatchPatch.
 
-The table CSV uses `|` as a separator because Helix names can contain commas.
+The table CSV uses `|` as a separator because supported processor names can
+contain commas.
 
 
 ## Loading A Table CSV
@@ -87,12 +88,12 @@ When loading a table CSV:
 
 - Manual edits are visible in the table.
 - No unexpected error popup appears.
-- Save writes the edited Helix file.
+- Save writes the edited processor file.
 - The edited file sounds correct after import.
 
 ## If Something Goes Wrong
 
-- If a name changes unexpectedly, it may have been cleaned for Helix-safe
+- If a name changes unexpectedly, it may have been cleaned for device-safe
   characters or length.
 - If a gain value is rejected, enter a normal number such as `-1`, `0`, or
   `1.5`.

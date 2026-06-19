@@ -17,12 +17,12 @@
   <strong><a href="https://github.com/noseglasses/MatchPatch/releases/latest">Download MatchPatch</a></strong>
 </p>
 
-![MatchPatch GUI showing a loaded Helix setlist](docs/assets/screenshots/normalization-ongoing.png)
+![MatchPatch GUI showing a loaded supported Line 6 setlist](docs/assets/screenshots/normalization-ongoing.png)
 
 **No more unexpected volume jumps when switching sounds.**
 
 MatchPatch automatically equalizes the loudness of presets and snapshots in
-guitar processors such as the Line 6 Helix.
+guitar processors such as the Line 6 Helix and Line 6 Pod Go.
 
 ## Why MatchPatch?
 
@@ -38,7 +38,7 @@ use.
 - Measure preset loudness automatically.
 - Analyze snapshots.
 - Calculate required gain corrections.
-- Modify Helix setlists and presets.
+- Modify supported Line 6 setlists and presets.
 - Test the workflow without hardware.
 - Configure normal runs from the GUI.
 - Use CLI and worker commands for advanced scripting.
@@ -46,15 +46,18 @@ use.
 
 ## Current Support
 
-Current normal workflows support:
+Current normal workflows support both built-in Line 6 device families:
 
 - Line 6 Helix
 - `.hls` Helix setlists
 - `.hlx` Helix presets
+- Line 6 Pod Go
+- `.pgs` Pod Go setlists
+- `.pgp` Pod Go presets
 - GUI-first workflows
 
 Loopback and simulated modes are available for no-hardware tests. Hardware mode
-is for real Helix measurement.
+is for real processor measurement.
 
 ## Documentation
 
@@ -72,7 +75,7 @@ is for real Helix measurement.
 ## Safety Notes
 
 > Warning:
-> Keep backups of your original Helix files.
+> Keep backups of your original processor files.
 
 > Warning:
 > Measurement files are for measuring, not for live playing.
@@ -104,8 +107,8 @@ cd C:\src\MatchPatch-windows
 ```
 
 Hardware measurement from WSL needs a synced native Windows runtime. See
-[developer commands](docs/dev/commands.md) before using real Helix hardware from
-WSL.
+[developer commands](docs/dev/commands.md) before using real processor hardware
+from WSL.
 
 ## Advanced And Developer Information
 

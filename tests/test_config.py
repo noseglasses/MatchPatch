@@ -85,15 +85,19 @@ def test_export_default_config_writes_loadable_toml(tmp_path) -> None:
 
     loaded = tomllib.loads(path.read_text(encoding="utf-8"))
 
+    assert loaded["normalize"]["device"] == "helix"
     assert loaded["normalize"]["backend"] == "hardware"
     assert loaded["normalize"]["target_lufs"] == -16.0
     assert loaded["analysis"]["window_seconds"] == 3.0
     assert loaded["analysis"]["round_trip_latency_seconds"] == 0.02
     assert loaded["policy"]["measured_snapshots"] == 4
     assert loaded["policy"]["solo_regex"] == r"(?i)\bsolo\b"
+    assert "hide_preset_regex" not in loaded["policy"]
     assert loaded["devices"]["helix"]["audio"]["device"] == "Helix"
     assert loaded["devices"]["helix"]["audio"]["input_mapping"] == [1, 2]
+    assert loaded["devices"]["helix"]["policy"]["hide_preset_regex"] == ""
     assert loaded["devices"]["helix"]["steering"]["snapshot_wait_seconds"] == 0.2
+    assert loaded["devices"]["podgo"]["policy"]["hide_preset_regex"] == r"(?i)^New Preset$"
 
 
 def test_resolve_device_settings_layers_descriptor_defaults_config_and_cli() -> None:

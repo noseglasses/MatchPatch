@@ -90,21 +90,25 @@ def test_configure_wslg_runtime_uses_existing_runtime_socket(tmp_path, monkeypat
     runtime.mkdir()
     runtime.joinpath("wayland-0").touch()
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(gui_app, "xcb_runtime_error", lambda: None)
 
     configure_wslg_runtime()
 
     assert os.environ["XDG_RUNTIME_DIR"] == str(runtime)
-    assert "QT_QPA_PLATFORM" not in os.environ
+    assert os.environ["QT_QPA_PLATFORM"] == "xcb"
 
 
 def test_configure_wslg_runtime_selects_wslg_socket(tmp_path, monkeypatch) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(gui_app, "xcb_runtime_error", lambda: None)
     original_exists = Path.exists
 
     def fake_exists(path: Path) -> bool:
@@ -117,7 +121,201 @@ def test_configure_wslg_runtime_selects_wslg_socket(tmp_path, monkeypatch) -> No
     configure_wslg_runtime()
 
     assert os.environ["XDG_RUNTIME_DIR"] == str(Path("/mnt/wslg/runtime-dir"))
+    assert os.environ["QT_QPA_PLATFORM"] == "xcb"
+
+
+def test_configure_wslg_runtime_uses_wayland_when_xcb_dependency_is_missing(
+    tmp_path, monkeypatch
+) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    runtime.joinpath("wayland-0").touch()
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setattr(gui_app, "xcb_runtime_error", lambda: "missing dependency")
+
+    configure_wslg_runtime()
+
     assert os.environ["QT_QPA_PLATFORM"] == "wayland"
+
+
+def test_configure_wslg_runtime_uses_wayland_without_x11(tmp_path, monkeypatch) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    runtime.joinpath("wayland-0").touch()
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+
+    configure_wslg_runtime()
+
+    assert os.environ["QT_QPA_PLATFORM"] == "wayland"
+
+
+def test_configure_wslg_runtime_preserves_explicit_qt_platform(tmp_path, monkeypatch) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    runtime.joinpath("wayland-0").touch()
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("QT_QPA_PLATFORM", "wayland")
+
+    configure_wslg_runtime()
+
+    assert os.environ["QT_QPA_PLATFORM"] == "wayland"
+
+
+def test_xkb_layout_for_windows_language_maps_common_tags() -> None:
+    assert gui_app.xkb_layout_for_windows_language("en-US") == "us"
+    assert gui_app.xkb_layout_for_windows_language("en_GB") == "gb"
+    assert gui_app.xkb_layout_for_windows_language("de-DE") == "de"
+    assert gui_app.xkb_layout_for_windows_language("fr-CA") == "fr"
+    assert gui_app.xkb_layout_for_windows_language("") is None
+
+
+def test_xkb_layout_for_windows_keyboard_layout_maps_hkl_language_ids() -> None:
+    assert gui_app.xkb_layout_for_windows_keyboard_layout("fffffffff0c00409") == "us"
+    assert gui_app.xkb_layout_for_windows_keyboard_layout("00000407") == "de"
+    assert gui_app.xkb_layout_for_windows_keyboard_layout("00000809") == "gb"
+    assert gui_app.xkb_layout_for_windows_keyboard_layout("bogus") is None
+
+
+def test_windows_keyboard_layout_id_uses_foreground_hkl(monkeypatch) -> None:
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stdout = "00000407\n"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(gui_app.shutil, "which", lambda name: f"/mnt/c/{name}")
+    monkeypatch.setattr(gui_app.subprocess, "run", fake_run)
+
+    assert gui_app.windows_keyboard_layout_id() == "00000407"
+
+    command, kwargs = calls[0]
+    assert command[:4] == ["/mnt/c/powershell.exe", "-NoProfile", "-NonInteractive", "-Command"]
+    assert gui_app.WINDOWS_KEYBOARD_LAYOUT_COMMAND in command
+    assert kwargs["text"] is True
+
+
+def test_windows_input_language_uses_powershell(monkeypatch) -> None:
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stdout = "de-DE\n"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(gui_app.shutil, "which", lambda name: f"/mnt/c/{name}")
+    monkeypatch.setattr(gui_app.subprocess, "run", fake_run)
+
+    assert gui_app.windows_input_language() == "de-DE"
+
+    command, kwargs = calls[0]
+    assert command[:4] == ["/mnt/c/powershell.exe", "-NoProfile", "-NonInteractive", "-Command"]
+    assert gui_app.WINDOWS_INPUT_LANGUAGE_COMMAND in command
+    assert kwargs["text"] is True
+
+
+def test_sync_wslg_keyboard_layout_applies_windows_layout(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("XKB_DEFAULT_LAYOUT", raising=False)
+    monkeypatch.setattr(gui_app, "is_wsl", lambda: True)
+    monkeypatch.setattr(gui_app, "windows_keyboard_layout_id", lambda: "00000407")
+    monkeypatch.setattr(gui_app, "windows_input_language", lambda: None)
+    monkeypatch.setattr(gui_app.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(gui_app.subprocess, "run", fake_run)
+
+    gui_app.sync_wslg_keyboard_layout()
+
+    assert os.environ["XKB_DEFAULT_LAYOUT"] == "de"
+    assert calls[0][0] == ["/usr/bin/setxkbmap", "de"]
+
+
+def test_sync_wslg_keyboard_layout_warns_without_setxkbmap(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(gui_app, "is_wsl", lambda: True)
+    monkeypatch.setattr(gui_app, "windows_keyboard_layout_id", lambda: None)
+    monkeypatch.setattr(gui_app, "windows_input_language", lambda: "de-DE")
+    monkeypatch.setattr(gui_app.shutil, "which", lambda name: None)
+
+    gui_app.sync_wslg_keyboard_layout()
+
+    assert "setxkbmap" in capsys.readouterr().err
+
+
+def test_xcb_runtime_available_probes_qt_platform(monkeypatch) -> None:
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(gui_app.subprocess, "run", fake_run)
+
+    assert gui_app.xcb_runtime_available() is True
+
+    command, kwargs = calls[0]
+    assert command[:2] == [gui_app.sys.executable, "-c"]
+    assert kwargs["env"]["QT_QPA_PLATFORM"] == "xcb"
+    assert kwargs["env"]["QT_DEBUG_PLUGINS"] == "1"
+    assert kwargs["stdout"] is gui_app.subprocess.PIPE
+    assert kwargs["stderr"] is gui_app.subprocess.PIPE
+    assert kwargs["timeout"] == gui_app.XCB_PROBE_TIMEOUT_SECONDS
+    assert kwargs["text"] is True
+
+
+def test_xcb_runtime_available_returns_false_when_probe_fails(monkeypatch) -> None:
+    class Completed:
+        returncode = 1
+        stdout = ""
+        stderr = "missing dependency"
+
+    monkeypatch.setattr(gui_app.subprocess, "run", lambda *args, **kwargs: Completed())
+
+    assert gui_app.xcb_runtime_available() is False
+    assert gui_app.xcb_runtime_error() == "missing dependency"
+
+
+def test_summarize_xcb_probe_error_prefers_missing_library_line() -> None:
+    assert gui_app._summarize_xcb_probe_error(
+        "noise\n"
+        "Cannot load library libqxcb.so: libxkbcommon-x11.so.0: "
+        "cannot open shared object file: No such file or directory\n"
+        "generic fallback message\n"
+    ) == (
+        "Cannot load library libqxcb.so: libxkbcommon-x11.so.0: "
+        "cannot open shared object file: No such file or directory"
+    )
 
 
 def test_resource_path_uses_pyinstaller_meipass(tmp_path, monkeypatch) -> None:

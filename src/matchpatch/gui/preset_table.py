@@ -51,7 +51,6 @@ from matchpatch.gui.table_roles import (
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_LABELS,
     IGNORE_REASON_PRESET,
-    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
     IGNORED_SNAPSHOT_REASONS_ROLE,
     IGNORED_SNAPSHOT_ROLE,
@@ -184,6 +183,8 @@ class PresetTableController:
 
     def has_ignored_snapshot_cells(self) -> bool:
         for row in range(self.table.rowCount()):
+            if self.table.isRowHidden(row):
+                continue
             for snapshot_index in range(self.callbacks.snapshot_count_for_estimate()):
                 item = self.table.item(row, snapshot_name_column(snapshot_index))
                 if item is not None and item.data(IGNORED_SNAPSHOT_ROLE):
@@ -193,6 +194,8 @@ class PresetTableController:
     def checked_preset_rows(self) -> list[int]:
         rows = []
         for row in range(self.table.rowCount()):
+            if self.table.isRowHidden(row):
+                continue
             item = self.table.item(row, 0)
             if item is not None and item.checkState() == Qt.CheckState.Checked:
                 rows.append(row)
@@ -200,17 +203,19 @@ class PresetTableController:
 
     def selected_measurable_preset_rows(self) -> list[int]:
         if Path(self.callbacks.input_path_text()).suffix.lower() == ".hlx":
-            candidate_rows = [0] if self.table.rowCount() else []
+            candidate_rows = [0] if self.table.rowCount() and not self.table.isRowHidden(0) else []
         else:
             checked_rows = self.checked_preset_rows()
-            candidate_rows = checked_rows or list(range(self.table.rowCount()))
+            candidate_rows = checked_rows or [
+                row for row in range(self.table.rowCount()) if not self.table.isRowHidden(row)
+            ]
         return [row for row in candidate_rows if self.row_has_measured_snapshots(row)]
 
     def has_optimization_preset_selection(self) -> bool:
         if self.table.rowCount() == 0:
             return False
         if Path(self.callbacks.input_path_text()).suffix.lower() == ".hlx":
-            return self.row_has_measured_snapshots(0)
+            return not self.table.isRowHidden(0) and self.row_has_measured_snapshots(0)
         return any(self.row_has_measured_snapshots(row) for row in self.checked_preset_rows())
 
     def set_preset_original_filename(self, row: int, filename: str | None) -> None:
@@ -254,9 +259,15 @@ class PresetTableController:
 
     def selected_rows_or_all_measurable_rows(self) -> list[int]:
         selected_rows = sorted(
-            {index.row() for index in self.table.selectionModel().selectedIndexes()}
+            {
+                index.row()
+                for index in self.table.selectionModel().selectedIndexes()
+                if not self.table.isRowHidden(index.row())
+            }
         )
-        rows = selected_rows or list(range(self.table.rowCount()))
+        rows = selected_rows or [
+            row for row in range(self.table.rowCount()) if not self.table.isRowHidden(row)
+        ]
         return [row for row in rows if self.row_has_measured_snapshots(row)]
 
     def _preset_id_for_row(
@@ -1273,13 +1284,7 @@ class PresetTableController:
             self.set_snapshot_ignore_reason(row, snapshot_index, IGNORE_REASON_PRESET, active)
 
     def set_preset_name_ignore_reason(self, row: int, active: bool) -> None:
-        for snapshot_index in range(self.callbacks.snapshot_count()):
-            self.set_snapshot_ignore_reason(
-                row,
-                snapshot_index,
-                IGNORE_REASON_PRESET_REGEX,
-                active,
-            )
+        self.table.setRowHidden(row, active)
 
     def set_comparison_ignore_plan(
         self,
@@ -1373,6 +1378,8 @@ class PresetTableController:
         item = self.table.item(row, 2)
         name = item.text() if item is not None else ""
         self.set_preset_name_ignore_reason(row, self.callbacks.is_ignored_preset_name(name))
+        self.callbacks.refresh_preset_measurement_time_estimate()
+        self.callbacks.refresh_file_actions()
 
     def refresh_all_preset_names(self) -> None:
         for row in range(self.table.rowCount()):
