@@ -176,6 +176,10 @@ class RecordingMeasurementHandler:
     created = []
     validated = []
 
+    @staticmethod
+    def file_kind(path):
+        return "setlist"
+
     def validate_output(self, selected_input_path, selected_output_path):
         self.validated.append((selected_input_path, selected_output_path))
 
@@ -528,6 +532,20 @@ def test_input_browse_uses_device_file_type_filter(monkeypatch, app) -> None:
     window.close()
 
 
+def test_podgo_device_file_type_filters_are_exposed() -> None:
+    assert main_window.file_type_filters.open_patch_filter_for_device("podgo") == (
+        "Patches (*.pgs *.pgp)"
+    )
+    assert (
+        main_window.file_type_filters.helix_save_file_filter("podgo", ".pgs")
+        == "Pod Go .pgs (*.pgs)"
+    )
+    assert (
+        main_window.file_type_filters.helix_save_file_filter("podgo", ".pgp")
+        == "Pod Go .pgp (*.pgp)"
+    )
+
+
 def test_input_browse_rejects_mixed_multi_selection(monkeypatch, app) -> None:
     window = MainWindow()
     errors = []
@@ -870,7 +888,7 @@ def test_save_as_uses_file_selection_dialog(monkeypatch, app) -> None:
             DontUseNativeDialog = object()
 
         class AcceptMode:
-            AcceptOpen = object()
+            AcceptSave = object()
 
         class FileMode:
             AnyFile = object()
@@ -919,12 +937,59 @@ def test_save_as_uses_file_selection_dialog(monkeypatch, app) -> None:
     assert save_targets == [(Path("/tmp/output.hls"), {"make_active": True})]
     assert dialogs[0].settings == [
         ("option", FileDialog.Option.DontUseNativeDialog),
-        ("accept_mode", FileDialog.AcceptMode.AcceptOpen),
+        ("accept_mode", FileDialog.AcceptMode.AcceptSave),
         ("file_mode", FileDialog.FileMode.AnyFile),
         ("name_filter", "Helix .hls (*.hls)"),
         ("label", FileDialog.DialogLabel.Accept, "Save as"),
     ]
     window.close()
+
+
+def test_choose_save_as_path_uses_save_accept_mode(monkeypatch) -> None:
+    dialogs = []
+
+    class FileDialog:
+        Option = QFileDialog.Option
+        AcceptMode = QFileDialog.AcceptMode
+        FileMode = QFileDialog.FileMode
+        DialogLabel = QFileDialog.DialogLabel
+
+        def __init__(self, parent, title):
+            self.parent = parent
+            self.title = title
+            self.settings = []
+            dialogs.append(self)
+
+        def setOption(self, option):
+            self.settings.append(("option", option))
+
+        def setAcceptMode(self, mode):
+            self.settings.append(("accept_mode", mode))
+
+        def setFileMode(self, mode):
+            self.settings.append(("file_mode", mode))
+
+        def setNameFilter(self, file_filter):
+            self.settings.append(("name_filter", file_filter))
+
+        def setLabelText(self, label, text):
+            self.settings.append(("label", label, text))
+
+        def exec(self):
+            return True
+
+        def selectedFiles(self):
+            return ["/tmp/output.hls"]
+
+    monkeypatch.setattr(save_dialogs, "QFileDialog", FileDialog)
+
+    assert save_dialogs.choose_save_as_path(
+        None,
+        input_path_text="/tmp/input.hls",
+        device_name="helix",
+        show_error=Mock(),
+    ) == Path("/tmp/output.hls")
+    assert ("accept_mode", QFileDialog.AcceptMode.AcceptSave) in dialogs[0].settings
 
 
 def test_save_active_file_routes_staged_join_to_save_as(monkeypatch, app, tmp_path) -> None:
@@ -1339,7 +1404,7 @@ def test_output_save_picker_uses_save_button(monkeypatch, app) -> None:
             DontUseNativeDialog = object()
 
         class AcceptMode:
-            AcceptOpen = object()
+            AcceptSave = object()
 
         class FileMode:
             AnyFile = object()
@@ -1381,6 +1446,7 @@ def test_output_save_picker_uses_save_button(monkeypatch, app) -> None:
     window.browse_output()
 
     assert window.output_path.text() == str(Path("/tmp/output.hls"))
+    assert ("accept_mode", FileDialog.AcceptMode.AcceptSave) in dialogs[0].settings
     assert dialogs[0].settings[-1] == ("label", FileDialog.DialogLabel.Accept, "Save")
     window.close()
 
@@ -1437,6 +1503,10 @@ def test_automation_overwrite_confirmation_only_prompts_for_existing_files(
 
     class Handler:
         @staticmethod
+        def file_kind(path):
+            return "setlist"
+
+        @staticmethod
         def automation_output_path(path, postfix):
             return path.with_name(path.stem + postfix + path.suffix)
 
@@ -1478,6 +1548,10 @@ def test_normalization_does_not_start_when_overwrite_is_declined(
     measurement_path.touch()
 
     class Handler:
+        @staticmethod
+        def file_kind(path):
+            return "setlist"
+
         @staticmethod
         def automation_output_path(path, postfix):
             return path.with_name(path.stem + postfix + path.suffix)

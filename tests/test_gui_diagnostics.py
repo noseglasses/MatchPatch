@@ -184,6 +184,7 @@ def test_preset_table_selection_preflight_checks_use_context_without_window() ->
         PresetTableSelectionContext(
             has_table=True,
             row_count=2,
+            visible_rows={0, 1},
             checked_rows={0, 1},
             has_ignored_snapshots=False,
             comparison_snapshot_plan={"01A": (0, 2), "01B": (1,)},
@@ -268,8 +269,8 @@ def test_diagnostic_bundle_action_is_available_in_diagnostics_tab(app) -> None:
     assert window.preflight_button.text() == "Run preflight check"
     assert window.diagnostic_summary_button.text() == "Copy diagnostic summary"
     assert window.diagnostic_bundle_button.text() == "Export diagnostic bundle"
-    diagnostics_tab = window.advanced_tabs.widget(6)
-    assert window.advanced_tabs.tabText(6) == "Diagnostics"
+    diagnostics_tab = window.advanced_tabs.widget(7)
+    assert window.advanced_tabs.tabText(7) == "Diagnostics"
     assert diagnostics_tab.isAncestorOf(window.preflight_button)
     assert diagnostics_tab.isAncestorOf(window.diagnostic_summary_button)
     assert diagnostics_tab.isAncestorOf(window.diagnostic_bundle_button)

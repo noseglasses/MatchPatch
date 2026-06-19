@@ -1,7 +1,7 @@
 (help-measurement-and-adjusted-files)=
 # Measurement And Adjusted Files
 
-MatchPatch works with three kinds of Helix files during a normal workflow:
+MatchPatch works with three kinds of processor files during a normal workflow:
 
 - your original file;
 - a measurement file;
@@ -11,15 +11,16 @@ Knowing the difference helps you avoid importing the wrong file before a gig.
 
 ## Original File
 
-This is the `.hls` setlist or `.hlx` preset you already have.
+This is the setlist or preset file you already have, such as `.hls`, `.hlx`,
+`.pgs`, or `.pgp`.
 
 Keep a backup of it before running MatchPatch.
 
 (help-measurement-file)=
 ## Measurement File
 
-A measurement file is a temporary Helix file made for measuring. MatchPatch
-changes routing so the computer can send the reference DI into the Helix and
+A measurement file is a temporary processor file made for measuring. MatchPatch
+changes routing so the computer can send the reference DI into the processor and
 record the processed output.
 
 Measurement files often use `_measurement` in the filename.
@@ -39,7 +40,7 @@ Songs_measurement.hls
 
 An adjusted file contains the level changes MatchPatch calculated.
 
-This is the file you import back into the Helix after checking the results.
+This is the file you import back into the processor after checking the results.
 Adjusted files often use `_adjusted` in the filename.
 
 Example:
@@ -53,25 +54,27 @@ Songs_adjusted.hls
 
 In the GUI:
 
-- Save writes the current MatchPatch changes to the active Helix file.
-- Save As writes the changes to a new Helix file.
+- Save writes the current MatchPatch changes to the active processor file.
+- Save As writes the changes to a new processor file.
 - Save Measurement File creates a measurement file for the workflow.
 
 Use Save As when you want to keep the original file untouched.
 
-When several `.hlx` presets are opened together, MatchPatch treats them as a
-temporary setlist while you work. Save writes the edited presets back to their
-original `.hlx` files. Save As writes one new `.hls` setlist containing all open
-presets.
+When several `.hlx` or `.pgp` presets from the same device family are opened
+together, MatchPatch treats them as a temporary setlist while you work. Save
+writes the edited presets back to their original files. Save As writes one new
+matching setlist containing all open presets.
 
 ## File Extensions
 
 The output file should keep the same extension as the input:
 
 - `.hls` setlists save as `.hls`;
-- `.hlx` presets save as `.hlx`.
-- multiple `.hlx` presets opened together save back to multiple `.hlx` files
-  with Save, but Save As uses `.hls`.
+- `.hlx` presets save as `.hlx`;
+- `.pgs` setlists save as `.pgs`;
+- `.pgp` presets save as `.pgp`;
+- multiple single-preset files opened together save back to their original files
+  with Save, but Save As uses a matching setlist extension.
 
 MatchPatch will warn you if the extension does not match.
 

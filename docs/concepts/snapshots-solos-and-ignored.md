@@ -4,11 +4,12 @@
 MatchPatch measures snapshots inside each selected preset. You choose how many
 snapshots to measure in the Misc tab.
 
-For Helix, the current maximum is 8 snapshots.
+Helix supports up to 8 snapshots per preset. Pod Go supports up to 4 snapshots
+per preset.
 
 ## Snapshot Names
 
-MatchPatch reads snapshot names from the Helix file. Names matter because the
+MatchPatch reads snapshot names from the processor file. Names matter because the
 GUI can use them to identify solos and snapshots that should be skipped.
 
 Clear snapshot names make the automatic behavior easier to understand.
@@ -60,7 +61,7 @@ A snapshot might be ignored when:
 (help-snapshot-regex)=
 ## Changing Detection
 
-The LUFS tab contains regex fields for Solo and Ignored snapshot names. In
+The Selection tab contains regex fields for Solo and Ignored snapshot names. In
 musician terms, these are name-matching rules.
 
 If you change the ignored rule, the table updates right away.

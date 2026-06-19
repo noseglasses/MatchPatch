@@ -128,6 +128,7 @@ Normalize without hardware:
 
 ```bash
 matchpatch normalize --device helix --backend loopback -i setlist.hls -o setlist_adjusted.hls -S 01A --keep-temp
+matchpatch normalize --device podgo --backend loopback -i setlist.pgs -o setlist_adjusted.pgs -S 01A --keep-temp
 ```
 
 Normalize with simulated hardware:
@@ -140,12 +141,14 @@ Guided hardware workflow:
 
 ```bash
 matchpatch normalize --device helix -a -i setlist.hls
+matchpatch normalize --device podgo -a -i setlist.pgs
 ```
 
-Single `.hlx` preset measurement requires one temporary Helix slot:
+Single preset measurement requires one temporary device slot:
 
 ```bash
 matchpatch normalize --device helix -a -i Song.hlx -S 12A
+matchpatch normalize --device podgo -a -i Song.pgp -S 12A
 ```
 
 Select only presets changed relative to an earlier setlist:
@@ -195,8 +198,8 @@ matchpatch-gui
 ```
 
 The GUI starts with the configured backend and can run loopback/simulated flows
-without Helix hardware. Hardware mode requires the native Windows environment
-and visible audio/MIDI endpoints.
+without processor hardware. Hardware mode requires the native Windows
+environment and visible audio/MIDI endpoints.
 
 ## Helix Utility Module
 
@@ -212,6 +215,24 @@ Useful integrated operations:
 python3 -m matchpatch.devices.helix.preset_handling -i setlist.hls -o setlist_measurement.hls --measurement
 python3 -m matchpatch.devices.helix.preset_handling -i setlist.hls --list-presets
 python3 -m matchpatch.devices.helix.preset_handling -i current.hls --diff-presets previous.hls
+```
+
+## Pod Go Utility Module
+
+Run from the repository root:
+
+```bash
+python3 -m matchpatch.devices.line6.podgo.preset_handling --help
+```
+
+Useful integrated operations:
+
+```bash
+python3 -m matchpatch.devices.line6.podgo.preset_handling -i setlist.pgs -o setlist_measurement.pgs --measurement
+python3 -m matchpatch.devices.line6.podgo.preset_handling -i setlist.pgs --list-presets
+python3 -m matchpatch.devices.line6.podgo.preset_handling -i current.pgs --diff-presets previous.pgs
+matchpatch files split --device podgo --input setlist.pgs --output-dir presets
+matchpatch files join --device podgo --output joined.pgs --preset-set 01A,01B presets/Lead.pgp presets/Clean.pgp
 ```
 
 ## Build

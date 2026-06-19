@@ -25,7 +25,7 @@ def choose_save_as_path(
         return None
     dialog = QFileDialog(parent, "Save Helix file as")
     dialog.setOption(QFileDialog.Option.DontUseNativeDialog)
-    dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+    dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
     dialog.setFileMode(QFileDialog.FileMode.AnyFile)
     dialog.setNameFilter(file_filter)
     dialog.setLabelText(QFileDialog.DialogLabel.Accept, accept_label)

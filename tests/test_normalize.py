@@ -9,63 +9,16 @@ import threading
 from pathlib import Path, PureWindowsPath
 
 import pytest
+from normalize_test_helpers import FakeHandler, FakeProfile, write_analysis_csv
 
 from matchpatch import normalize, workflow
 from matchpatch.devices.base import (
     DeviceTargetId,
     MeasurementTarget,
-    PatchAssignment,
     SubdivisionSelection,
     TargetSelection,
 )
 from matchpatch.workflow import NormalizationRequest, export_adjusted_file, normalize_presets
-
-
-class FakeHandler:
-    def __init__(self) -> None:
-        self.applied = []
-        self.measurement_files = []
-
-    def validate_input(self, input_path: Path) -> None:
-        return None
-
-    def validate_output(self, input_path: Path, output_path: Path) -> None:
-        return None
-
-    def automation_output_path(self, input_path: Path, postfix: str) -> Path:
-        return input_path.with_name(input_path.stem + postfix + input_path.suffix)
-
-    def create_measurement_file(self, input_path: Path, output_path: Path) -> None:
-        self.measurement_files.append((input_path, output_path))
-
-    def parse_patch_set(self, value: str) -> list[int]:
-        return [int(item) for item in value.split(",")]
-
-    def list_assignments(self, input_path: Path) -> list[PatchAssignment]:
-        return [PatchAssignment(1, "patch-1", "One"), PatchAssignment(2, "patch-2", "Two")]
-
-    def diff_preset_ids(self, input_path: Path, previous_input_path: Path) -> list[int]:
-        return [2]
-
-    def select_preset_ids(self, input_path, assignments, requested_ids):
-        return requested_ids if requested_ids is not None else [item.id for item in assignments]
-
-    def format_patch_id(self, preset_id: int) -> str:
-        return f"patch-{preset_id}"
-
-    def apply_analysis_csv(self, *args) -> None:
-        self.applied.append(args)
-
-
-class FakeProfile:
-    name = "fake"
-    display_name = "Fake Processor"
-
-    def __init__(self, handler: FakeHandler) -> None:
-        self.handler = handler
-
-    def create_patch_file_handler(self, project_dir: Path) -> FakeHandler:
-        return self.handler
 
 
 def test_count_csv_rows_handles_header(tmp_path) -> None:
@@ -475,7 +428,7 @@ def test_apply_config_uses_device_timing_defaults_when_config_is_silent() -> Non
     assert args.snapshot_wait == 0.2
     assert args.measurement_wait == 0.1
     assert args.device_settings["sample_rate"] == 48000
-    assert args.device_settings["midi_channel"] == 0
+    assert args.device_settings["midi_channel"] == 1
 
 
 def test_apply_config_validates_backend_against_selected_profile(monkeypatch) -> None:
@@ -572,9 +525,12 @@ def test_apply_config_rejects_invalid_ignore_snapshot_regex(tmp_path) -> None:
         )
 
 
-def test_apply_config_cli_ignore_preset_regex_overrides_toml(tmp_path) -> None:
+def test_apply_config_cli_hide_preset_regex_overrides_toml(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
-    config_path.write_text("[policy]\nignore_preset_regex = '^Empty$'\n", encoding="utf-8")
+    config_path.write_text(
+        "[devices.helix.policy]\nhide_preset_regex = '^Empty$'\n",
+        encoding="utf-8",
+    )
 
     args = normalize.apply_config(
         normalize.parse_args(
@@ -585,7 +541,7 @@ def test_apply_config_cli_ignore_preset_regex_overrides_toml(tmp_path) -> None:
                 "helix",
                 "-i",
                 "input.hls",
-                "--ignore-preset-regex",
+                "--hide-preset-regex",
                 "^Init",
             ]
         )
@@ -594,9 +550,54 @@ def test_apply_config_cli_ignore_preset_regex_overrides_toml(tmp_path) -> None:
     assert args.policy.ignore_preset_regex == "^Init"
 
 
-def test_apply_config_rejects_invalid_ignore_preset_regex(tmp_path) -> None:
+def test_apply_config_reads_device_hide_preset_regex(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
-    config_path.write_text("[policy]\nignore_preset_regex = '('\n", encoding="utf-8")
+    config_path.write_text(
+        "[devices.podgo.policy]\nhide_preset_regex = '^Factory$'\n",
+        encoding="utf-8",
+    )
+
+    args = normalize.apply_config(
+        normalize.parse_args(["--config", str(config_path), "--device", "podgo", "-i", "input.pgs"])
+    )
+
+    assert args.policy.ignore_preset_regex == "^Factory$"
+
+
+@pytest.mark.parametrize(
+    ("device", "input_path", "expected"),
+    [
+        ("helix", "input.hls", ""),
+        ("podgo", "input.pgs", r"(?i)^New Preset$"),
+    ],
+)
+def test_apply_config_uses_device_hide_preset_regex_default(
+    tmp_path, device, input_path, expected
+) -> None:
+    config_path = tmp_path / "empty.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    args = normalize.apply_config(
+        normalize.parse_args(["--config", str(config_path), "--device", device, "-i", input_path])
+    )
+
+    assert args.policy.ignore_preset_regex == expected
+
+
+def test_apply_config_accepts_legacy_ignore_preset_regex_config(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[policy]\nignore_preset_regex = '^Empty$'\n", encoding="utf-8")
+
+    args = normalize.apply_config(
+        normalize.parse_args(["--config", str(config_path), "--device", "podgo", "-i", "input.pgs"])
+    )
+
+    assert args.policy.ignore_preset_regex == "^Empty$"
+
+
+def test_apply_config_rejects_invalid_hide_preset_regex(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[devices.helix.policy]\nhide_preset_regex = '('\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Invalid ignore preset regex"):
         normalize.apply_config(
@@ -1255,14 +1256,6 @@ def test_main_runs_measurement_and_applies_csv(tmp_path, monkeypatch) -> None:
     assert len(handler.applied) == 1
     assert handler.applied[0][0:2] == (input_path.resolve(), output_path.resolve())
     assert not work_dir.exists()
-
-
-def write_analysis_csv(args, preset_ids, csv_path) -> None:
-    with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=["Preset", "DevicePatch"])
-        writer.writeheader()
-        for preset_id in preset_ids:
-            writer.writerow({"Preset": preset_id, "DevicePatch": f"patch-{preset_id}"})
 
 
 def test_gui_style_workflow_defers_adjusted_file_export(tmp_path) -> None:

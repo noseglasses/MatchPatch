@@ -587,7 +587,7 @@ def build_preset_empty_state(window: MainWindowLike) -> QWidget:
     layout.addWidget(logo, 0, Qt.AlignmentFlag.AlignHCenter)
 
     recent_files = QComboBox(pane)
-    recent_files.setToolTip("Open a recently loaded Helix setlist or preset file.")
+    recent_files.setToolTip("Open a recently loaded setlist or preset file for the active device.")
     recent_files.setMaximumWidth(340)
     recent_files.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
     recent_files.activated.connect(window._recent_file_activated)
@@ -616,6 +616,11 @@ def build_device_settings(window: MainWindowLike) -> QWidget:
     content = QWidget()
     content.setProperty("help_id", HelpId.BACKENDS)
     layout = QVBoxLayout(content)
+    backend = QFormLayout()
+    backend_label = QLabel("Backend")
+    backend_label.setToolTip("Select loopback for testing or hardware for a connected device.")
+    backend.addRow(backend_label, window.backend)
+    layout.addLayout(backend)
     window.device_stack = QStackedWidget()
     layout.addWidget(window.device_stack)
     window.device_settings = content
@@ -752,7 +757,8 @@ def build_advanced(window: MainWindowLike) -> QWidget:
     device_tab_index = window.advanced_tabs.addTab(window._build_device_settings(), "Device")
     files_tab_index = window.advanced_tabs.addTab(window._build_files(), "Files")
     timing_tab_index = window.advanced_tabs.addTab(window._build_measurement(), "Timing")
-    lufs_tab_index = window.advanced_tabs.addTab(window._build_lufs(), "LUFS")
+    lufs_tab_index = window.advanced_tabs.addTab(window._build_lufs(), "Loudness")
+    selection_tab_index = window.advanced_tabs.addTab(window._build_selection(), "Selection")
     misc_tab_index = window.advanced_tabs.addTab(window._build_misc(), "Misc")
     metadata_tab_index = window.advanced_tabs.addTab(window._build_metadata(), "Meta Data")
     diagnostics_tab_index = window.advanced_tabs.addTab(window._build_diagnostics(), "Diagnostics")
@@ -761,6 +767,7 @@ def build_advanced(window: MainWindowLike) -> QWidget:
     tab_bar.setTabData(files_tab_index, HelpId.FILES_TAB)
     tab_bar.setTabData(timing_tab_index, HelpId.TIMING)
     tab_bar.setTabData(lufs_tab_index, HelpId.LUFS_LOUDNESS)
+    tab_bar.setTabData(selection_tab_index, HelpId.SNAPSHOTS_SOLOS_IGNORED)
     tab_bar.setTabData(misc_tab_index, HelpId.SNAPSHOT_COUNT)
     tab_bar.setTabData(metadata_tab_index, HelpId.METADATA)
     tab_bar.setTabData(diagnostics_tab_index, HelpId.TROUBLESHOOTING)
@@ -831,7 +838,7 @@ def build_files(window: MainWindowLike) -> QWidget:
     reference_browse.setProperty("help_id", HelpId.REFERENCE_DI)
     reference_browse.clicked.connect(window.browse_reference)
     form.addRow(
-        _label("Reference DI", "Clean guitar DI WAV replayed through each preset."),
+        _label("Reference DI", "Clean instrument DI WAV replayed through each preset."),
         _path_row(window.reference_di, reference_browse),
     )
     window.keep_temp = QCheckBox()
@@ -1000,6 +1007,13 @@ def build_lufs(window: MainWindowLike) -> QWidget:
         _label("Solo boost (dB)", "Additional output gain added to snapshots identified as solos."),
         window.solo_gain_bump_db,
     )
+    return content
+
+
+def build_selection(window: MainWindowLike) -> QWidget:
+    content = QWidget()
+    content.setProperty("help_id", HelpId.SNAPSHOTS_SOLOS_IGNORED)
+    form = QFormLayout(content)
     window.solo_regex = QLineEdit(NormalizationPolicy().solo_regex)
     window.solo_regex.setProperty("help_id", HelpId.SNAPSHOTS_SOLOS_IGNORED)
     window.solo_regex.setMaximumWidth(220)
@@ -1018,7 +1032,7 @@ def build_lufs(window: MainWindowLike) -> QWidget:
     window.ignore_preset_regex.setProperty("help_id", HelpId.SNAPSHOTS_SOLOS_IGNORED)
     window.ignore_preset_regex.setMaximumWidth(260)
     window.ignore_preset_regex.setToolTip(
-        "Regular expression used to identify presets skipped during normalization."
+        "Regular expression used to hide presets from the table and normalization."
     )
     window.ignore_preset_regex.textChanged.connect(window._refresh_all_preset_names)
     window.ignore_preset_regex.textChanged.connect(window._refresh_measurement_time_estimate)
@@ -1032,7 +1046,7 @@ def build_lufs(window: MainWindowLike) -> QWidget:
         window.ignore_snapshot_regex,
     )
     snapshot_regex_layout.addRow(
-        _label("Ignored presets", window.ignore_preset_regex.toolTip()),
+        _label("Hide presets", window.ignore_preset_regex.toolTip()),
         window.ignore_preset_regex,
     )
     form.addRow(snapshot_regexes)

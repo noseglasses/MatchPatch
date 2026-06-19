@@ -2,8 +2,8 @@
 
 This is the main non-technical MatchPatch manual.
 
-MatchPatch helps balance Helix presets and snapshots by measuring loudness and
-writing output-level adjustments.
+MatchPatch helps balance supported Line 6 presets and snapshots by measuring
+loudness and writing output-level adjustments.
 
 If this is your first time, start with [Quick Start](quick-start.md), then come
 back here when you want the full picture.
@@ -24,8 +24,8 @@ own preset.
 
 ## What MatchPatch Changes
 
-MatchPatch mainly adjusts Helix output block levels so snapshots land closer to
-the target loudness.
+MatchPatch mainly adjusts supported Line 6 output block levels so snapshots
+land closer to the target loudness.
 
 It can also save manual edits you make in the table, such as preset names,
 snapshot names, or manual gain values.
@@ -47,7 +47,7 @@ Use MatchPatch to get close. Then play through the adjusted file.
 
 Do this before any real run:
 
-1. Back up your original `.hls` or `.hlx`.
+1. Back up your original processor file.
 2. Choose a reference DI.
 3. Decide whether this is a no-hardware test or a real hardware measurement.
 4. Confirm which presets or snapshots should be measured.
@@ -55,8 +55,8 @@ Do this before any real run:
 6. Decide whether any snapshots should be ignored.
 
 > Warning:
-> Keep the original Helix file until you have listened to the adjusted file on
-> the Helix.
+> Keep the original processor file until you have listened to the adjusted file
+> on the device.
 
 ## Choosing A Reference DI
 
@@ -76,7 +76,7 @@ See [Reference DI](concepts/reference-di.md).
 
 The backend decides how MatchPatch gets sound to measure.
 
-- Hardware measures the real Helix.
+- Hardware measures the real processor.
 - Loopback lets you learn the app without hardware.
 - Simulated gives a fake processor-style test without hardware.
 
@@ -104,23 +104,26 @@ search path.
 (help-opening-files)=
 ## Opening Files
 
-MatchPatch works with:
+MatchPatch supports Line 6 Helix and Line 6 Pod Go equally. It works with:
 
 - `.hls` Helix setlists;
-- `.hlx` single Helix presets.
+- `.hlx` single Helix presets;
+- `.pgs` Pod Go setlists;
+- `.pgp` single Pod Go presets.
 
 A setlist shows multiple preset rows. A single preset shows one row and needs a
-temporary Helix slot, such as `12A`, so MatchPatch knows where to steer the
-Helix during measurement.
+temporary device slot, such as `12A`, so MatchPatch knows where to steer the
+processor during measurement.
 
-File > Open can also open several `.hlx` preset files at once. In that case,
-MatchPatch joins the selected presets into one temporary setlist view and shows
-them together in the preset table. The selection must contain only `.hlx` files:
-do not mix `.hlx` presets with an `.hls` setlist, and do not select more than
-one `.hls` setlist at a time.
+File > Open can also open several single-preset files for the same device at
+once. In that case, MatchPatch joins the selected presets into one temporary
+setlist view and shows them together in the preset table. The selection must
+contain only one single-preset file type: do not mix preset files with a setlist,
+do not mix Helix and Pod Go files, and do not select more than one setlist at a
+time.
 
-When several `.hlx` files are open together, Save writes each edited preset back
-to its original `.hlx` file. Save As writes one new `.hls` setlist containing all
+When several single-preset files are open together, Save writes each edited
+preset back to its original file. Save As writes one new setlist containing all
 open presets.
 
 Workflows:
@@ -171,12 +174,12 @@ See [LUFS And Loudness](concepts/lufs-and-loudness.md).
 
 ## Hardware Measurement
 
-For real results, hardware mode must send audio to the Helix and record the
+For real results, hardware mode must send audio to the processor and record the
 processed audio back.
 
 Check:
 
-- Helix USB connection;
+- processor USB connection;
 - audio device;
 - playback channels;
 - recording channels;
@@ -184,7 +187,7 @@ Check:
 - MIDI channel.
 
 Use recorded-output playback if you want to confirm MatchPatch recorded the real
-Helix sound.
+processor sound.
 
 See [Hardware Measurement](workflows/hardware-measurement.md) and
 [Routing And Levels](concepts/routing-and-levels.md).
@@ -250,7 +253,8 @@ After reviewing results, save the adjusted file.
 For most users, Save As is the safest choice because it keeps the original file
 unchanged.
 
-Then import the adjusted file into the Helix and listen through the setlist.
+Then import the adjusted file into the same processor family and listen through
+the setlist.
 
 > Warning:
 > A measurement file is not the final live file. Import the adjusted file for
@@ -281,7 +285,7 @@ Start with [Troubleshooting](troubleshooting.md).
 Common fixes include:
 
 - choose the correct backend;
-- check Helix USB and MIDI;
+- check processor USB and MIDI;
 - check audio routing;
 - choose the correct reference DI;
 - slow down timing;

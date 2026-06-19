@@ -32,6 +32,7 @@ a = Analysis(
     datas=asset_datas(),
     hiddenimports=[
         "matchpatch.devices.helix.preset_handling",
+        "matchpatch.devices.line6.podgo.preset_handling",
         "mido.backends.rtmidi",
         "rtmidi",
     ],

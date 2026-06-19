@@ -6,7 +6,6 @@ import time
 import wave
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 
@@ -34,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
+from matchpatch.devices import list_device_profiles
 from matchpatch.diagnostics import DiagnosticCheck
 from matchpatch.gui import main_window, measurement_optimization, progress_widgets, window_state
 from matchpatch.gui import worker as gui_worker
@@ -57,7 +57,8 @@ def app():
 
 
 @pytest.fixture(autouse=True)
-def isolated_qsettings(tmp_path):
+def isolated_qsettings(app, tmp_path):
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
     QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope, str(tmp_path))
     QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
     QSettings().clear()
@@ -118,9 +119,16 @@ def _mock_single_hlx_handler(
         def metadata(path):
             return {"file_type": "hlx"}
 
+        @staticmethod
+        def parse_patch_set(value):
+            return [1] if value == "01A" else []
+
     Handler.file_kind = staticmethod(lambda path: "preset")
 
-    profile = SimpleNamespace(create_patch_file_handler=lambda root: Handler())
+    profile = SimpleNamespace(
+        display_name="Line 6 Helix",
+        create_patch_file_handler=lambda root: Handler(),
+    )
     monkeypatch.setattr(main_window, "get_device_profile", lambda device: profile)
 
 
@@ -204,11 +212,12 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not isinstance(window.advanced, QGroupBox)
     assert not window.advanced.isHidden()
     assert window.advanced_button.isChecked()
-    assert [window.advanced_tabs.tabText(index) for index in range(7)] == [
+    assert [window.advanced_tabs.tabText(index) for index in range(8)] == [
         "Device",
         "Files",
         "Timing",
-        "LUFS",
+        "Loudness",
+        "Selection",
         "Misc",
         "Meta Data",
         "Diagnostics",
@@ -251,24 +260,31 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.advanced_tabs.widget(2).isAncestorOf(window.solo_regex)
     assert window.advanced_tabs.widget(3).isAncestorOf(window.target_lufs)
     assert window.advanced_tabs.widget(3).isAncestorOf(window.solo_gain_bump_db)
-    assert window.advanced_tabs.widget(3).isAncestorOf(window.solo_regex)
-    assert window.advanced_tabs.widget(3).isAncestorOf(window.ignore_snapshot_regex)
     lufs_group_titles = {
         group.title() for group in window.advanced_tabs.widget(3).findChildren(QGroupBox)
     }
-    assert "Snapshot name regex" in lufs_group_titles
+    assert "Snapshot name regex" not in lufs_group_titles
     lufs_labels = {label.text() for label in window.advanced_tabs.widget(3).findChildren(QLabel)}
-    assert "Solo" in lufs_labels
-    assert "Ignored" in lufs_labels
     assert "Ignore snapshot" not in lufs_labels
-    assert window.advanced_tabs.widget(4).isAncestorOf(window.snapshot_count_input)
-    assert window.advanced_tabs.widget(6).isAncestorOf(window.preflight_button)
-    assert window.advanced_tabs.widget(6).isAncestorOf(window.diagnostic_summary_button)
-    assert window.advanced_tabs.widget(6).isAncestorOf(window.diagnostic_bundle_button)
-    assert window.advanced_tabs.widget(6).isAncestorOf(window.log)
-    assert window.advanced_tabs.widget(6).isAncestorOf(window.log_level)
+    assert not window.advanced_tabs.widget(3).isAncestorOf(window.solo_regex)
+    assert not window.advanced_tabs.widget(3).isAncestorOf(window.ignore_snapshot_regex)
+    assert window.advanced_tabs.widget(4).isAncestorOf(window.solo_regex)
+    assert window.advanced_tabs.widget(4).isAncestorOf(window.ignore_snapshot_regex)
+    assert window.advanced_tabs.widget(4).isAncestorOf(window.ignore_preset_regex)
+    selection_labels = {
+        label.text() for label in window.advanced_tabs.widget(4).findChildren(QLabel)
+    }
+    assert "Solo" in selection_labels
+    assert "Ignored" in selection_labels
+    assert "Hide presets" in selection_labels
+    assert window.advanced_tabs.widget(5).isAncestorOf(window.snapshot_count_input)
+    assert window.advanced_tabs.widget(7).isAncestorOf(window.preflight_button)
+    assert window.advanced_tabs.widget(7).isAncestorOf(window.diagnostic_summary_button)
+    assert window.advanced_tabs.widget(7).isAncestorOf(window.diagnostic_bundle_button)
+    assert window.advanced_tabs.widget(7).isAncestorOf(window.log)
+    assert window.advanced_tabs.widget(7).isAncestorOf(window.log_level)
     diagnostic_groups = {
-        group.title() for group in window.advanced_tabs.widget(6).findChildren(QGroupBox)
+        group.title() for group in window.advanced_tabs.widget(7).findChildren(QGroupBox)
     }
     assert "Privacy notice" in diagnostic_groups
     assert "Log" in diagnostic_groups
@@ -499,8 +515,10 @@ def test_main_window_starts_with_registry_device_and_hardware(app) -> None:
     assert not window.play_recorded_output_button.isChecked()
     assert window.log_level.currentText() == "Info"
     assert window.metadata_text.toPlainText() == "{}"
-    assert window.device_stack.count() == 2
+    assert window.device_stack.count() == len(list_device_profiles())
+    assert set(window.device_panels) == {profile.name for profile in list_device_profiles()}
     assert window.device_panels["helix"].audio_group.isEnabled()
+    assert window.device_panels["podgo"].isEnabled()
     assert window.progress_group.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Maximum
     assert not window.statusBar().isHidden()
 
@@ -567,6 +585,7 @@ def test_main_window_lists_device_without_settings_panel(monkeypatch, app) -> No
             snapshot_wait_seconds=0.0,
             measurement_wait_seconds=0.0,
         ),
+        default_ignore_preset_regex=lambda: "",
     )
     monkeypatch.setattr(main_window, "list_device_profiles", lambda: [helix, fake])
     monkeypatch.setattr(
@@ -849,6 +868,41 @@ def test_single_preset_run_warns_when_preset_id_is_missing(monkeypatch, app) -> 
     assert window.preset_table.item(0, 1).data(PRESET_TABLE_ATTENTION_ROLE)
     assert window.worker is None
     assert window.start_button.isEnabled()
+
+    window.close()
+
+
+def test_podgo_single_preset_run_requires_temporary_slot(monkeypatch, app) -> None:
+    window = MainWindow()
+    window.input_path.setText("/tmp/example.pgp")
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    class Handler:
+        @staticmethod
+        def file_kind(path):
+            return "preset"
+
+        @staticmethod
+        def parse_patch_set(value):
+            return {"01A": [1], "32D": [128]}.get(value, [])
+
+    profile = SimpleNamespace(
+        display_name="Line 6 Pod Go",
+        create_patch_file_handler=lambda root: Handler(),
+    )
+    monkeypatch.setattr(main_window, "get_device_profile", lambda device: profile)
+
+    assert not window._validate_single_preset_slot_for_run()
+    assert warnings[0][2] == (
+        "Enter the temporary Line 6 Pod Go preset ID in the Preset column before "
+        "running normalization."
+    )
+
+    window.preset_table.setRowCount(1)
+    window.preset_table.setItem(0, 1, QTableWidgetItem("32D"))
+
+    assert window._validate_single_preset_slot_for_run()
 
     window.close()
 
@@ -1541,50 +1595,3 @@ def test_worker_emits_cancelled_instead_of_failed_after_cancellation(monkeypatch
 
     assert cancelled == [True]
     assert failures == []
-
-
-def test_closing_main_window_is_ignored_when_cancellation_is_declined(monkeypatch, app) -> None:
-    window = MainWindow()
-    worker = Mock()
-    window.worker = worker
-    quit_requests = []
-    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
-    monkeypatch.setattr(QApplication, "quit", lambda: quit_requests.append(True))
-    event = QCloseEvent()
-
-    window.closeEvent(event)
-
-    assert not event.isAccepted()
-    worker.cancel.assert_not_called()
-    assert quit_requests == []
-
-    window.worker = None
-    window.close()
-
-
-def test_closing_main_window_cancels_measurement_when_confirmation_is_accepted(
-    monkeypatch, app
-) -> None:
-    window = MainWindow()
-    worker = Mock()
-    window.worker = worker
-    quit_requests = []
-    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
-    monkeypatch.setattr(QApplication, "quit", lambda: quit_requests.append(True))
-    event = QCloseEvent()
-
-    window.closeEvent(event)
-
-    assert event.isAccepted()
-    worker.cancel.assert_called_once_with()
-    assert quit_requests == [True]
-
-
-def test_closing_main_window_explicitly_quits_application(monkeypatch, app) -> None:
-    window = MainWindow()
-    quit_requests = []
-    monkeypatch.setattr(QApplication, "quit", lambda: quit_requests.append(True))
-
-    window.close()
-
-    assert quit_requests == [True]

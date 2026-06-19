@@ -857,7 +857,12 @@ def _optional_path_text(path: Path | None) -> str | None:
 
 
 def _is_lufs_column(header: str) -> bool:
-    return header.startswith("LUFS") and header[4:].isdigit()
+    return (
+        header.startswith("LUFS")
+        and header[len("LUFS") :].isdigit()
+        or header.startswith("Loudness")
+        and header[len("Loudness") :].isdigit()
+    )
 
 
 def _unique_text(values: Iterable[object | None]) -> tuple[str, ...]:

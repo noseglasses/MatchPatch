@@ -236,7 +236,8 @@ def preset_table_selection_preflight_checks(
         return []
 
     checked_rows = set(context.checked_rows)
-    has_unchecked_presets = any(row not in checked_rows for row in range(context.row_count))
+    visible_rows = sorted(context.visible_rows)
+    has_unchecked_presets = any(row not in checked_rows for row in visible_rows)
     has_ignored_snapshots = context.has_ignored_snapshots
     comparison_snapshot_plan = context.comparison_snapshot_plan
     if comparison_snapshot_plan is not None:

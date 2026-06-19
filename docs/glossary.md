@@ -5,8 +5,8 @@ software developers.
 
 ## Adjusted File
 
-The Helix file MatchPatch saves after calculating level changes. This is the
-file you import back into the Helix after checking the results.
+The processor file MatchPatch saves after calculating level changes. This is the
+file you import back into the matching processor after checking the results.
 
 See also: [Measurement And Adjusted Files](concepts/measurement-and-adjusted-files.md).
 
@@ -23,15 +23,15 @@ window can be steadier, but it needs enough recorded audio.
 ## ASIO
 
 A low-latency Windows audio driver type often used by audio interfaces and
-processors. If you use hardware mode, the Helix audio device may appear through
-ASIO.
+processors. If you use hardware mode, the processor audio device may appear
+through ASIO.
 
 ## Backend
 
 The way MatchPatch gets sound to measure:
 
-- hardware measures a real Helix;
-- loopback tests the app without a Helix;
+- hardware measures a real Helix or Pod Go;
+- loopback tests the app without a processor;
 - simulated uses a fake processor for testing.
 
 See also: [Backends](concepts/backends.md).
@@ -78,14 +78,19 @@ Delta dB value.
 
 ## Hardware Mode
 
-The backend that measures a real Helix. Use this for real results.
+The backend that measures a real Helix or Pod Go. Use this for real results.
 
 See also: [Hardware Measurement](workflows/hardware-measurement.md).
 
 ## Helix
 
-The Line 6 Helix guitar processor family. MatchPatch currently focuses on Helix
-`.hls` setlists and `.hlx` presets.
+The Line 6 Helix guitar processor family. MatchPatch supports Helix `.hls`
+setlists and `.hlx` presets.
+
+## Pod Go
+
+The Line 6 Pod Go guitar processor family. MatchPatch supports Pod Go `.pgs`
+setlists and `.pgp` presets.
 
 ## LUFS
 
@@ -98,7 +103,7 @@ See also: [LUFS And Loudness](concepts/lufs-and-loudness.md).
 ## Loopback Mode
 
 A no-hardware mode where MatchPatch measures the reference DI directly. It is
-good for learning the app, but it does not measure your Helix tone.
+good for learning the app, but it does not measure your processor tone.
 
 See also: [Test Without Hardware](workflows/test-without-hardware.md).
 
@@ -109,8 +114,8 @@ snapshot. Most musicians do not need to open it.
 
 ## Measurement File
 
-A temporary Helix file created for measuring. It changes routing so MatchPatch
-can send the DI into the Helix and record the result.
+A temporary processor file created for measuring. It changes routing so
+MatchPatch can send the DI into the processor and record the result.
 
 > Warning:
 > A measurement file is not meant for live playing.
@@ -119,20 +124,20 @@ See also: [Measurement And Adjusted Files](concepts/measurement-and-adjusted-fil
 
 ## MIDI
 
-The control connection MatchPatch uses to switch Helix presets and snapshots
+The control connection MatchPatch uses to switch processor presets and snapshots
 during hardware measurement.
 
 ## Output Block Level
 
-The final output level inside a Helix preset. MatchPatch adjusts this level per
-snapshot to balance loudness.
+The final output level inside a supported processor preset. MatchPatch adjusts
+this level per snapshot to balance loudness.
 
 See also: [Routing And Levels](concepts/routing-and-levels.md).
 
 ## Patch
 
-Another word for a preset. On Helix, a patch or preset lives in a slot such as
-`01A` or `12D`.
+Another word for a preset. On supported Line 6 devices, a patch or preset lives
+in a slot such as `01A` or `12D`.
 
 ## Pre-Roll
 
@@ -146,7 +151,7 @@ for latency and short tails.
 
 ## Preset
 
-A stored Helix sound, usually one song, tone, or rig.
+A stored processor sound, usually one song, tone, or rig.
 
 ## Reference DI
 
@@ -157,25 +162,25 @@ See also: [Reference DI](concepts/reference-di.md).
 
 ## Round-Trip Latency
 
-The small time delay caused by sending audio out to the Helix and recording it
-back into the computer.
+The small time delay caused by sending audio out to the processor and recording
+it back into the computer.
 
 ## Routing
 
 The path audio takes. In hardware mode, the reference DI leaves the computer,
-goes into the Helix, and the processed sound comes back to the computer.
+goes into the processor, and the processed sound comes back to the computer.
 
 See also: [Routing And Levels](concepts/routing-and-levels.md).
 
 ## Simulated Mode
 
 A no-hardware mode that pretends to be a processor. It is useful for testing the
-workflow, but it is not a real Helix measurement.
+workflow, but it is not a real processor measurement.
 
 ## Snapshot
 
-A variation inside one Helix preset. For example, one preset might have Clean,
-Crunch, Lead, and Solo snapshots.
+A variation inside one processor preset. For example, one preset might have
+Clean, Crunch, Lead, and Solo snapshots.
 
 ## Solo Boost
 
@@ -196,8 +201,8 @@ MatchPatch raises it; if it is above the target, MatchPatch lowers it.
 
 ## USB Channels
 
-The audio paths between the computer and Helix over USB. MatchPatch needs the
-playback and recording channels to match the Helix routing.
+The audio paths between the computer and processor over USB. MatchPatch needs
+the playback and recording channels to match the processor routing.
 
 ## WSL And WSLg
 

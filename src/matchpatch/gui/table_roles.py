@@ -31,12 +31,10 @@ CUSTOM_ADJUSTMENT_COLOR = "#2563eb"
 IGNORE_REASON_PRESET = "P"
 IGNORE_REASON_COMPARISON = "C"
 IGNORE_REASON_REGEX = "R"
-IGNORE_REASON_PRESET_REGEX = "N"
 IGNORE_REASON_LABELS = {
     IGNORE_REASON_PRESET: "preset unchecked",
     IGNORE_REASON_COMPARISON: "unchanged compared with previous file",
     IGNORE_REASON_REGEX: "ignore regex",
-    IGNORE_REASON_PRESET_REGEX: "preset name ignore regex",
 }
 
 

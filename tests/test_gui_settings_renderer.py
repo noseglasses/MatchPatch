@@ -62,6 +62,7 @@ def test_main_window_lists_descriptor_only_device_with_rendered_panel(
             snapshot_wait_seconds=0.3,
             measurement_wait_seconds=0.4,
         ),
+        default_ignore_preset_regex=lambda: "",
         validate_settings=lambda settings: None,
     )
     config_path = tmp_path / "config.toml"

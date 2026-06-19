@@ -1,7 +1,7 @@
 # File Formats
 
 This document describes the file formats MatchPatch currently reads or writes
-for Helix normalization and measurement workflows.
+for supported Line 6 normalization and measurement workflows.
 
 ## Helix `.hls` Setlists
 
@@ -68,10 +68,32 @@ utility modes. The modern `HelixPatchFileHandler` only accepts `.hls` and
 `.hlx` as normal workflow inputs and requires output files to use the same
 extension as the input.
 
+## Pod Go `.pgs` Setlists
+
+`.pgs` files are Line 6 Pod Go setlists. They use the same `L6Setlist` wrapper
+shape as Helix setlists: `encoded_data` contains base64 zlib-compressed JSON,
+and the compression metadata includes `decompressed_size` and `crc32`.
+
+The decoded setlist JSON contains 128 banked presets. MatchPatch labels those
+slots `01A` through `32D`, with internal preset ID `1` mapping to `01A` and
+internal preset ID `128` mapping to `32D`.
+
+## Pod Go `.pgp` Presets
+
+`.pgp` files are single Line 6 Pod Go presets. MatchPatch expects a wrapper with
+schema `L6Preset` and a preset object in `data`. Internally, single presets are
+wrapped as `{"presets": [preset]}` so setlist and preset processing can share
+the same path.
+
+Like `.hlx`, a `.pgp` file does not encode its target hardware slot. CLI
+measurement therefore requires exactly one `--preset-set`/`-S` value, such as
+`12A`, so the worker knows which temporary Pod Go slot to steer during
+measurement.
+
 ## Measurement Files
 
-Measurement conversion rewrites Helix routing so the processor can be measured
-over USB:
+Measurement conversion rewrites processor routing so the device can be measured
+over USB. For Helix:
 
 - Inputs that use Multi are changed to USB `3/4`.
 - Final outputs are changed to USB `1/2`.
@@ -81,9 +103,13 @@ over USB:
 These generated measurement `.hls`/`.hlx` files are temporary workflow files.
 They are meant to be imported for measurement, not used as stage presets.
 
+For Pod Go, MatchPatch changes the Pod Go input to USB `3/4` and output to USB
+`1/2`, then restores the stage routing when requested. Generated measurement
+`.pgs`/`.pgp` files are also temporary workflow files.
+
 ## Adjusted Files
 
-Adjusted `.hls`/`.hlx` files preserve the input file type. Gain application:
+Adjusted files preserve the input file type. Helix gain application:
 
 - Finds one active final output block per preset.
 - Ensures output gain is snapshot-controlled.
@@ -100,6 +126,10 @@ Helix name edits are validated against the hardware-safe character set:
 
 Current Helix limits are 16 characters for preset names and 10 characters for
 snapshot names.
+
+Pod Go gain application adjusts the `dsp0.output.gain` snapshot value and
+supports up to 4 snapshots per preset. Pod Go currently uses the same Line 6
+name character set and configured name length limits as Helix in MatchPatch.
 
 ## Measurement CSV: Generic
 
@@ -123,7 +153,7 @@ Preset,DevicePatch,LUFS1,LUFS2,CrestFactor1,CrestFactor2
 Field meaning:
 
 - `Preset`: internal numeric preset ID, starting at `1`.
-- `DevicePatch`: device-facing patch label, for Helix such as `01A`.
+- `DevicePatch`: device-facing patch label, such as `01A`.
 - `LUFS#`: measured average short-term LUFS for one-based snapshot `#`.
 - `CrestFactor#`: measured crest factor in dB for one-based snapshot `#`.
 
@@ -134,9 +164,9 @@ CSV files are written with UTF-8 and read with UTF-8-SIG so a BOM is tolerated.
 
 ## Measurement CSV: Helix Legacy Adapter
 
-`matchpatch.devices.helix.preset_handling` expects a `HelixPreset` column
-instead of `DevicePatch`. `HelixPatchFileHandler.apply_analysis_csv` therefore writes a
-temporary adapter CSV before invoking the packaged Helix utility module.
+The shared Line 6 file handler writes a temporary adapter CSV before invoking
+packaged utility modules that expect a legacy `HelixPreset` column instead of
+`DevicePatch`.
 
 Its columns are:
 
@@ -209,8 +239,8 @@ preset/snapshot.
 
 ## Manual Adjustments JSON
 
-The GUI passes manual table edits to the Helix utility module as temporary JSON,
-not CSV. The payload can contain:
+The GUI passes manual table edits to the device utility module as temporary
+JSON, not CSV. The payload can contain:
 
 ```json
 {
@@ -228,5 +258,5 @@ deltas for matching snapshots.
 Setlist diff selection compares current and previous files of the same type.
 The comparison removes non-signal content before comparing presets, including
 names, metadata, and color fields. Presets are selected when loudness-affecting
-signal content differs. This feature is implemented by the Helix utility module
-and surfaced through `--diff-input` and the GUI diff button.
+signal content differs. This feature is implemented by the Line 6 utility
+modules and surfaced through `--diff-input` and the GUI diff button.

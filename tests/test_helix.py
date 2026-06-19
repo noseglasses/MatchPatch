@@ -701,7 +701,7 @@ def test_midi_controller_sends_program_and_snapshot_messages(monkeypatch) -> Non
     )
     monkeypatch.setitem(sys.modules, "mido", mido)
     monkeypatch.setattr("matchpatch.devices.helix.time.sleep", sleeps.append)
-    options = SteeringOptions("helix", 2, 0.5, 0.05, 0.25)
+    options = SteeringOptions("helix", 3, 0.5, 0.05, 0.25)
 
     with HelixMidiController(options) as controller:
         controller.activate_preset(6)
@@ -723,7 +723,7 @@ def test_midi_controller_validates_port_and_ids(monkeypatch) -> None:
         "mido",
         SimpleNamespace(get_output_names=lambda: [], Message=lambda *args, **kwargs: None),
     )
-    options = SteeringOptions("helix", 0, 0, 0, 0)
+    options = SteeringOptions("helix", 1, 0, 0, 0)
     controller = HelixMidiController(options)
 
     with pytest.raises(ValueError, match="matched 0 ports"):

@@ -13,9 +13,11 @@ from __future__ import annotations
 
 from matchpatch.devices.base import DeviceProfile
 from matchpatch.devices.demo import DemoDeviceProfile
-from matchpatch.devices.helix import HelixDeviceProfile
+from matchpatch.devices.line6.helix import HelixDeviceProfile
+from matchpatch.devices.line6.podgo import PodGoDeviceProfile
 
 DEVICE_PROFILES: tuple[DeviceProfile, ...] = (
     HelixDeviceProfile(),
+    PodGoDeviceProfile(),
     DemoDeviceProfile(),
 )

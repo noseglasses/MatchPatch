@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence, cast
 
 from PySide6.QtCore import (
-    QAbstractAnimation,
-    QCoreApplication,
     QEvent,
     QObject,
     QPoint,
@@ -58,8 +56,10 @@ from matchpatch.config import (
 from matchpatch.custom_adjustments import CustomAdjustments, load_custom_adjustments_file
 from matchpatch.devices import get_device_profile, list_device_profiles
 from matchpatch.devices.base import (
+    DeviceProfile,
     NormalizationPolicy,
     PatchFileAdjustments,
+    PatchFileHandler,
     normalize_regex_pattern,
 )
 from matchpatch.diagnostics import (
@@ -112,6 +112,7 @@ from matchpatch.gui.main_window_callbacks import (
     MainWindowPresetTableCallbacks,
     MainWindowSaveCallbacks,
 )
+from matchpatch.gui.main_window_status import MainWindowStatusMixin
 from matchpatch.gui.measurement_optimization import (
     MeasurementOptimizationDialog,
     MeasurementOptimizationSettings,
@@ -170,7 +171,6 @@ from matchpatch.gui.table_legend import build_preset_table_legend_dialog
 from matchpatch.gui.table_roles import (
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_PRESET,
-    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
     PRESET_TABLE_ATTENTION_ROLE,
     PRESET_TABLE_CSV_DELIMITER,
@@ -194,6 +194,7 @@ from matchpatch.gui.window_layout import (
     build_presets,
     build_progress,
     build_retained_csv,
+    build_selection,
     build_toolbar,
 )
 from matchpatch.gui.window_loading import WindowLoadingController
@@ -234,9 +235,6 @@ __all__ = ["MainWindow"]
 MAX_RECENT_FILES = window_state.MAX_RECENT_FILES
 TOOLBAR_VERTICAL_PADDING = window_layout.TOOLBAR_VERTICAL_PADDING
 
-PROCESSING_DOT_GREY = "#9ca3af"
-PROCESSING_DOT_GREEN = "#16a34a"
-PROCESSING_DOT_RED = "#dc2626"
 PHASE_ICON = {
     "ready": QStyle.StandardPixmap.SP_DialogApplyButton,
     "starting": QStyle.StandardPixmap.SP_MediaPlay,
@@ -253,7 +251,7 @@ PHASE_ICON = {
 }
 
 
-class MainWindow(QMainWindow):
+class MainWindow(MainWindowStatusMixin, QMainWindow):
     def __getattr__(self, name: str) -> Any:  # noqa: ANN401
         raise AttributeError(name)
 
@@ -340,7 +338,6 @@ class MainWindow(QMainWindow):
                 IGNORE_REASON_PRESET,
                 IGNORE_REASON_COMPARISON,
                 IGNORE_REASON_REGEX,
-                IGNORE_REASON_PRESET_REGEX,
             )
         }
         self._startup_resize_done = False
@@ -614,7 +611,7 @@ class MainWindow(QMainWindow):
             sum(
                 1
                 for row in range(self.preset_table.rowCount())
-                if self._row_has_measured_snapshots(row)
+                if not self.preset_table.isRowHidden(row) and self._row_has_measured_snapshots(row)
             ),
         )
 
@@ -631,6 +628,7 @@ class MainWindow(QMainWindow):
             sum(
                 self._row_measured_snapshot_count(row)
                 for row in range(self.preset_table.rowCount())
+                if not self.preset_table.isRowHidden(row)
             ),
         )
 
@@ -680,14 +678,25 @@ class MainWindow(QMainWindow):
     def _build_lufs(self) -> QWidget:
         return build_lufs(self)
 
+    def _build_selection(self) -> QWidget:
+        return build_selection(self)
+
     def _populate_devices(self) -> None:
         for profile in list_device_profiles():
-            self.device.addItem(profile.display_name, profile.name)
-            panel = create_settings_panel(profile, self.backend)
-            if panel is not None:
-                self.device_panels[profile.name] = panel
-                self.device_stack.addWidget(panel)
+            self._add_device_profile(profile)
         self.loading_controller.refresh_backend_choices()
+
+    def _add_device_profile(self, profile: DeviceProfile) -> int:
+        index = self.device.findData(profile.name)
+        if index >= 0:
+            return index
+
+        self.device.addItem(profile.display_name, profile.name)
+        panel = create_settings_panel(profile, self.backend)
+        if panel is not None:
+            self.device_panels[profile.name] = panel
+            self.device_stack.addWidget(panel)
+        return self.device.count() - 1
 
     def browse_input(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -707,11 +716,12 @@ class MainWindow(QMainWindow):
     def _refresh_recent_files_selector(self) -> None:
         if not hasattr(self, "recent_files"):
             return
+        extensions = file_type_filters.openable_extensions_for_device(self.device.currentData())
         signals_blocked = self.recent_files.blockSignals(True)
         try:
             self.recent_files.clear()
             self.recent_files.addItem("Open recent file...", "")
-            for item in recent_file_items(self.settings):
+            for item in recent_file_items(self.settings, extensions):
                 self.recent_files.addItem(item.label, item.path)
             self.recent_files.setCurrentIndex(0)
             self.recent_files.setEnabled(self.recent_files.count() > 1)
@@ -1012,7 +1022,22 @@ class MainWindow(QMainWindow):
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setFileMode(QFileDialog.FileMode.AnyFile)
         dialog.setNameFilter("TOML (*.toml)")
-        dialog.selectFile(str(Path(self.config_path.text().strip() or default_config_path())))
+        current_config_path = self.config_path.text().strip()
+        suggested_path = Path(current_config_path or default_config_path()).expanduser()
+        if suggested_path.is_absolute():
+            home = Path.home()
+            if current_config_path:
+                dialog.setDirectory(str(suggested_path.parent))
+                dialog.selectFile(suggested_path.name)
+            else:
+                try:
+                    dialog.setDirectory(str(home))
+                    dialog.selectFile(str(suggested_path.relative_to(home)))
+                except ValueError:
+                    dialog.setDirectory(str(suggested_path.parent))
+                    dialog.selectFile(suggested_path.name)
+        else:
+            dialog.selectFile(str(suggested_path))
         dialog.setLabelText(QFileDialog.DialogLabel.Accept, "Save")
         save_default = QCheckBox("Save default configuration", dialog)
         save_default.setChecked(False)
@@ -1055,6 +1080,13 @@ class MainWindow(QMainWindow):
         return PresetTableSelectionContext(
             has_table=hasattr(self, "preset_table"),
             row_count=self.preset_table.rowCount() if hasattr(self, "preset_table") else 0,
+            visible_rows={
+                row
+                for row in range(self.preset_table.rowCount())
+                if not self.preset_table.isRowHidden(row)
+            }
+            if hasattr(self, "preset_table")
+            else set(),
             checked_rows=set(self._checked_preset_rows()),
             has_ignored_snapshots=self._has_ignored_snapshot_cells(),
             comparison_snapshot_plan=comparison_snapshot_plan,
@@ -1129,6 +1161,7 @@ class MainWindow(QMainWindow):
 
     def device_changed(self) -> None:
         self.loading_controller.device_changed()
+        self._refresh_recent_files_selector()
 
     def backend_changed(self) -> None:
         self.loading_controller.backend_changed()
@@ -1886,21 +1919,26 @@ class MainWindow(QMainWindow):
         return item.text().strip().upper() if item is not None else ""
 
     def _validate_single_preset_slot_for_run(self) -> bool:
-        if Path(self.input_path.text()).suffix.lower() != ".hlx":
+        profile = get_device_profile(self.device.currentData())
+        handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+        input_path = Path(self.input_path.text())
+        if handler.file_kind(input_path) != "preset":
             return True
 
         slot = self._single_preset_slot_text()
+        device_name = profile.display_name
         if not slot:
             self._highlight_preset_cell(0, 1)
             QMessageBox.warning(
                 self,
                 "Preset ID required",
-                "Enter the temporary Helix preset ID in the Preset column before running normalization.",
+                f"Enter the temporary {device_name} preset ID in the Preset column "
+                "before running normalization.",
             )
             return False
 
         try:
-            self._parse_single_helix_preset_slot(slot)
+            self._parse_single_device_preset_slot(slot, handler, device_name)
         except ValueError as exc:
             self.show_error(str(exc))
             self._highlight_preset_cell(0, 1)
@@ -1908,16 +1946,19 @@ class MainWindow(QMainWindow):
 
         return True
 
-    def _parse_single_helix_preset_slot(self, slot: str) -> int:
-        profile = get_device_profile(self.device.currentData())
-        handler = profile.create_patch_file_handler(Path(__file__).resolve().parents[3])
+    def _parse_single_device_preset_slot(
+        self,
+        slot: str,
+        handler: PatchFileHandler,
+        device_name: str,
+    ) -> int:
         preset_ids = handler.parse_patch_set(slot)
         if len(preset_ids) != 1:
-            raise ValueError("Enter exactly one Helix preset ID for a .hlx file.")
+            raise ValueError(f"Enter exactly one {device_name} preset ID for a preset file.")
 
         preset_id = preset_ids[0]
         if preset_id < 1 or preset_id > 128:
-            raise ValueError("Helix preset ID must be between 01A and 32D.")
+            raise ValueError(f"{device_name} preset ID must be between 01A and 32D.")
         return preset_id
 
     def _highlight_preset_cell(self, row: int, column: int) -> None:
@@ -2391,96 +2432,6 @@ class MainWindow(QMainWindow):
 
     def _refresh_log(self) -> None:
         self.log_controller.refresh()
-
-    def _resize_to_initial_content(self) -> None:
-        if self.isMaximized() or self.isFullScreen():
-            return
-        screen = QApplication.primaryScreen()
-        if screen is None:
-            return
-        available = screen.availableGeometry()
-        viewport = self.scroll_area.viewport()
-        chrome_width = self.width() - viewport.width()
-        chrome_height = self.height() - viewport.height()
-        hint = self.content.sizeHint()
-        height = hint.height() + chrome_height + 4
-        self.resize(
-            min(max(820, hint.width() + chrome_width + 4), available.width()),
-            min(height, available.height()),
-        )
-
-    def _resize_to_initial_content_once(self) -> None:
-        if self._startup_resize_done:
-            return
-        self._startup_resize_done = True
-        self._resize_to_initial_content()
-
-    def _schedule_resize_for_content(self) -> None:
-        for widget in (
-            self.presets,
-            self.advanced_tabs,
-            self.advanced,
-            self.preset_advanced_splitter,
-            self.content,
-        ):
-            layout = widget.layout()
-            if layout is not None:
-                layout.invalidate()
-            widget.updateGeometry()
-        for _ in range(3):
-            QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
-
-    def _preset_table_size_changed(self) -> None:
-        self.preset_table.updateGeometry()
-        self.presets.updateGeometry()
-        self._schedule_resize_for_content()
-
-    def _start_busy_phase(self) -> None:
-        if self.busy_animation.state() != QAbstractAnimation.State.Running:
-            self._set_processing_dot(True)
-            self.busy_animation.start()
-
-    def _stop_busy_phase(self, color: str = PROCESSING_DOT_GREY) -> None:
-        self.busy_animation.stop()
-        self.processing_dot_effect.setOpacity(1.0)
-        self._set_processing_dot(color == PROCESSING_DOT_GREEN, color)
-        self._hide_progress()
-
-    def _set_processing_dot(self, green: bool, color: str | None = None) -> None:
-        self._processing_dot_green = green
-        color = color or (PROCESSING_DOT_GREEN if green else PROCESSING_DOT_GREY)
-        self._processing_dot_color = color
-        self.processing_dot.setStyleSheet(f"background-color: {color}; border-radius: 7px;")
-
-    def _reset_loudness_bars(self) -> None:
-        target_lufs = self._target_lufs()
-        self.current.clear()
-        self.measured_loudness.reset_loudness(target_lufs)
-        waiting_text = f"Waiting for signal (target {target_lufs:.1f} LUFS)"
-        self.measured_loudness_reading.setText(waiting_text)
-
-    def _target_lufs(self) -> float:
-        try:
-            return float(self.target_lufs.text())
-        except (AttributeError, ValueError):
-            return -16.0
-
-    def _preset_progress_text(self, event: ProgressEvent) -> str:
-        row = self._preset_row(event.device_patch or "")
-        if row is None:
-            return f"Preset {event.device_patch}"
-        name = self.preset_table.item(row, 2)
-        if name and name.text():
-            return f"Preset {event.device_patch}: {name.text()}"
-        return f"Preset {event.device_patch}"
-
-    def _snapshot_progress_text(self, event: ProgressEvent) -> str:
-        text = f", snapshot {event.snapshot}/{event.snapshot_total}"
-        row = self._preset_row(event.device_patch or "")
-        if row is None or event.snapshot is None:
-            return text
-        name = self.preset_table.item(row, snapshot_name_column(event.snapshot - 1))
-        return f"{text}: {name.text()}" if name and name.text() else text
 
     def _preset_table_has_unsaved_changes(self) -> bool:
         return self.preset_table_controller.preset_table_has_unsaved_changes()

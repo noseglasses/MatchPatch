@@ -106,7 +106,6 @@ from matchpatch.gui.save_workflow import (
 from matchpatch.gui.table_roles import (
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_PRESET,
-    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
 )
 from matchpatch.gui.worker import NormalizationWorker
@@ -287,7 +286,6 @@ def test_preset_table_legend_dialog_uses_table_icons(app) -> None:
         IGNORE_REASON_PRESET,
         IGNORE_REASON_COMPARISON,
         IGNORE_REASON_REGEX,
-        IGNORE_REASON_PRESET_REGEX,
     )
     ignore_reason_icons = {reason: icons._ignore_reason_icon(reason) for reason in ignore_reasons}
 

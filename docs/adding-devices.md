@@ -29,6 +29,14 @@ src/matchpatch/devices/
     __init__.py
     file_ops.py
     preset_handling.py
+  line6/
+    common.py
+    file_ops.py
+    helix/
+      __init__.py
+    podgo/
+      __init__.py
+      preset_handling.py
 ```
 
 For a new device named `my_device`, create:
@@ -52,16 +60,17 @@ from matchpatch.devices.my_device import MyDeviceProfile
 
 DEVICE_PROFILES = (
     HelixDeviceProfile(),
+    PodGoDeviceProfile(),
     DemoDeviceProfile(),
     MyDeviceProfile(),
 )
 ```
 
 The registry validates the list and exposes `get_device_profile(name)` and
-`list_device_profiles()`. Device names must be unique, non-empty strings. The
-GUI, CLI, config loader, workflows, diagnostics, and file-operation helpers all
-use that same registry, so adding the profile instance makes the device
-selectable everywhere.
+`list_device_profiles()`. Built-in Line 6 devices currently include `helix` and
+`podgo`. Device names must be unique, non-empty strings. The GUI, CLI, config
+loader, workflows, diagnostics, and file-operation helpers all use that same
+registry, so adding the profile instance makes the device selectable everywhere.
 
 ## DeviceProfile
 
@@ -82,7 +91,7 @@ class DemoDeviceProfile(DeviceProfile):
         return AudioRouting(None, 48000, (1, 2), (1, 2))
 
     def default_steering_options(self) -> SteeringOptions:
-        return SteeringOptions(None, 0, 0.0, 0.0, 0.0)
+        return SteeringOptions(None, 1, 0.0, 0.0, 0.0)
 
     def create_controller(self, options: SteeringOptions) -> DeviceController:
         return DemoController()

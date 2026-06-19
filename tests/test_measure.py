@@ -296,7 +296,7 @@ class TransportDeviceProfile(DeviceProfile):
         return AudioRouting(None, 48000, (1, 2), (1, 2))
 
     def default_steering_options(self) -> SteeringOptions:
-        return SteeringOptions(None, 0, 0.0, 0.0, 0.0)
+        return SteeringOptions(None, 1, 0.0, 0.0, 0.0)
 
     def create_controller(self, options: SteeringOptions):
         raise AssertionError("Custom loopback transport must not create a controller")
@@ -1066,7 +1066,7 @@ stability_tolerance_percent = 0.25
     assert args.output_mapping == (3, 4)
     assert args.blocksize == 64
     assert args.steering_output == "Helix"
-    assert args.steering_channel == 0
+    assert args.steering_channel == 1
     assert args.preset_wait == 0.5
     assert args.snapshot_wait == 0.2
     assert args.measurement_wait == 0.1
@@ -1161,7 +1161,7 @@ def test_worker_parse_args_validates_backend_against_selected_profile(monkeypatc
         display_name="Offline Processor",
         measurement_backends=lambda: ("offline",),
         default_audio_routing=lambda: AudioRouting(None, 48000, (1, 2), (1, 2)),
-        default_steering_options=lambda: SteeringOptions(None, 0, 0.0, 0.0, 0.0),
+        default_steering_options=lambda: SteeringOptions(None, 1, 0.0, 0.0, 0.0),
     )
     monkeypatch.setattr("matchpatch.measure.get_device_profile", lambda device: profile)
 

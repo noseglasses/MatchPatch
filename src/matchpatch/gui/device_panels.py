@@ -19,22 +19,13 @@ from matchpatch.gui.settings_renderer import DescriptorSettingsPanel
 
 
 class HelixSettingsPanel(QWidget):
-    def __init__(self, backend_selector: QWidget | None = None) -> None:
+    def __init__(self) -> None:
         super().__init__()
         layout = QVBoxLayout(self)
         self.audio_group = QGroupBox("Audio routing")
         self.steering_group = QGroupBox("MIDI steering")
         layout.addWidget(self.audio_group)
         layout.addWidget(self.steering_group)
-        if backend_selector is not None:
-            backend = QFormLayout()
-            backend.addRow(
-                _label(
-                    "Backend", "Select loopback for testing or hardware for a connected device."
-                ),
-                backend_selector,
-            )
-            layout.addLayout(backend)
         layout.addStretch()
 
         audio = QFormLayout(self.audio_group)
@@ -74,13 +65,13 @@ class HelixSettingsPanel(QWidget):
         steering = QFormLayout(self.steering_group)
         self.steering_output = QLineEdit()
         self.steering_channel = QSpinBox()
-        self.steering_channel.setRange(0, 15)
+        self.steering_channel.setRange(1, 16)
         steering.addRow(
             _label("MIDI output", "MIDI port substring used to find the connected Helix."),
             self.steering_output,
         )
         steering.addRow(
-            _label("MIDI channel", "Zero-based MIDI channel used for preset and snapshot changes."),
+            _label("MIDI channel", "MIDI channel used for preset and snapshot changes."),
             self.steering_channel,
         )
 
@@ -91,7 +82,7 @@ class HelixSettingsPanel(QWidget):
         self.output_mapping.setText(args.output_mapping or "3,4")
         self.blocksize.setValue(args.blocksize or 0)
         self.steering_output.setText(_text(args.steering_output or "Helix"))
-        self.steering_channel.setValue(args.steering_channel or 0)
+        self.steering_channel.setValue(args.steering_channel or 1)
 
     def append_arguments(self, argv: list[str]) -> None:
         _append(argv, "--audio-device", self.audio_device.text())
@@ -122,8 +113,9 @@ def create_settings_panel(
     profile: DeviceProfile,
     backend_selector: QWidget,
 ) -> QWidget | None:
+    del backend_selector
     if profile.name == "helix":
-        return HelixSettingsPanel(backend_selector)
+        return HelixSettingsPanel()
     descriptors = profile.setting_descriptors() if hasattr(profile, "setting_descriptors") else ()
     descriptors = tuple(descriptor for descriptor in descriptors if descriptor.show_in_gui)
     if descriptors:
