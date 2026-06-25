@@ -8,7 +8,13 @@ MatchPatch releases are tag-driven. A pushed tag named `v<version>` starts
 `.github/workflows/release.yml`. The workflow verifies that the tag matches
 `project.version` in `pyproject.toml`, builds and publishes the Python
 distributions to PyPI, builds the offline documentation payload, and builds,
-smoke-tests, and attaches the Windows installer to the GitHub Release.
+smoke-tests, uploads, and attaches the Windows installer and macOS DMG to the
+GitHub Release.
+
+The macOS app bundle is currently ad-hoc signed so its bundle seal is valid, but
+it is not Developer ID signed or notarized. The artifacts are suitable for
+release testing and distribution checks, but first launch may require manual
+Gatekeeper approval on macOS.
 
 ## Prerequisites
 
@@ -59,7 +65,8 @@ The script will:
 - ask for confirmation before publishing;
 - push the release commit and tag;
 - watch the GitHub Actions release workflow;
-- check that the GitHub Release has `MatchPatch-Setup-0.8.1.exe`;
+- check that the GitHub Release has `MatchPatch-Setup-0.8.1.exe` and
+  `MatchPatch-macOS-arm64-0.8.1.dmg`;
 - check PyPI package versions.
 
 Use `--yes` when running in a trusted terminal and you do not want the final
@@ -165,8 +172,52 @@ environments using the "Test The Published PyPI Package" section in
 This catches missing wheel dependency metadata and entry-point startup problems
 that a repository checkout can hide.
 
-Download the installer from the GitHub Release and run a final smoke test on a
-Windows machine if the release includes installer or GUI changes.
+Download the installers from the GitHub Release and run final smoke tests on a
+Windows machine and an arm64 macOS machine if the release includes installer or
+GUI changes.
+
+For macOS, treat the GitHub Actions jobs as the source of truth:
+
+- `quality.yml` builds and smoke-tests the DMG on `macos-15`.
+- The macOS DMG smoke mounts the image and runs both bundled CLI startup and
+  non-interactive GUI startup from `MatchPatch.app`.
+- `release.yml` uploads `MatchPatch-macOS-<arch>-<version>.dmg` to the GitHub
+  Release after the same smoke checks pass.
+- The release artifact is not Developer ID signed or notarized, so the first
+  launch may show a manual Gatekeeper approval prompt.
+- We do not have local Mac hardware in development, so real USB MIDI/audio
+  validation still depends on CI-safe mocks or external hardware testers.
+
+First public Mac release checklist:
+
+1. Confirm the GitHub Release contains the expected DMG name for the runner
+   architecture.
+2. Download the DMG on macOS and confirm it mounts and opens.
+3. Expect a first-launch Gatekeeper prompt unless a future Developer ID signed
+   and notarized release path has been added.
+4. Treat CI as packaging validation only until a maintainer or tester confirms
+   real Helix and Pod Go hardware on macOS.
+
+### Deferred macOS Signing And Notarization
+
+These steps are intentionally out of scope until the project has Apple
+Developer Program funding and release credentials. Keep them documented here so
+future maintainers know what needs to be added later:
+
+- import a Developer ID certificate from GitHub Actions secrets;
+- sign `MatchPatch.app` with the hardened runtime and any required
+  entitlements;
+- optionally sign the DMG or other final distribution artifact;
+- submit the build with `xcrun notarytool`;
+- staple the notarization ticket with `xcrun stapler`;
+- verify the signed release with `spctl --assess`;
+- define the GitHub secrets required for signing and notarization;
+- document the credential rotation process for those secrets.
+
+Do not add any of those steps to the current release workflow until the project
+can support them. The release path described above remains without Developer ID
+signing or notarization today, and there is no promise of a smooth Gatekeeper
+experience yet.
 
 ## Failure Recovery
 
@@ -206,3 +257,6 @@ build that asset:
 ```bash
 gh release upload v0.8.1 dist/installer/MatchPatch-Setup-0.8.1.exe --clobber
 ```
+
+For macOS releases, use the matching DMG name from the release job, for example
+`dist/installer/MatchPatch-macOS-arm64-0.8.1.dmg`.

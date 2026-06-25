@@ -483,6 +483,19 @@ def test_configured_windows_python_frozen_windows_keeps_explicit_worker_override
     assert normalize._configured_windows_python(env_args, config) == "C:/env/python.exe"
 
 
+def test_configured_windows_python_frozen_macos_ignores_stale_worker_config(
+    tmp_path, monkeypatch
+) -> None:
+    bundled_executable = tmp_path / "MatchPatch"
+    config = {"normalize": {"windows_python": "C:/source/.venv-windows/Scripts/python.exe"}}
+    args = argparse.Namespace(windows_python=None)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(normalize, "DEFAULT_WINDOWS_PYTHON", bundled_executable)
+
+    assert normalize._configured_windows_python(args, config) == str(bundled_executable)
+
+
 def test_apply_config_rejects_snapshot_count_above_device_limit() -> None:
     with pytest.raises(ValueError, match="must not exceed 8"):
         normalize.apply_config(

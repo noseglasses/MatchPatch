@@ -313,6 +313,57 @@ These checks verify that the published wheel declares the dependencies needed
 by the installed command-line entry points. They do not replace installer smoke
 tests or real hardware checks.
 
+For the lightweight macOS CI-style import smoke, install the hardware extra in
+the same fresh environment and verify the backend imports directly:
+
+```bash
+uv sync --locked --no-default-groups --extra hardware
+uv run --frozen --no-default-groups --extra hardware python -c "import mido; import mido.backends.rtmidi; import rtmidi; import sounddevice; print('macOS hardware imports OK')"
+```
+
+This checks the macOS hardware dependency metadata without requiring any
+physical processor hardware.
+
+For the macOS hardware validation harness, run the device listing and hardware
+diagnostics together. The harness writes its logs to `build/macos-hardware/`:
+
+```bash
+scripts/test-macos-hardware.sh
+```
+
+On GitHub-hosted macOS runners, this expects no Helix or Pod Go to be attached
+and therefore checks that the diagnostics fail cleanly. On a self-hosted macOS
+runner with hardware attached, set `MATCHPATCH_MACOS_HARDWARE=1` and rerun the
+same script so the diagnostics must pass instead.
+
+To record the exact Core Audio and CoreMIDI names, keep the device listing and
+diagnostics outputs:
+
+```bash
+uv run --frozen --no-default-groups --extra hardware python -m matchpatch.measure devices \
+  | tee build/macos-hardware/device-list.txt
+uv run --frozen --no-default-groups --extra hardware python -m matchpatch.measure check-hardware \
+  --device helix --diagnostics-json > build/macos-hardware/helix-diagnostics.json \
+  2> build/macos-hardware/helix-diagnostics.stderr.txt
+uv run --frozen --no-default-groups --extra hardware python -m matchpatch.measure check-hardware \
+  --device podgo --diagnostics-json > build/macos-hardware/podgo-diagnostics.json \
+  2> build/macos-hardware/podgo-diagnostics.stderr.txt
+```
+
+In `device-list.txt`, copy the exact `Audio devices:` and `MIDI outputs:`
+entries for the attached processor. In the JSON diagnostics, record:
+
+```text
+audio_device.detail.device
+audio_device.detail.input_mapping
+audio_device.detail.output_mapping
+midi_output.detail.output
+midi_output.detail.channel
+```
+
+Those fields show the Core Audio device name, the channel mapping used by
+`sounddevice.playrec`, and the CoreMIDI output name chosen for steering.
+
 ## Packaging
 
 The checked-in Windows packaging pipeline builds a frozen application payload

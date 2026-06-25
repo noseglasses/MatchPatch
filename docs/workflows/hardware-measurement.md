@@ -91,6 +91,46 @@ In the selected device settings, check:
 MIDI steering is how MatchPatch changes presets and snapshots during the run.
 
 
+(help-macos-hardware-validation)=
+## Validate On macOS
+
+Use the macOS validation harness before installer work or when checking a new
+Mac build. It proves that the hardware dependencies import cleanly, the app can
+list Core Audio and CoreMIDI devices, and the native hardware diagnostics fail
+cleanly when no Helix or Pod Go is attached.
+
+Run the harness from the repository root:
+
+```bash
+scripts/test-macos-hardware.sh
+```
+
+The GitHub-hosted macOS job runs this in expected-failure mode with no device
+attached. If you have a self-hosted macOS runner with Helix and Pod Go
+connected, set `MATCHPATCH_MACOS_HARDWARE=1` and rerun the same script so the
+diagnostics must pass.
+
+If you want to capture the exact device names and channel mapping results by
+hand, run:
+
+```bash
+uv run --frozen --no-default-groups --extra hardware python -m matchpatch.measure devices \
+  | tee build/macos-hardware/device-list.txt
+uv run --frozen --no-default-groups --extra hardware python -m matchpatch.measure check-hardware \
+  --device helix --diagnostics-json > build/macos-hardware/helix-diagnostics.json \
+  2> build/macos-hardware/helix-diagnostics.stderr.txt
+uv run --frozen --no-default-groups --extra hardware python -m matchpatch.measure check-hardware \
+  --device podgo --diagnostics-json > build/macos-hardware/podgo-diagnostics.json \
+  2> build/macos-hardware/podgo-diagnostics.stderr.txt
+```
+
+Record the `Audio devices:` line that names the Core Audio interface, the
+`MIDI outputs:` line that names the CoreMIDI port, and the JSON fields for
+`audio_device.detail.device`, `audio_device.detail.input_mapping`,
+`audio_device.detail.output_mapping`, `midi_output.detail.output`, and
+`midi_output.detail.channel`.
+
+
 ## Run The Hardware Check
 
 When you start a hardware run, MatchPatch checks whether the backend is

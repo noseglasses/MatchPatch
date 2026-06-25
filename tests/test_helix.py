@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import csv
 import importlib
 import json
@@ -751,6 +752,34 @@ def test_midi_output_names_reports_missing_backend(monkeypatch) -> None:
         midi_output_names()
 
     assert "mido.backends.rtmidi" not in str(exc.value)
+    assert "Windows" not in str(exc.value)
+
+
+def test_midi_output_names_reports_missing_mido_without_windows_sync(monkeypatch) -> None:
+    original_import = builtins.__import__
+
+    def fail_mido(name, *args, **kwargs):
+        if name == "mido":
+            raise ModuleNotFoundError("No module named 'mido'", name="mido")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.delitem(sys.modules, "mido", raising=False)
+    monkeypatch.setattr("builtins.__import__", fail_mido)
+
+    with pytest.raises(ValueError, match="MIDI output backend is unavailable") as exc:
+        midi_output_names()
+
+    assert "Windows" not in str(exc.value)
+
+
+def test_midi_output_names_returns_discovered_outputs(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "mido",
+        SimpleNamespace(get_output_names=lambda: ("IAC Driver", "Line 6 Helix")),
+    )
+
+    assert midi_output_names() == ["IAC Driver", "Line 6 Helix"]
 
 
 def test_profile_creates_midi_controller() -> None:

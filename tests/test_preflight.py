@@ -91,6 +91,24 @@ def test_loopback_preflight_skips_hardware(tmp_path: Path) -> None:
     assert "loopback" in hardware.summary
 
 
+def test_hardware_preflight_uses_platform_collector_by_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    expected = [DiagnosticCheck("audio_device", "pass", "Native hardware ready")]
+    monkeypatch.setattr(
+        "matchpatch.preflight.collect_platform_hardware_diagnostics",
+        lambda request: expected,
+    )
+
+    checks = run_preflight_checks(
+        _request(tmp_path, backend="hardware"),
+        get_profile=lambda device: _profile(),
+    )
+
+    assert expected[0] in checks
+
+
 def test_preflight_validates_backend_against_selected_profile(tmp_path: Path) -> None:
     checks = run_preflight_checks(
         _request(tmp_path, backend="offline"),

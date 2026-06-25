@@ -1,16 +1,26 @@
-"""Native Windows duplex audio support shared by hardware profiles."""
+"""Cross-platform duplex audio support shared by hardware profiles."""
 
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
 
-os.environ.setdefault("SD_ENABLE_ASIO", "1")
+if sys.platform == "win32":
+    os.environ.setdefault("SD_ENABLE_ASIO", "1")
 
-import sounddevice as sd  # noqa: E402
+try:
+    import sounddevice as sd  # noqa: E402
+except ModuleNotFoundError as exc:
+    if exc.name == "sounddevice":
+        raise ValueError(
+            "Audio backend is unavailable. Reinstall MatchPatch with hardware support, "
+            "then connect the device and try again."
+        ) from exc
+    raise
 
 
 @dataclass(frozen=True)
@@ -29,6 +39,18 @@ def _matches_device(device: dict[str, Any], query: str) -> bool:
     return query.casefold() in str(device["name"]).casefold()
 
 
+def _hostapi_name(device: dict[str, Any]) -> str:
+    return str(sd.query_hostapis(device["hostapi"])["name"])
+
+
+def _preferred_hostapi_name() -> str | None:
+    if sys.platform == "win32":
+        return "asio"
+    if sys.platform == "darwin":
+        return "core audio"
+    return None
+
+
 def resolve_audio_device(query: str | int | None) -> int | None:
     if query is None:
         return None
@@ -42,14 +64,16 @@ def resolve_audio_device(query: str | int | None) -> int | None:
     if not matches:
         raise ValueError(f"No audio device matched {query!r}")
 
-    asio_matches = [
+    preferred_hostapi = _preferred_hostapi_name()
+    preferred_matches = [
         index
         for index in matches
-        if "asio" in sd.query_hostapis(devices[index]["hostapi"])["name"].lower()
+        if preferred_hostapi is not None
+        and preferred_hostapi in _hostapi_name(devices[index]).casefold()
     ]
 
-    if len(asio_matches) == 1:
-        return asio_matches[0]
+    if len(preferred_matches) == 1:
+        return preferred_matches[0]
 
     if len(matches) == 1:
         return matches[0]
