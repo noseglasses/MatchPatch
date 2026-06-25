@@ -89,7 +89,7 @@ class GuiSettingsState:
         argv.extend(
             ["--ignore-snapshot-regex", normalize_regex_pattern(self.ignore_snapshot_regex)]
         )
-        argv.extend(["--ignore-preset-regex", normalize_regex_pattern(self.ignore_preset_regex)])
+        argv.extend(["--hide-preset-regex", normalize_regex_pattern(self.ignore_preset_regex)])
         argv.extend(["--snapshot-count", str(self.snapshot_count)])
         if self.keep_temp:
             argv.append("--keep-temp")
@@ -107,6 +107,7 @@ class GuiSettingsState:
         args = apply_config(parse_args(self.build_config_export_argv()))
         config = default_config()
         config["normalize"] = {
+            "device": args.device,
             "backend": args.backend,
             "windows_python": str(args.windows_python),
             "reference_di": str(args.reference_di),
@@ -134,7 +135,6 @@ class GuiSettingsState:
             "measured_snapshots": args.policy.snapshot_count,
             "solo_regex": args.policy.solo_regex,
             "ignore_snapshot_regex": args.policy.ignore_snapshot_regex,
-            "ignore_preset_regex": args.policy.ignore_preset_regex,
             "solo_gain_bump_db": args.policy.solo_gain_bump_db,
             "crest_factor_reference_db": args.policy.crest_factor_reference_db,
             "crest_factor_correction_ratio": args.policy.crest_factor_correction_ratio,
@@ -157,6 +157,9 @@ class GuiSettingsState:
                 "preset_wait_seconds": args.preset_wait,
                 "snapshot_wait_seconds": args.snapshot_wait,
                 "measurement_wait_seconds": args.measurement_wait,
+            },
+            "policy": {
+                "hide_preset_regex": args.policy.ignore_preset_regex,
             },
         }
         return config
@@ -236,6 +239,7 @@ class GuiSettingsBinder:
 class PresetTableSelectionContext:
     has_table: bool
     row_count: int
+    visible_rows: set[int]
     checked_rows: set[int]
     has_ignored_snapshots: bool
     comparison_snapshot_plan: dict[str, tuple[int, ...]] | None
@@ -253,7 +257,8 @@ def request_with_preset_table_selection(
     if not context.has_table or context.row_count == 0:
         return request
 
-    has_unchecked_presets = any(row not in context.checked_rows for row in range(context.row_count))
+    visible_rows = sorted(context.visible_rows)
+    has_unchecked_presets = any(row not in context.checked_rows for row in visible_rows)
     has_ignored_snapshots = context.has_ignored_snapshots
     comparison_snapshot_plan = context.comparison_snapshot_plan
     if comparison_snapshot_plan is not None:
@@ -292,11 +297,11 @@ def selected_candidate_rows(
     has_ignored_snapshots: bool,
 ) -> list[int]:
     if Path(context.input_path).suffix.lower() == ".hlx":
-        return [0] if context.row_count else []
+        return [0] if 0 in context.visible_rows else []
     if has_unchecked_presets:
-        return sorted(context.checked_rows)
+        return sorted(context.checked_rows & context.visible_rows)
     if has_ignored_snapshots:
-        return list(range(context.row_count))
+        return sorted(context.visible_rows)
     return []
 
 

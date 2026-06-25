@@ -12,7 +12,7 @@ software development.
 
 Write for someone who knows:
 
-- Helix presets;
+- supported Line 6 presets;
 - snapshots;
 - guitar levels;
 - loudness by ear;
@@ -150,8 +150,8 @@ options override the file. The `MATCHPATCH_BACKEND`,
 variables override matching file values.
 
 Use `--snapshot-count N` to override `policy.measured_snapshots` for one run.
-Line 6 Helix supports between `1` and `8` measured snapshots; the default is
-`4`.
+Line 6 Helix supports between `1` and `8` measured snapshots, and Pod Go
+supports between `1` and `4`; the default is `4`.
 
 Export the default config:
 
@@ -169,6 +169,7 @@ Example config:
 
 ```toml
 [normalize]
+device = "helix"
 backend = "hardware"
 reference_di = "/path/to/reference-di.wav"
 target_lufs = -16.0
@@ -183,7 +184,7 @@ blocksize = 0
 
 [devices.helix.steering]
 output = "Helix"
-channel = 0
+channel = 1
 preset_wait_seconds = 0.5
 snapshot_wait_seconds = 0.2
 measurement_wait_seconds = 0.1

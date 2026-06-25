@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import os
+import platform
+import re
+import shutil
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,6 +27,68 @@ GUI_STYLE = "Fusion"
 GUI_FONT_FAMILY = "DejaVu Sans"
 GUI_FONT_POINT_SIZE = 10
 GUI_SMOKE_ENV = "MATCHPATCH_GUI_SMOKE"
+XCB_PROBE_TIMEOUT_SECONDS = 5.0
+WINDOWS_INPUT_LANGUAGE_COMMAND = (
+    "Add-Type -AssemblyName System.Windows.Forms; "
+    "[System.Windows.Forms.InputLanguage]::CurrentInputLanguage.Culture.Name"
+)
+WINDOWS_KEYBOARD_LAYOUT_PROBE = (
+    "using System; "
+    "using System.Runtime.InteropServices; "
+    "public static class KeyboardLayoutProbe { "
+    '[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); '
+    '[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId('
+    "IntPtr hWnd, IntPtr processId); "
+    '[DllImport("user32.dll")] public static extern IntPtr GetKeyboardLayout(uint idThread); '
+    "}"
+)
+WINDOWS_KEYBOARD_LAYOUT_COMMAND = (
+    '$code = @"\n'
+    f"{WINDOWS_KEYBOARD_LAYOUT_PROBE}\n"
+    '"@; '
+    "Add-Type -TypeDefinition $code; "
+    "$hwnd=[KeyboardLayoutProbe]::GetForegroundWindow(); "
+    "$thread=[KeyboardLayoutProbe]::GetWindowThreadProcessId($hwnd,[IntPtr]::Zero); "
+    "$hkl=[KeyboardLayoutProbe]::GetKeyboardLayout($thread).ToInt64(); "
+    '("{0:x8}" -f ($hkl -band 0xffffffff))'
+)
+WINDOWS_HKL_LANGUAGE_TO_XKB_LAYOUT = {
+    "0405": "cz",
+    "0406": "dk",
+    "0407": "de",
+    "0409": "us",
+    "040a": "es",
+    "040b": "fi",
+    "040c": "fr",
+    "0410": "it",
+    "0411": "jp",
+    "0413": "nl",
+    "0415": "pl",
+    "0416": "br",
+    "041d": "se",
+    "041f": "tr",
+    "0809": "gb",
+    "0816": "pt",
+}
+WINDOWS_LANGUAGE_TO_XKB_LAYOUT = {
+    "da": "dk",
+    "de": "de",
+    "en-gb": "gb",
+    "en-us": "us",
+    "es": "es",
+    "fi": "fi",
+    "fr": "fr",
+    "it": "it",
+    "ja": "jp",
+    "nb": "no",
+    "nl": "nl",
+    "nn": "no",
+    "pl": "pl",
+    "pt-br": "br",
+    "pt": "pt",
+    "sv": "se",
+    "tr": "tr",
+}
 
 
 def resource_path(*parts: str) -> Path:
@@ -58,19 +124,198 @@ def qt_message_handler(
 
 
 def configure_wslg_runtime() -> None:
-    """Point Qt at WSLg when systemd provides a runtime dir without its socket."""
+    """Point Qt at WSLg and prefer the keyboard-layout friendly platform plugin."""
     wayland_display = os.getenv("WAYLAND_DISPLAY")
     if not wayland_display:
         return
 
     runtime_dir = Path(os.getenv("XDG_RUNTIME_DIR", ""))
-    if runtime_dir.joinpath(wayland_display).exists():
-        return
+    runtime_has_wayland = runtime_dir.joinpath(wayland_display).exists()
 
     wslg_runtime = Path("/mnt/wslg/runtime-dir")
-    if wslg_runtime.joinpath(wayland_display).exists():
+    wslg_has_wayland = wslg_runtime.joinpath(wayland_display).exists()
+    if not runtime_has_wayland and wslg_has_wayland:
         os.environ["XDG_RUNTIME_DIR"] = str(wslg_runtime)
-        os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
+
+    if os.getenv("QT_QPA_PLATFORM"):
+        return
+
+    if os.getenv("DISPLAY"):
+        xcb_error = xcb_runtime_error()
+        if xcb_error is None:
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+            return
+        if runtime_has_wayland or wslg_has_wayland:
+            print(
+                f"MatchPatch: Qt xcb startup failed; falling back to Wayland. {xcb_error}",
+                file=sys.stderr,
+            )
+
+    if runtime_has_wayland or wslg_has_wayland:
+        os.environ["QT_QPA_PLATFORM"] = "wayland"
+
+
+def sync_wslg_keyboard_layout() -> None:
+    """Apply the active Windows keyboard layout to Xwayland when possible."""
+    if not is_wsl() or not os.getenv("DISPLAY"):
+        return
+
+    layout_id = windows_keyboard_layout_id()
+    language = None if layout_id else windows_input_language()
+    layout = xkb_layout_for_windows_keyboard_layout(layout_id) or xkb_layout_for_windows_language(
+        language
+    )
+    if layout is None:
+        return
+
+    os.environ.setdefault("XKB_DEFAULT_LAYOUT", layout)
+    setxkbmap = shutil.which("setxkbmap")
+    if setxkbmap is None:
+        print(
+            "MatchPatch: Windows keyboard layout sync needs setxkbmap. "
+            "Install x11-xkb-utils if keyboard input still uses the wrong layout.",
+            file=sys.stderr,
+        )
+        return
+
+    completed = subprocess.run(
+        [setxkbmap, layout],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if completed.returncode:
+        detail = (completed.stderr or completed.stdout).strip()
+        source = layout_id or language
+        print(
+            f"MatchPatch: Could not apply Windows keyboard layout {source!r} "
+            f"as XKB layout {layout!r}. {detail}",
+            file=sys.stderr,
+        )
+
+
+def is_wsl() -> bool:
+    return bool(os.getenv("WSL_DISTRO_NAME")) or "microsoft" in platform.release().casefold()
+
+
+def windows_input_language() -> str | None:
+    powershell = shutil.which("powershell.exe")
+    if powershell is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                WINDOWS_INPUT_LANGUAGE_COMMAND,
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode:
+        return None
+    language = completed.stdout.strip()
+    return language or None
+
+
+def windows_keyboard_layout_id() -> str | None:
+    powershell = shutil.which("powershell.exe")
+    if powershell is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                WINDOWS_KEYBOARD_LAYOUT_COMMAND,
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode:
+        return None
+    match = re.search(r"[0-9a-fA-F]{4,}", completed.stdout.strip())
+    return match.group(0).casefold() if match else None
+
+
+def xkb_layout_for_windows_keyboard_layout(layout_id: str | None) -> str | None:
+    if not layout_id:
+        return None
+    normalized = re.sub(r"[^0-9a-fA-F]", "", layout_id).casefold()
+    if len(normalized) < 4:
+        return None
+    return WINDOWS_HKL_LANGUAGE_TO_XKB_LAYOUT.get(normalized[-4:])
+
+
+def xkb_layout_for_windows_language(language: str | None) -> str | None:
+    if not language:
+        return None
+    normalized = re.sub(r"[_ ]", "-", language.strip().casefold())
+    return WINDOWS_LANGUAGE_TO_XKB_LAYOUT.get(
+        normalized,
+        WINDOWS_LANGUAGE_TO_XKB_LAYOUT.get(normalized.split("-", 1)[0]),
+    )
+
+
+def xcb_runtime_available() -> bool:
+    """Return whether Qt can initialize the xcb platform plugin."""
+    return xcb_runtime_error() is None
+
+
+def xcb_runtime_error() -> str | None:
+    """Return the Qt xcb startup error, or None when xcb works."""
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "xcb"
+    env["QT_DEBUG_PLUGINS"] = "1"
+    probe = (
+        "import sys\n"
+        "from PySide6.QtWidgets import QApplication\n"
+        "app = QApplication(['matchpatch-xcb-probe'])\n"
+        "app.quit()\n"
+        "sys.exit(0)\n"
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            check=False,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=XCB_PROBE_TIMEOUT_SECONDS,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        return "Qt xcb probe timed out."
+    except OSError as exc:
+        return str(exc)
+    if completed.returncode == 0:
+        return None
+    return _summarize_xcb_probe_error(completed.stderr or completed.stdout)
+
+
+def _summarize_xcb_probe_error(output: str) -> str:
+    for line in output.splitlines():
+        if "cannot open shared object file" in line:
+            return line.strip()
+    for line in reversed(output.splitlines()):
+        if line.strip():
+            return line.strip()
+    return "Qt xcb probe exited with an error."
 
 
 def configure_high_dpi_scaling() -> None:
@@ -191,6 +436,7 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(0)
 
     configure_wslg_runtime()
+    sync_wslg_keyboard_layout()
     configure_high_dpi_scaling()
     register_desktop_entry()
     qInstallMessageHandler(qt_message_handler)

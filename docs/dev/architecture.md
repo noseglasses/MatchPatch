@@ -1,16 +1,18 @@
 # Architecture
 
 MatchPatch is a Python 3.12+ application for normalizing loudness across audio
-processor presets. The checked-in code is centered on Line 6 Helix support, but
-the newer package layout separates front ends, normalization workflow, audio
-measurement, and device-specific adapters so more processors can be added later.
+processor presets. The checked-in code includes first-class Line 6 Helix and
+Line 6 Pod Go support, and the package layout separates front ends,
+normalization workflow, audio measurement, and device-specific adapters so more
+processors can be added later.
 
 ## Repository Layout
 
 - `src/matchpatch/` contains the installable package and console entry points.
 - `src/matchpatch/gui/` contains the PySide6 GUI.
-- `src/matchpatch/devices/` contains processor profile interfaces and the Helix
-  implementation, including `.hls`/`.hlx` parsing and rewriting helpers.
+- `src/matchpatch/devices/` contains processor profile interfaces and built-in
+  device implementations, including shared Line 6 helpers plus Helix and Pod Go
+  adapters.
 - `scripts/` contains WSL/Windows environment, worker, installer build, and
   installer smoke-test wrappers.
 - `installer/` contains the Inno Setup script, PyInstaller specs, and
@@ -148,10 +150,11 @@ with configured USB mappings, and trims pre-roll/post-roll using
 - `DeviceController` activates presets and reapplies snapshots.
 
 The registry in `matchpatch.devices.registry` reads the explicit
-`DEVICE_PROFILES` list in `matchpatch.devices.available`. To add a device,
-create a sibling package under `matchpatch.devices` and add one profile
-instance to that list. The demo device in `matchpatch.devices.demo` is the
-reference implementation for this flow.
+`DEVICE_PROFILES` list in `matchpatch.devices.available`. Built-in devices
+currently include `helix`, `podgo`, and the non-normalizing `demo-device`. To add
+a device, create a sibling package under `matchpatch.devices` and add one
+profile instance to that list. The demo device in `matchpatch.devices.demo` is
+the reference implementation for this flow.
 
 ## Helix Profile
 
@@ -164,12 +167,13 @@ reference implementation for this flow.
 - snapshot name length: `10`
 - default audio: device query `Helix`, sample rate `48000`, input USB `1/2`,
   output USB `3/4`
-- default steering: MIDI output query `Helix`, channel `0`, preset wait `0.5`,
+- default steering: MIDI output query `Helix`, channel `1`, preset wait `0.5`,
   snapshot wait `0.2`, measurement wait `0.1`
 
 `HelixMidiController` uses `mido`. Presets are selected with MIDI program
-changes, where internal preset ID `1` maps to program `0`. Snapshots use CC 69
-with values `0..7`.
+changes, where internal preset ID `1` maps to program `0`. Public MIDI channel
+settings are one-based; the controller converts them to `mido`'s zero-based
+channel field. Snapshots use CC 69 with values `0..7`.
 
 `HelixPatchFileHandler` runs `matchpatch.devices.helix.preset_handling` with the
 current Python interpreter in development, and in-process in frozen builds. It
@@ -184,6 +188,31 @@ delegates:
 Modern measurement CSVs use a generic `DevicePatch` column. Before passing them
 to the Helix utility module, the Helix handler writes a temporary adapter CSV that adds
 or replaces `HelixPreset`.
+
+## Pod Go Profile
+
+`PodGoDeviceProfile` declares:
+
+- name: `podgo`
+- display name: `Line 6 Pod Go`
+- max measured snapshots: `4`
+- preset name length: `16`
+- snapshot name length: `10`
+- default audio: device query `POD Go`, sample rate `48000`, input USB `1/2`,
+  output USB `3/4`
+- default steering: MIDI output query `POD Go`, channel `1`, preset wait `0.5`,
+  snapshot wait `0.2`, measurement wait `0.1`
+
+`PodGoMidiController` uses the shared Line 6 MIDI behavior. Presets are
+selected with MIDI program changes, where internal preset ID `1` maps to program
+`0` and preset ID `128` maps to program `127`. Public MIDI channel settings are
+one-based; channel `1` is sent through `mido` as channel field `0`. Snapshots use
+CC 69 with values `0..3`.
+
+`PodGoPatchFileHandler` runs
+`matchpatch.devices.line6.podgo.preset_handling`. It advertises `.pgs` setlists
+and `.pgp` presets, using the same shared Line 6 file-handler infrastructure as
+Helix.
 
 ## Helix File Processing
 

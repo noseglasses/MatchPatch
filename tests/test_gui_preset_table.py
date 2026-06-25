@@ -122,7 +122,6 @@ from matchpatch.gui.table_roles import (
     IGNORED_SNAPSHOT_ROLE,
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_PRESET,
-    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
     MANUAL_NAME_MODIFIED_ROLE,
     MEASURED_ADJUSTMENT_ROLE,
@@ -872,7 +871,7 @@ def test_ignore_snapshot_regex_marks_and_skips_default_snapshots(monkeypatch, ap
     window.close()
 
 
-def test_ignore_preset_regex_marks_and_skips_matching_preset(monkeypatch, app) -> None:
+def test_hide_preset_regex_hides_matching_preset(monkeypatch, app) -> None:
     window = MainWindow()
     _mock_single_hlx_handler(
         monkeypatch,
@@ -888,21 +887,16 @@ def test_ignore_preset_regex_marks_and_skips_matching_preset(monkeypatch, app) -
     assert selected is not None
     selected.setCheckState(Qt.CheckState.Checked)
 
-    for snapshot in range(2):
-        item = window.preset_table.item(0, snapshot_name_column(snapshot))
-        assert item.data(IGNORED_SNAPSHOT_REASONS_ROLE) == (IGNORE_REASON_PRESET_REGEX,)
-
-    assert window._row_measured_snapshot_indexes(0) == ()
+    assert window.preset_table.isRowHidden(0)
+    assert window._selected_measurable_preset_rows() == []
 
     selected.setCheckState(Qt.CheckState.Unchecked)
     name = window.preset_table.item(0, snapshot_name_column(0))
-    assert name.data(IGNORED_SNAPSHOT_REASONS_ROLE) == (
-        IGNORE_REASON_PRESET_REGEX,
-        IGNORE_REASON_PRESET,
-    )
+    assert name.data(IGNORED_SNAPSHOT_REASONS_ROLE) == (IGNORE_REASON_PRESET,)
 
     window.ignore_preset_regex.setText("^Other")
 
+    assert not window.preset_table.isRowHidden(0)
     assert name.data(IGNORED_SNAPSHOT_REASONS_ROLE) == (IGNORE_REASON_PRESET,)
     assert window._row_measured_snapshot_indexes(0) == ()
 
@@ -1536,6 +1530,10 @@ def test_bad_lufs_row_highlight_is_reset_for_new_input_and_measurement(monkeypat
         @staticmethod
         def create_patch_file_handler(root):
             class FailingHandler:
+                @staticmethod
+                def file_kind(path):
+                    return "setlist"
+
                 @staticmethod
                 def validate_input(path):
                     raise ValueError("Invalid input")

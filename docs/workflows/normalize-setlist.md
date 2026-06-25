@@ -1,16 +1,17 @@
 (help-normalize-setlist)=
 # Normalize A Setlist
 
-Use this workflow to balance a Helix `.hls` setlist with many presets.
+Use this workflow to balance a Line 6 Helix `.hls` or Pod Go `.pgs` setlist with
+many presets.
 
 This is the main MatchPatch workflow for a rehearsal or gig setlist.
 
 ## Before You Start
 
-- Back up the original `.hls` file.
+- Back up the original `.hls` or `.pgs` file.
 - Choose a reference DI.
 - Decide whether this is a real hardware run or a no-hardware test.
-- If using hardware mode, connect and power on the Helix.
+- If using hardware mode, connect and power on the processor.
 - Set aside enough time for the selected presets and snapshots.
 
 Useful background:
@@ -22,9 +23,9 @@ Useful background:
 ## Steps
 
 1. Open MatchPatch.
-2. Open your `.hls` setlist. You may also select several `.hlx` preset files
-   together; MatchPatch will show them as one temporary setlist in the preset
-   table.
+2. Open your `.hls` or `.pgs` setlist. You may also select several single-preset
+   files for the same device family together; MatchPatch will show them as one
+   temporary setlist in the preset table.
 3. Wait for the preset table to appear.
 4. Review the listed presets. MatchPatch shows only non-empty presets.
 5. Choose which presets to measure:
@@ -45,30 +46,32 @@ Useful background:
 14. Watch the progress area while MatchPatch measures presets and snapshots.
 15. Review the result table.
 16. If the table looks good, click Save or Save As.
-17. Import the saved adjusted file into the Helix.
+17. Import the saved adjusted file into the matching processor editor or device.
 18. Listen through the setlist in a real playing context.
 
 ![Loaded setlist with selected presets](../assets/screenshots/loaded-setlist.png)
 
 
-## Opening Several `.hlx` Presets
+## Opening Several Single-Preset Files
 
-Use File > Open and select more than one `.hlx` file when you want to work on
-separate preset files as a group. MatchPatch joins them into a temporary setlist
-view for the table and for measurement.
+Use File > Open and select more than one `.hlx` or `.pgp` file when you want to
+work on separate preset files as a group. MatchPatch joins them into a temporary
+setlist view for the table and for measurement.
 
 Selection rules:
 
-- several selected files must all be `.hlx` presets;
-- one `.hls` setlist can be opened by itself;
-- `.hls` and `.hlx` files cannot be mixed in one Open selection.
+- several selected files must all be Helix `.hlx` presets or all Pod Go `.pgp`
+  presets;
+- one `.hls` or `.pgs` setlist can be opened by itself;
+- setlists and presets cannot be mixed in one Open selection;
+- Helix and Pod Go files cannot be mixed in one Open selection.
 
 Save behavior is different for this mode:
 
-- Save writes each edited preset back to the original `.hlx` file it came from;
+- Save writes each edited preset back to the original preset file it came from;
 - the first overwrite prompt includes an "overwrite them all" checkbox so you
   can approve the whole batch;
-- Save As writes one `.hls` setlist containing all open presets.
+- Save As writes one matching setlist containing all open presets.
 
 
 (help-preset-table-legend)=
@@ -95,7 +98,7 @@ In hardware workflows, MatchPatch may ask you to import a measurement file
 before measurement can continue.
 
 Follow the prompt exactly. The measurement file is temporary and exists only so
-MatchPatch can measure the Helix correctly.
+MatchPatch can measure the processor correctly.
 
 > Warning:
 > Measurement files are not live-performance files.
@@ -125,7 +128,8 @@ If a row is red, read [Troubleshooting](../troubleshooting.md) before saving.
 
 ## If Something Goes Wrong
 
-- If the Helix is not found, check [Hardware Measurement](hardware-measurement.md).
+- If the processor is not found, check
+  [Hardware Measurement](hardware-measurement.md).
 - If the result table has red rows, check
   [Reading Results](../concepts/reading-results.md) and
   [Troubleshooting](../troubleshooting.md).
@@ -134,4 +138,4 @@ If a row is red, read [Troubleshooting](../troubleshooting.md) before saving.
 
 > Warning:
 > Keep the original setlist until you have listened to the adjusted file on the
-> Helix.
+> processor.

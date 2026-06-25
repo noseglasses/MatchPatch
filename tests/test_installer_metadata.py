@@ -121,6 +121,7 @@ def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     assert "console=False" in gui_spec
     assert "datas=asset_datas()" in gui_spec
     assert '"matchpatch.devices.helix.preset_handling"' in gui_spec
+    assert '"matchpatch.devices.line6.podgo.preset_handling"' in gui_spec
     assert '"mido.backends.rtmidi"' in gui_spec
     assert '"rtmidi"' in gui_spec
     assert '"src" / "matchpatch" / "app.py"' in gui_spec

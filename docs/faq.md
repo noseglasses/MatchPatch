@@ -2,7 +2,7 @@
 
 Quick answers to common MatchPatch questions.
 
-## What Does MatchPatch Actually Change In My Helix File?
+## What Does MatchPatch Actually Change In My Processor File?
 
 MatchPatch mainly changes output block levels so presets and snapshots land
 closer to the target loudness.
@@ -24,14 +24,15 @@ how a sound feels in the mix.
 
 The safest undo is your backup.
 
-Keep the original `.hls` or `.hlx` file, and use Save As when possible. If you
-do not like the adjusted file, import the original backup again.
+Keep the original `.hls`, `.hlx`, `.pgs`, or `.pgp` file, and use Save As when
+possible. If you do not like the adjusted file, import the original backup
+again.
 
-## Can I Use MatchPatch Without A Helix Connected?
+## Can I Use MatchPatch Without Hardware Connected?
 
 Yes. Use loopback or simulated mode to learn the app without hardware.
 
-Those modes are useful for practice, but they do not measure your real Helix
+Those modes are useful for practice, but they do not measure your real processor
 tones.
 
 See [Test Without Hardware](workflows/test-without-hardware.md).
@@ -39,7 +40,7 @@ See [Test Without Hardware](workflows/test-without-hardware.md).
 ## What Is Loopback Mode For?
 
 Loopback mode measures the reference DI directly. It is a safe way to test the
-MatchPatch workflow without connecting a Helix.
+MatchPatch workflow without connecting a processor.
 
 Do not use loopback results as final live preset levels.
 
@@ -50,13 +51,13 @@ See [Backends](concepts/backends.md).
 Simulated mode pretends to be a processor. It is useful for testing the workflow
 without hardware while seeing more varied fake results than loopback.
 
-It is not a real Helix measurement.
+It is not a real processor measurement.
 
 ## When Should I Use Hardware Mode?
 
 Use hardware mode when you want real results for rehearsal or stage use.
 
-Hardware mode measures the actual Helix sound.
+Hardware mode measures the actual Helix or Pod Go sound.
 
 See [Hardware Measurement](workflows/hardware-measurement.md).
 
@@ -111,13 +112,13 @@ This is useful for unused snapshots or placeholders.
 A red cell means MatchPatch could not safely calculate a normal adjustment.
 
 Common causes are silence, wrong routing, missing loudness data, or an output
-level that would go outside the Helix range.
+level that would go outside the processor range.
 
 See [Troubleshooting](troubleshooting.md).
 
 ## What Is A Measurement File?
 
-A measurement file is a temporary Helix file made so MatchPatch can measure the
+A measurement file is a temporary processor file made so MatchPatch can measure the
 processor correctly.
 
 It is not the final file for playing.
@@ -131,24 +132,26 @@ No.
 > Warning:
 > Measurement files are for measurement only. Use the adjusted file for playing.
 
-## Why Does A Single `.hlx` Preset Need A Temporary Slot?
+## Why Does A Single Preset File Need A Temporary Slot?
 
-A single `.hlx` preset does not know where it lives on the Helix. MatchPatch
-needs a temporary slot, such as `12A`, so it can switch to the right location
-during measurement.
+A single `.hlx` or `.pgp` preset does not know where it lives on the processor.
+MatchPatch needs a temporary slot, such as `12A`, so it can switch to the right
+location during measurement.
 
 See [Normalize A Single Preset](workflows/normalize-single-preset.md).
 
-## Can I Open Several `.hlx` Presets Together?
+## Can I Open Several Single-Preset Files Together?
 
-Yes. Use File > Open and select only `.hlx` files. MatchPatch shows those
-presets together as a temporary setlist in the preset table.
+Yes. Use File > Open and select only `.hlx` files for Helix or only `.pgp` files
+for Pod Go. MatchPatch shows those presets together as a temporary setlist in
+the preset table.
 
-Save overwrites the original `.hlx` files. The first overwrite prompt lets you
-approve overwriting the rest of the batch. Save As writes one `.hls` setlist
+Save overwrites the original preset files. The first overwrite prompt lets you
+approve overwriting the rest of the batch. Save As writes one matching setlist
 instead.
 
-Do not mix `.hlx` and `.hls` files in one Open selection.
+Do not mix preset files and setlists in one Open selection, and do not mix Helix
+and Pod Go files.
 
 ## Should I Normalize Before Or After Rehearsal?
 
@@ -161,7 +164,8 @@ or manually adjust any presets that still feel wrong in the band mix.
 
 Yes, for setlists.
 
-Use Select changed and choose a previous version of the same `.hls` setlist.
+Use Select changed and choose a previous version of the same `.hls` or `.pgs`
+setlist.
 
 See [Select Changed Presets](workflows/select-changed-presets.md).
 

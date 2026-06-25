@@ -6,19 +6,19 @@ Routing is the path the sound takes while MatchPatch measures your presets.
 In hardware mode, the signal path is:
 
 1. The computer plays the clean reference DI.
-2. The DI enters the Helix.
-3. The Helix processes the DI through the selected preset and snapshot.
+2. The DI enters the processor.
+3. The selected preset and snapshot shape the DI.
 4. The processed sound returns to the computer.
 5. MatchPatch measures the recorded sound.
 
 (help-audio-routing)=
 ## Playback And Recording Channels
 
-Playback channels send the reference DI from the computer to the Helix.
+Playback channels send the reference DI from the computer to the processor.
 
-Recording channels bring the processed Helix sound back to the computer.
+Recording channels bring the processed sound back to the computer.
 
-For a typical Helix setup, MatchPatch expects:
+For typical Helix and Pod Go setups, MatchPatch expects:
 
 - processed recording on USB `1/2`;
 - reference DI playback on USB `3/4`.
@@ -28,7 +28,8 @@ or the wrong signal.
 
 ## Output Level
 
-The output block level is the final output gain inside a Helix preset.
+The output block level is the final output gain inside a supported processor
+preset.
 MatchPatch adjusts this level per snapshot to balance loudness.
 
 ## Out dB And Delta dB

@@ -11,7 +11,7 @@ from gui_test_helpers import request
 from PySide6.QtCore import QAbstractAnimation, Qt
 from PySide6.QtWidgets import QMessageBox, QTableWidgetItem
 
-from matchpatch.gui import main_window, progress_widgets
+from matchpatch.gui import main_window_status, progress_widgets
 from matchpatch.gui.main_window import MainWindow
 from matchpatch.gui.preset_table import (
     IGNORED_SNAPSHOT_BACKGROUND,
@@ -30,7 +30,7 @@ def test_log_section_and_busy_indicator(monkeypatch, app) -> None:
     monkeypatch.setattr(window, "_schedule_resize_for_content", lambda: resize_calls.append(True))
 
     assert window.log_section is window.log
-    assert window.advanced_tabs.widget(6).isAncestorOf(window.log_section)
+    assert window.advanced_tabs.widget(7).isAncestorOf(window.log_section)
     window._start_busy_phase()
     assert window.progress_group.isHidden()
     assert window.busy_animation.state() == QAbstractAnimation.State.Running
@@ -336,11 +336,11 @@ def test_cancellation_sets_status_without_redundant_popup(monkeypatch, app) -> N
     assert popups == []
     assert window.phase.text() == "Normalization cancelled by user"
     assert "Normalization cancelled by user" in window.log.toHtml()
-    assert main_window.PROCESSING_DOT_RED in window.processing_dot.styleSheet()
+    assert main_window_status.PROCESSING_DOT_RED in window.processing_dot.styleSheet()
 
     window.worker_finished()
 
-    assert main_window.PROCESSING_DOT_RED in window.processing_dot.styleSheet()
+    assert main_window_status.PROCESSING_DOT_RED in window.processing_dot.styleSheet()
 
     window.close()
 

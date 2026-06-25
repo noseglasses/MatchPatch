@@ -27,7 +27,6 @@ from matchpatch.gui.preset_table import (
 from matchpatch.gui.table_roles import (
     IGNORE_REASON_COMPARISON,
     IGNORE_REASON_PRESET,
-    IGNORE_REASON_PRESET_REGEX,
     IGNORE_REASON_REGEX,
 )
 
@@ -66,10 +65,6 @@ def build_preset_table_legend_dialog(
         (
             _legend_ignore_icon_label(IGNORE_REASON_REGEX, dialog, ignore_reason_icons),
             "Ignored because the snapshot name matches the ignored-snapshot regex.",
-        ),
-        (
-            _legend_ignore_icon_label(IGNORE_REASON_PRESET_REGEX, dialog, ignore_reason_icons),
-            "Ignored because the preset name matches the ignored-preset regex.",
         ),
     )
     for row, (symbol, text) in enumerate(marker_rows):

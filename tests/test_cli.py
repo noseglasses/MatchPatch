@@ -13,7 +13,9 @@ def test_devices_command_lists_helix(monkeypatch, capsys) -> None:
 
     cli.main()
 
-    assert "helix\tLine 6 Helix" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "helix\tLine 6 Helix" in output
+    assert "podgo\tLine 6 Pod Go" in output
 
 
 def test_normalize_command_is_dispatched(monkeypatch) -> None:

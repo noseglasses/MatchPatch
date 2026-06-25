@@ -15,7 +15,7 @@ Use Determine optimal parameters when:
 
 - repeated measurements do not agree;
 - presets have long delay or reverb trails;
-- the Helix seems slow to switch;
+- the processor seems slow to switch;
 - Fast timing gives suspicious results;
 - you want shorter timing without guessing.
 
@@ -24,8 +24,8 @@ Use Determine optimal parameters when:
 - Open a setlist or preset.
 - Select at least one preset that can be measured.
 - Check the Reference DI.
-- If using hardware mode, connect and prepare the Helix.
-- If using a single `.hlx`, enter the temporary preset slot.
+- If using hardware mode, connect and prepare the processor.
+- If using a single preset file, enter the temporary preset slot.
 
 > Warning:
 > Parameter studies can take time. Let the run finish unless you need to abort.

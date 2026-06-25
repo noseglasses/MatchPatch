@@ -774,6 +774,10 @@ class DeviceProfile(ABC):
         """Return whether this profile can run the normalization workflow."""
         return True
 
+    def default_ignore_preset_regex(self) -> str:
+        """Return the default regex for hiding presets in front ends."""
+        return NormalizationPolicy().ignore_preset_regex
+
     def normalization_unavailable_message(self) -> str:
         """Explain why normalization is unavailable when ``supports_normalization`` is false."""
         return f"{self.display_name} cannot normalize files."
@@ -917,9 +921,9 @@ class DeviceProfile(ABC):
                 config_path=(*steering_path, "channel"),
                 cli_flags=("--midi-channel",),
                 label="MIDI channel",
-                help="Zero-based MIDI channel used for steering.",
-                minimum=0,
-                maximum=15,
+                help="One-based MIDI channel used for steering.",
+                minimum=1,
+                maximum=16,
             ),
             DeviceSettingDescriptor(
                 name="preset_wait",

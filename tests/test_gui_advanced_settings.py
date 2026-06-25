@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
+from matchpatch import config as matchpatch_config
 from matchpatch.devices.base import NormalizationPolicy, PatchFileAdjustments
 from matchpatch.diagnostics import DiagnosticCheck
 from matchpatch.gui import icons, loudness_widgets, main_window, measurement_optimization, results
@@ -149,6 +150,9 @@ class ConfigExportFileDialog:
     def setNameFilter(self, file_filter):
         self.settings.append(("name_filter", file_filter))
 
+    def setDirectory(self, path):
+        self.settings.append(("directory", path))
+
     def selectFile(self, path):
         self.settings.append(("select_file", path))
 
@@ -183,6 +187,18 @@ def install_config_export_dialog_fakes(monkeypatch, selected_path):
     monkeypatch.setattr(main_window, "QFileDialog", ConfigExportFileDialog)
     monkeypatch.setattr(main_window, "QCheckBox", ConfigExportCheckBox)
     return ConfigExportFileDialog.dialogs
+
+
+def config_export_dialog_setting(dialog, name):
+    return next(setting[1] for setting in reversed(dialog.settings) if setting[0] == name)
+
+
+def expected_default_config_dialog_selection(path: Path) -> tuple[Path, Path]:
+    home = Path.home()
+    try:
+        return home, path.relative_to(home)
+    except ValueError:
+        return path.parent, Path(path.name)
 
 
 def _state(**overrides: object) -> GuiSettingsState:
@@ -242,6 +258,9 @@ def test_gui_settings_state_builds_normalization_and_export_argv() -> None:
     assert ["--custom-adjustments-file", "/tmp/custom.csv"] == argv[
         argv.index("--custom-adjustments-file") : argv.index("--custom-adjustments-file") + 2
     ]
+    assert ["--hide-preset-regex", ""] == argv[
+        argv.index("--hide-preset-regex") : argv.index("--hide-preset-regex") + 2
+    ]
     assert ["--preset-set", "01A"] == argv[
         argv.index("--preset-set") : argv.index("--preset-set") + 2
     ]
@@ -276,6 +295,7 @@ def test_gui_settings_state_exports_current_config() -> None:
         optimization_stability_tolerance=0.25,
     ).active_config()
 
+    assert config["normalize"]["device"] == "helix"
     assert config["normalize"]["backend"] == "hardware"
     assert config["normalize"]["reference_di"] == "modified.wav"
     assert config["normalize"]["target_lufs"] == -18.5
@@ -283,6 +303,7 @@ def test_gui_settings_state_exports_current_config() -> None:
     assert config["measurement"]["stability_tolerance_percent"] == 0.25
     assert config["devices"]["helix"]["audio"]["device"] == "Modified Helix"
     assert config["devices"]["helix"]["audio"]["input_mapping"] == [3, 4]
+    assert config["devices"]["helix"]["policy"]["hide_preset_regex"] == ""
     assert config["devices"]["helix"]["steering"]["preset_wait_seconds"] == 1.2
 
 
@@ -308,6 +329,7 @@ def test_request_with_preset_table_selection_filters_checked_and_ignored_snapsho
         PresetTableSelectionContext(
             has_table=True,
             row_count=2,
+            visible_rows={0, 1},
             checked_rows={1},
             has_ignored_snapshots=True,
             comparison_snapshot_plan=None,
@@ -355,6 +377,7 @@ def test_diagnostic_request_builds_state_request_and_applies_table_selection(
         PresetTableSelectionContext(
             has_table=True,
             row_count=2,
+            visible_rows={0, 1},
             checked_rows={1},
             has_ignored_snapshots=True,
             comparison_snapshot_plan=None,
@@ -456,7 +479,7 @@ def test_normalization_request_includes_measurable_snapshot_plan(monkeypatch, ap
     window.close()
 
 
-def test_main_window_loads_explicit_config(tmp_path, app) -> None:
+def test_main_window_loads_explicit_config(tmp_path, monkeypatch, app) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -475,6 +498,7 @@ measured_snapshots = 6
 """,
         encoding="utf-8",
     )
+    monkeypatch.setattr(matchpatch_config, "default_config_paths", lambda: [])
     window = MainWindow()
     window.config_path.setText(str(config_path))
     window.load_defaults()
@@ -495,6 +519,39 @@ measured_snapshots = 6
     assert "None" not in argv
     assert argv[argv.index("--preset-wait") + 1] == "1.3"
     assert window.device_panels["helix"].audio_group.isEnabled()
+
+    window.close()
+
+
+def test_main_window_loads_configured_default_device(tmp_path, monkeypatch, app) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[normalize]
+device = "podgo"
+backend = "hardware"
+
+[devices.podgo.audio]
+device = "Configured Pod Go"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(matchpatch_config, "default_config_paths", lambda: [])
+    monkeypatch.setattr(
+        main_window,
+        "list_device_profiles",
+        lambda: [main_window.get_device_profile("helix")],
+    )
+    window = MainWindow()
+    assert window.device.findData("podgo") < 0
+
+    window.config_path.setText(str(config_path))
+    window.load_defaults()
+
+    assert window.device.currentData() == "podgo"
+    assert window.device.findData("podgo") >= 0
+    assert window.device_stack.currentWidget() is window.device_panels["podgo"]
+    assert window.device_panels["podgo"].controls["audio_device"].text() == "Configured Pod Go"
 
     window.close()
 
@@ -539,8 +596,10 @@ def test_main_window_applies_measurement_parameter_presets(monkeypatch, app) -> 
 
 def test_measurement_time_estimate_updates_with_timing_and_loaded_counts(
     tmp_path,
+    monkeypatch,
     app,
 ) -> None:
+    monkeypatch.setattr(matchpatch_config, "default_config_paths", lambda: [])
     window = MainWindow()
     reference_di = tmp_path / "reference.wav"
     _write_silent_wav(reference_di, seconds=5.0)
@@ -601,8 +660,10 @@ def test_measurement_time_estimate_updates_with_timing_and_loaded_counts(
 
 def test_measurement_time_estimate_counts_only_measurable_snapshots(
     tmp_path,
+    monkeypatch,
     app,
 ) -> None:
+    monkeypatch.setattr(matchpatch_config, "default_config_paths", lambda: [])
     window = MainWindow()
     reference_di = tmp_path / "reference.wav"
     _write_silent_wav(reference_di, seconds=1.0)
@@ -635,6 +696,7 @@ def test_measurement_time_estimate_counts_only_measurable_snapshots(
 
 
 def test_main_window_exports_current_config_by_default(tmp_path, monkeypatch, app) -> None:
+    monkeypatch.setattr(matchpatch_config, "default_config_paths", lambda: [])
     window = MainWindow()
     path = tmp_path / "current.toml"
     messages = []
@@ -651,6 +713,7 @@ def test_main_window_exports_current_config_by_default(tmp_path, monkeypatch, ap
 
     assert window.config_path.text() == str(path)
     saved = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert saved["normalize"]["device"] == "helix"
     assert saved["normalize"]["backend"] == "loopback"
     assert saved["normalize"]["reference_di"] == "modified.wav"
     assert saved["normalize"]["target_lufs"] == -18.5
@@ -679,15 +742,55 @@ def test_main_window_exports_default_config_when_requested(tmp_path, monkeypatch
     window.close()
 
 
+def test_main_window_exports_currently_selected_device(tmp_path, monkeypatch, app) -> None:
+    window = MainWindow()
+    path = tmp_path / "podgo.toml"
+    podgo_index = window.device.findData("podgo")
+    messages = []
+    window.device.setCurrentIndex(podgo_index)
+    monkeypatch.setattr(window, "_choose_config_export_path", lambda: (str(path), False))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args))
+
+    window.config_export_button.click()
+
+    saved = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert saved["normalize"]["device"] == "podgo"
+    assert "Saved current configuration" in messages[0][2]
+
+    window.close()
+
+
 def test_config_export_dialog_defaults_to_default_config_path(tmp_path, monkeypatch, app) -> None:
     window = MainWindow()
     selected_path = tmp_path / "saved.toml"
-    monkeypatch.setattr(main_window, "default_config_path", lambda: tmp_path / "config.toml")
+    default_path = tmp_path / "config.toml"
+    monkeypatch.setattr(main_window, "default_config_path", lambda: default_path)
     dialogs = install_config_export_dialog_fakes(monkeypatch, selected_path)
+    expected_directory, expected_file = expected_default_config_dialog_selection(default_path)
 
     assert window._choose_config_export_path() == (str(selected_path), False)
     assert dialogs[0].args[1] == "Export config"
-    assert ("select_file", str(tmp_path / "config.toml")) in dialogs[0].settings
+    assert Path(config_export_dialog_setting(dialogs[0], "directory")) == expected_directory
+    assert Path(config_export_dialog_setting(dialogs[0], "select_file")) == expected_file
+
+    window.close()
+
+
+def test_config_export_dialog_suggests_home_relative_default_path(
+    tmp_path, monkeypatch, app
+) -> None:
+    window = MainWindow()
+    home = tmp_path / "home" / "flo"
+    selected_path = home / ".config" / "matchpatch" / "config.toml"
+    monkeypatch.setattr(main_window.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(main_window, "default_config_path", lambda: selected_path)
+    dialogs = install_config_export_dialog_fakes(monkeypatch, selected_path)
+
+    assert window._choose_config_export_path() == (str(selected_path), False)
+    assert Path(config_export_dialog_setting(dialogs[0], "directory")) == home
+    assert Path(config_export_dialog_setting(dialogs[0], "select_file")) == Path(
+        ".config/matchpatch/config.toml"
+    )
 
     window.close()
 

@@ -20,6 +20,15 @@ def current_device_file_types(device: str) -> tuple[DeviceFileType, ...]:
         return ()
 
 
+def openable_extensions_for_device(device: str) -> tuple[str, ...]:
+    return tuple(
+        extension
+        for file_type in current_device_file_types(device)
+        if file_type.can_open
+        for extension in file_type.normalized_extensions()
+    )
+
+
 def open_patch_filter(file_types: Sequence[DeviceFileType]) -> str:
     patterns = [
         pattern
