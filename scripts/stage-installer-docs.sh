@@ -17,6 +17,7 @@ mkdir -p "$payload_dir"
 rm -rf "$docs_target"
 mkdir -p "$docs_target"
 cp -a docs_html/. "$docs_target/"
+rm -rf "$docs_target/.doctrees"
 
 required_paths=(
   "$docs_target/index.html"

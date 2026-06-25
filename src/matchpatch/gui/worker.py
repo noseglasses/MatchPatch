@@ -2,18 +2,32 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from matchpatch.diagnostics import summarize_failed_checks
+from matchpatch.diagnostics import DiagnosticCheck, summarize_failed_checks
 from matchpatch.normalize import (
-    collect_windows_hardware_diagnostics,
+    collect_hardware_diagnostics as _collect_platform_hardware_diagnostics,
+)
+from matchpatch.normalize import (
+    collect_windows_hardware_diagnostics as _collect_windows_hardware_diagnostics,
+)
+from matchpatch.normalize import (
     run_windows_analysis,
     run_windows_optimization,
 )
 from matchpatch.preflight import run_preflight_checks
 from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_presets
+
+collect_windows_hardware_diagnostics = _collect_windows_hardware_diagnostics
+
+
+def collect_hardware_diagnostics(request: NormalizationRequest) -> list[DiagnosticCheck]:
+    if sys.platform == "darwin":
+        return _collect_platform_hardware_diagnostics(request)
+    return collect_windows_hardware_diagnostics(request)
 
 
 class HardwareCheckWorker(QThread):
@@ -27,7 +41,7 @@ class HardwareCheckWorker(QThread):
 
     def run(self) -> None:
         try:
-            checks = collect_windows_hardware_diagnostics(self.request)
+            checks = collect_hardware_diagnostics(self.request)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
             return

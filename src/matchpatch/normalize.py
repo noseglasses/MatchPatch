@@ -44,7 +44,7 @@ DEFAULT_REFERENCE_DI = (
 
 
 def _default_windows_python() -> Path:
-    if getattr(sys, "frozen", False) and os.name == "nt":
+    if getattr(sys, "frozen", False) and (os.name == "nt" or sys.platform == "darwin"):
         return type(PROJECT_DIR)(sys.executable)
     return PROJECT_DIR / ".venv-windows" / "Scripts" / "python.exe"
 
@@ -66,6 +66,9 @@ def _configured_windows_python(args: argparse.Namespace, config: Config) -> str:
     env_value = os.getenv("MATCHPATCH_WINDOWS_PYTHON")
     if env_value:
         return env_value
+
+    if sys.platform == "darwin":
+        return str(DEFAULT_WINDOWS_PYTHON)
 
     if getattr(sys, "frozen", False) and os.name == "nt":
         return str(DEFAULT_WINDOWS_PYTHON)
@@ -553,6 +556,28 @@ def check_windows_hardware(args: argparse.Namespace | NormalizationRequest) -> N
     checks = collect_windows_hardware_diagnostics(args)
     if any(check.status == "fail" for check in checks):
         raise RuntimeError(summarize_failed_checks(checks))
+
+
+def check_hardware(args: argparse.Namespace | NormalizationRequest) -> None:
+    checks = collect_hardware_diagnostics(args)
+    if any(check.status == "fail" for check in checks):
+        raise RuntimeError(summarize_failed_checks(checks))
+
+
+def collect_hardware_diagnostics(
+    args: argparse.Namespace | NormalizationRequest,
+) -> list[DiagnosticCheck]:
+    if sys.platform == "darwin":
+        return collect_macos_hardware_diagnostics(args)
+    return collect_windows_hardware_diagnostics(args)
+
+
+def collect_macos_hardware_diagnostics(
+    args: argparse.Namespace | NormalizationRequest,
+) -> list[DiagnosticCheck]:
+    from matchpatch.measure import collect_hardware_diagnostics as collect_native_diagnostics
+
+    return collect_native_diagnostics(cast("argparse.Namespace", args))
 
 
 def collect_windows_hardware_diagnostics(

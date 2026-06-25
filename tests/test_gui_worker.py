@@ -194,6 +194,30 @@ def test_hardware_check_worker_success_emits_diagnostics_and_completed(monkeypat
     assert failures == []
 
 
+def test_hardware_check_worker_uses_platform_collector_on_macos(monkeypatch) -> None:
+    worker = HardwareCheckWorker(_request())
+    checks = [DiagnosticCheck("audio_device", "pass", "Native macOS audio resolved")]
+    diagnostics = []
+    completed = []
+
+    monkeypatch.setattr(gui_worker.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        gui_worker, "_collect_platform_hardware_diagnostics", lambda request: checks
+    )
+    monkeypatch.setattr(
+        gui_worker,
+        "collect_windows_hardware_diagnostics",
+        lambda request: (_ for _ in ()).throw(AssertionError("Windows collector should not run")),
+    )
+    worker.diagnostics_completed.connect(diagnostics.append)
+    worker.completed.connect(lambda: completed.append(True))
+
+    worker.run()
+
+    assert diagnostics == [checks]
+    assert completed == [True]
+
+
 def test_hardware_check_worker_failed_checks_emit_diagnostics_and_failed(
     monkeypatch,
 ) -> None:

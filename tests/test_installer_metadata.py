@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import tomllib
 from pathlib import Path
 
+import pytest
+from packaging.requirements import Requirement
 from packaging.version import Version
 
 import matchpatch
@@ -83,6 +86,106 @@ def test_windows_installer_scripts_use_windows_environment_and_no_stale_venv() -
     assert not re.search(r"(?<![\w.-])\.venv(?!-[\w.-])", combined)
 
 
+def test_macos_hardware_validation_script_and_workflow_cover_expected_failure_and_self_hosted_paths() -> (
+    None
+):
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "scripts" / "test-macos-hardware.sh").read_text(encoding="utf-8")
+
+    assert "macos-hardware:" in workflow
+    assert "macos-hardware-self-hosted:" in workflow
+    assert "runs-on: macos-latest" in workflow
+    assert "runs-on: [self-hosted, macOS, line6-hardware]" in workflow
+    assert "MATCHPATCH_MACOS_HARDWARE" in workflow
+    assert "run: bash scripts/test-macos-hardware.sh" in workflow
+    assert "matchpatch-macos-hardware-validation" in workflow
+    assert "matchpatch-macos-hardware-self-hosted" in workflow
+
+    assert "uv sync --locked --no-default-groups --extra hardware" in script
+    assert "import mido; import mido.backends.rtmidi; import rtmidi; import sounddevice" in script
+    assert "python -m matchpatch.measure devices" in script
+    assert "validate_device helix" in script
+    assert "validate_device podgo" in script
+    assert "--diagnostics-json" in script
+    assert "build/macos-hardware" in script
+    assert "MATCHPATCH_MACOS_HARDWARE" in script
+    assert "expected audio_device to fail without hardware" in script
+    assert "expected midi_output to pass with hardware" in script
+
+
+def test_quality_workflow_includes_macos_installer_smoke_job() -> None:
+    quality_workflow = (PROJECT_ROOT / ".github" / "workflows" / "quality.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "macos-installer:" in quality_workflow
+    assert "name: macOS installer smoke / arm64" in quality_workflow
+    assert "runs-on: macos-15" in quality_workflow
+    assert (
+        "uv sync --locked --no-default-groups --group docs --group installer --extra gui --extra hardware"
+        in quality_workflow
+    )
+    assert "run: bash scripts/build-macos-dmg.sh" in quality_workflow
+    assert "run: bash installer/smoke/smoke_macos_dmg.sh --reuse-artifact" in quality_workflow
+    assert "matchpatch-macos-installer-smoke" in quality_workflow
+    assert "MatchPatch-macOS-*-*.dmg" in quality_workflow
+    assert "matchpatch-installer-smoke" in quality_workflow
+
+
+def test_macos_installer_scripts_do_not_require_executable_bits() -> None:
+    quality_workflow = (PROJECT_ROOT / ".github" / "workflows" / "quality.yml").read_text(
+        encoding="utf-8"
+    )
+    release_workflow = (PROJECT_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    build_dmg_script = (PROJECT_ROOT / "scripts" / "build-macos-dmg.sh").read_text(encoding="utf-8")
+    smoke_dmg_script = (PROJECT_ROOT / "installer" / "smoke" / "smoke_macos_dmg.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "run: bash scripts/test-macos-hardware.sh" in quality_workflow
+    assert "run: bash scripts/build-macos-dmg.sh" in quality_workflow
+    assert "run: bash installer/smoke/smoke_macos_dmg.sh --reuse-artifact" in quality_workflow
+    assert "run: bash scripts/build-macos-dmg.sh" in release_workflow
+    assert (
+        'run: bash installer/smoke/smoke_macos_dmg.sh --dmg "${{ steps.version.outputs.installer }}"'
+        in release_workflow
+    )
+    assert "bash scripts/build-macos-app.sh" in build_dmg_script
+    assert "bash scripts/build-macos-dmg.sh" in smoke_dmg_script
+    assert "bash installer/smoke/smoke_macos_payload.sh" in smoke_dmg_script
+
+
+def test_macos_hardware_docs_describe_device_listing_and_mapping_capture() -> None:
+    commands_doc = (PROJECT_ROOT / "docs" / "dev" / "commands.md").read_text(encoding="utf-8")
+    workflow_doc = (PROJECT_ROOT / "docs" / "workflows" / "hardware-measurement.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "scripts/test-macos-hardware.sh" in commands_doc
+    assert "MATCHPATCH_MACOS_HARDWARE=1" in commands_doc
+    assert "Audio devices:" in commands_doc
+    assert "MIDI outputs:" in commands_doc
+    assert "audio_device.detail.input_mapping" in commands_doc
+    assert "midi_output.detail.output" in commands_doc
+    assert "scripts/test-macos-hardware.sh" in workflow_doc
+    assert "Core Audio" in workflow_doc
+    assert "CoreMIDI" in workflow_doc
+    assert "audio_device.detail.output_mapping" in workflow_doc
+    assert "midi_output.detail.channel" in workflow_doc
+
+
+def test_release_docs_mention_both_windows_and_macos_installers() -> None:
+    release_doc = (PROJECT_ROOT / "docs" / "dev" / "release.md").read_text(encoding="utf-8")
+
+    assert "Windows installer and macOS DMG" in release_doc
+    assert "MatchPatch-Setup-0.8.1.exe" in release_doc
+    assert "MatchPatch-macOS-arm64-0.8.1.dmg" in release_doc
+    assert "Windows machine and an arm64 macOS machine" in release_doc
+    assert "dist/installer/MatchPatch-macOS-arm64-0.8.1.dmg" in release_doc
+
+
 def test_installer_dependency_group_supports_png_icon_conversion() -> None:
     with (PROJECT_ROOT / "pyproject.toml").open("rb") as pyproject_file:
         pyproject = tomllib.load(pyproject_file)
@@ -109,8 +212,43 @@ def test_pypi_metadata_declares_runtime_dependencies() -> None:
     )
 
 
+def test_hardware_metadata_includes_darwin_dependency_markers() -> None:
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomllib.load(pyproject_file)
+    with (PROJECT_ROOT / "uv.lock").open("rb") as lock_file:
+        lock = tomllib.load(lock_file)
+
+    hardware_dependencies = pyproject["project"]["optional-dependencies"]["hardware"]
+    windows_dependencies = pyproject["dependency-groups"]["windows"]
+    lock_package = _lock_package(lock, "matchpatch")
+
+    assert _requirement_markers(hardware_dependencies, "python-rtmidi") == {
+        "sys_platform == 'darwin' or sys_platform == 'win32'"
+    }
+    assert _requirement_markers(hardware_dependencies, "sounddevice") == {
+        "sys_platform == 'darwin' or sys_platform == 'win32'"
+    }
+    assert _requirement_markers(windows_dependencies, "python-rtmidi") == {
+        "sys_platform == 'darwin' or sys_platform == 'win32'"
+    }
+    assert _requirement_markers(windows_dependencies, "sounddevice") == {
+        "sys_platform == 'darwin' or sys_platform == 'win32'"
+    }
+    assert _lock_dependency_markers(
+        lock_package["optional-dependencies"]["hardware"], "python-rtmidi"
+    ) == {"sys_platform == 'darwin' or sys_platform == 'win32'"}
+    assert _lock_dependency_markers(
+        lock_package["optional-dependencies"]["hardware"], "sounddevice"
+    ) == {"sys_platform == 'darwin' or sys_platform == 'win32'"}
+    assert _lock_requires_dist_supports_hardware(lock_package, "python-rtmidi")
+    assert _lock_requires_dist_supports_hardware(lock_package, "sounddevice")
+
+
 def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     gui_spec = (PROJECT_ROOT / "installer" / "pyinstaller" / "matchpatch-gui.spec").read_text(
+        encoding="utf-8"
+    )
+    macos_spec = (PROJECT_ROOT / "installer" / "pyinstaller" / "matchpatch-macos.spec").read_text(
         encoding="utf-8"
     )
     build_support = (PROJECT_ROOT / "installer" / "pyinstaller" / "build_support.py").read_text(
@@ -147,6 +285,74 @@ def test_pyinstaller_specs_include_payload_metadata_docs_and_assets() -> None:
     assert "matchmatch-icon.png" in build_support
     assert "matchmatch-icon-512.png" in build_support
     assert "matchmatch-logo.png" in build_support
+    assert 'name="MatchPatch.app"' in macos_spec
+    assert "prepare_macos_icon()" in macos_spec
+    assert "macos_info_plist()" in macos_spec
+    assert "bundle_identifier=MACOS_BUNDLE_IDENTIFIER" in macos_spec
+    assert "payload_runtime_root(MACOS_PAYLOAD_ROOT).mkdir" in macos_spec
+    assert "stage_runtime_files(MACOS_PAYLOAD_ROOT)" in macos_spec
+    assert "stage_docs(MACOS_PAYLOAD_ROOT)" in macos_spec
+    assert "write_build_info(MACOS_PAYLOAD_ROOT)" in macos_spec
+    assert "MACOS_CONTENTS_ROOT" in build_support
+    assert "MACOS_EXECUTABLE_ROOT" in build_support
+    assert "matchpatch.icns" in build_support
+    assert "matchpatch.iconset" in build_support
+    assert '["iconutil", "-c", "icns"' in build_support
+    assert "def payload_runtime_root" in build_support
+    assert "def macos_info_plist" in build_support
+    assert "CFBundleIdentifier" in build_support
+    assert "CFBundleShortVersionString" in build_support
+
+
+def test_build_support_exposes_windows_and_macos_payload_paths_and_artifacts() -> None:
+    build_support = _load_build_support()
+    project_version = _project_version()
+
+    assert build_support.PAYLOAD_ROOT == build_support.WINDOWS_PAYLOAD_ROOT
+    assert build_support.PAYLOAD_ROOT == build_support.payload_root_for("windows")
+    assert build_support.MACOS_PAYLOAD_ROOT == (
+        PROJECT_ROOT / "build" / "macos-payload" / "MatchPatch.app"
+    )
+    assert build_support.MACOS_CONTENTS_ROOT == build_support.MACOS_PAYLOAD_ROOT / "Contents"
+    assert build_support.MACOS_EXECUTABLE_ROOT == build_support.MACOS_CONTENTS_ROOT / "MacOS"
+    assert build_support.payload_root_for("macos") == build_support.MACOS_PAYLOAD_ROOT
+    assert (
+        build_support.payload_runtime_root(build_support.PAYLOAD_ROOT) == build_support.PAYLOAD_ROOT
+    )
+    assert build_support.payload_runtime_root(build_support.MACOS_PAYLOAD_ROOT) == (
+        build_support.MACOS_EXECUTABLE_ROOT
+    )
+    assert build_support.macos_info_plist()["CFBundleIdentifier"] == (
+        "io.github.noseglasses.matchpatch"
+    )
+    assert build_support.macos_info_plist()["CFBundleShortVersionString"] == project_version
+    assert build_support.macos_info_plist()["CFBundleVersion"] == project_version
+
+    assert build_support.installer_artifact_name("windows", project_version) == (
+        f"MatchPatch-Setup-{project_version}.exe"
+    )
+    assert build_support.installer_artifact_path("windows", project_version) == (
+        PROJECT_ROOT / "dist" / "installer" / f"MatchPatch-Setup-{project_version}.exe"
+    )
+    assert (
+        build_support.installer_artifact_name(
+            "macos",
+            project_version,
+            arch="arm64",
+        )
+        == f"MatchPatch-macOS-arm64-{project_version}.dmg"
+    )
+    assert (
+        build_support.installer_artifact_path(
+            "macos",
+            project_version,
+            arch="arm64",
+        )
+        == PROJECT_ROOT / "dist" / "installer" / f"MatchPatch-macOS-arm64-{project_version}.dmg"
+    )
+
+    with pytest.raises(ValueError, match="macos installer artifacts require an architecture name"):
+        build_support.installer_artifact_name("macos", project_version)
 
 
 def test_prepare_pyinstaller_paths_creates_missing_build_dirs(tmp_path: Path) -> None:
@@ -193,6 +399,89 @@ def test_runtime_files_are_staged_at_payload_root(tmp_path: Path) -> None:
     ).is_file()
 
 
+def test_runtime_files_docs_and_build_info_stage_into_macos_bundle_executable_root(
+    tmp_path: Path,
+) -> None:
+    build_support = _load_build_support()
+    macos_payload = tmp_path / "build" / "macos-payload" / "MatchPatch.app"
+    build_support.PROJECT_ROOT = tmp_path
+    docs_source = tmp_path / "docs_html"
+    docs_source.mkdir(parents=True, exist_ok=True)
+    (docs_source / ".doctrees").mkdir()
+    (docs_source / ".doctrees" / "environment.pickle").write_bytes(b"cached doctree")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "matchpatch"\nversion = "9.9.9"\n',
+        encoding="utf-8",
+    )
+    (docs_source / "index.html").write_text("<html>offline docs</html>\n", encoding="utf-8")
+
+    build_support.stage_runtime_files(macos_payload)
+    build_support.stage_docs(macos_payload)
+    build_support.write_build_info(macos_payload)
+
+    runtime_root = macos_payload / "Contents" / "MacOS"
+    assert (
+        runtime_root / "audio" / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
+    ).is_file()
+    assert (runtime_root / "docs_html" / "index.html").is_file()
+    assert not (runtime_root / "docs_html" / ".doctrees").exists()
+    build_info = json.loads((runtime_root / "build-info.json").read_text(encoding="utf-8"))
+    assert build_info["version"] == "9.9.9"
+    assert build_info["builder"] == "pyinstaller"
+
+
+def test_macos_app_scripts_validate_bundle_layout_and_startup_smoke() -> None:
+    build_script = (PROJECT_ROOT / "scripts" / "build-macos-app.sh").read_text(encoding="utf-8")
+    dmg_script = (PROJECT_ROOT / "scripts" / "build-macos-dmg.sh").read_text(encoding="utf-8")
+    smoke_script = (PROJECT_ROOT / "installer" / "smoke" / "smoke_macos_payload.sh").read_text(
+        encoding="utf-8"
+    )
+    dmg_smoke_script = (PROJECT_ROOT / "installer" / "smoke" / "smoke_macos_dmg.sh").read_text(
+        encoding="utf-8"
+    )
+
+    combined = "\n".join((build_script, dmg_script, smoke_script, dmg_smoke_script))
+
+    assert "MatchPatch macOS app builds must run on macOS." in build_script
+    assert "uv run --frozen --no-default-groups --group docs sphinx-build" in build_script
+    assert (
+        "uv run --frozen --no-default-groups --group installer --extra gui --extra hardware "
+        "pyinstaller installer/pyinstaller/matchpatch-macos.spec"
+    ) in build_script
+    assert "build/macos-payload/MatchPatch.app" in combined
+    assert 'codesign --force --deep --sign - "$payload_dir"' in build_script
+    assert 'codesign --verify --deep --strict --verbose=4 "$payload_dir"' in build_script
+    assert 'codesign --verify --deep --strict --verbose=4 "$app_bundle"' in smoke_script
+    assert "MatchPatch macOS DMG builds must run on macOS." in dmg_script
+    assert "hdiutil create" in dmg_script
+    assert "-format UDZO" in dmg_script
+    assert '-srcfolder "$dmg_stage_root"' in dmg_script
+    assert "MatchPatch-macOS-${arch}-${project_version}.dmg" in dmg_script
+    assert "Signing and notarization are intentionally deferred" in dmg_script
+    assert "Contents/Info.plist" in combined
+    assert "Contents/MacOS/MatchPatch" in combined
+    assert "Contents/MacOS/docs_html/index.html" in combined
+    assert "Contents/MacOS/build-info.json" in combined
+    assert "audio/reference-di/DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav" in combined
+    assert "--cli --version" in smoke_script
+    assert "MATCHPATCH_GUI_SMOKE=1" in smoke_script
+    assert "Bundled GUI smoke failed" in smoke_script
+    assert "Bundled GUI smoke timed out after 60 seconds." in smoke_script
+    assert "GUI smoke log:" in smoke_script
+    assert "CFBundleIdentifier" in smoke_script
+    assert "CFBundleShortVersionString" in smoke_script
+    assert "CFBundleVersion" in smoke_script
+    assert "io.github.noseglasses.matchpatch" in smoke_script
+    assert "Payload smoke passed" in smoke_script
+    assert "MatchPatch macOS DMG smoke tests must run on macOS." in dmg_smoke_script
+    assert "--reuse-artifact" in dmg_smoke_script
+    assert "--dmg <path>" in dmg_smoke_script
+    assert "hdiutil attach -nobrowse -readonly -mountpoint" in dmg_smoke_script
+    assert 'hdiutil detach -force -quiet "$mount_point"' in dmg_smoke_script
+    assert 'smoke_macos_payload.sh "$app_bundle" "$project_version"' in dmg_smoke_script
+    assert "DMG smoke passed" in dmg_smoke_script
+
+
 def test_release_workflow_publishes_windows_installer() -> None:
     release_workflow = (PROJECT_ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"
@@ -208,6 +497,24 @@ def test_release_workflow_publishes_windows_installer() -> None:
     assert "gh release upload $tag $installer --clobber" in release_workflow
     assert release_workflow.count("GITHUB_REF_NAME") >= 2
     assert release_workflow.count("pyproject.toml") >= 2
+
+
+def test_release_workflow_publishes_macos_installer() -> None:
+    release_workflow = (PROJECT_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "macos-installer:" in release_workflow
+    assert "name: macOS installer" in release_workflow
+    assert "runs-on: macos-15" in release_workflow
+    assert "contents: write" in release_workflow
+    assert 'test "${GITHUB_REF_NAME}" = "v${version}"' in release_workflow
+    assert "MatchPatch-macOS-${arch}-${version}.dmg" in release_workflow
+    assert "scripts/build-macos-dmg.sh" in release_workflow
+    assert "installer/smoke/smoke_macos_dmg.sh --dmg" in release_workflow
+    assert "matchpatch-macos-installer-${{ github.ref_name }}" in release_workflow
+    assert 'gh release create "$tag"' in release_workflow
+    assert 'gh release upload "$tag" "$installer" --clobber' in release_workflow
 
 
 def _project_version() -> str:
@@ -226,3 +533,59 @@ def _load_build_support():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _lock_package(lock: dict[str, object], name: str) -> dict[str, object]:
+    package_entries = lock["package"]
+    assert isinstance(package_entries, list)
+    for package in package_entries:
+        assert isinstance(package, dict)
+        if package.get("name") == name:
+            return package
+    raise AssertionError(f"Missing package {name!r} in uv.lock")
+
+
+def _requirement_markers(dependencies: list[object], name: str) -> set[str]:
+    markers: set[str] = set()
+    for dependency in dependencies:
+        if not isinstance(dependency, str):
+            continue
+        requirement = Requirement(dependency)
+        if requirement.name == name and requirement.marker is not None:
+            markers.add(_normalize_marker(str(requirement.marker)))
+    return markers
+
+
+def _lock_dependency_markers(dependencies: list[object], name: str) -> set[str]:
+    markers: set[str] = set()
+    for dependency in dependencies:
+        assert isinstance(dependency, dict)
+        if dependency.get("name") == name:
+            marker = dependency.get("marker")
+            assert isinstance(marker, str)
+            markers.add(_normalize_marker(marker))
+    return markers
+
+
+def _lock_requires_dist_supports_hardware(lock_package: dict[str, object], name: str) -> bool:
+    required_dist = lock_package["metadata"]["requires-dist"]
+    assert isinstance(required_dist, list)
+    for dependency in required_dist:
+        assert isinstance(dependency, dict)
+        if dependency.get("name") != name:
+            continue
+        marker = dependency.get("marker")
+        assert isinstance(marker, str)
+        marker = _normalize_marker(marker)
+        if "extra == 'hardware'" not in marker:
+            continue
+        if "sys_platform == 'darwin'" not in marker:
+            continue
+        if "sys_platform == 'win32'" not in marker:
+            continue
+        return True
+    return False
+
+
+def _normalize_marker(marker: str) -> str:
+    return marker.replace('"', "'")

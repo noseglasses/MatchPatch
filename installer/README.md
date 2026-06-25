@@ -14,6 +14,58 @@ payload, then packages that payload with Inno Setup 6.
 - `smoke/smoke_installed.ps1`: checks silent install, CLI startup, optional GUI
   startup, and silent uninstall.
 
+## macOS Installer Notes
+
+MatchPatch also builds a macOS `.app` bundle and DMG for release testing. The
+current macOS app bundle is ad-hoc signed so its internal code-signing seal is
+valid, but it is not Developer ID signed or notarized because the project does
+not yet have Apple Developer Program funding.
+
+Future signing and notarization work is deferred on purpose. See the Session 5
+TODOs in [release docs](../docs/dev/release.md#deferred-macos-signing-and-notarization)
+for the planned future checklist.
+
+macOS artifacts without Developer ID signing or notarization may require manual
+Gatekeeper approval the first time they are opened.
+
+## macOS Build And Test
+
+CI builds the Mac installer on `macos-15` and smoke-tests the DMG there.
+Developers do not have local Mac hardware, so the macOS path is validated in CI
+and by release artifacts, not by a local maintainer machine.
+
+Build the `.app` bundle:
+
+```bash
+scripts/build-macos-app.sh
+```
+
+Build the DMG:
+
+```bash
+scripts/build-macos-dmg.sh
+```
+
+Smoke-test the bundle or DMG:
+
+```bash
+installer/smoke/smoke_macos_payload.sh build/macos-payload/MatchPatch.app 0.8.1
+installer/smoke/smoke_macos_dmg.sh --reuse-artifact
+```
+
+Expected macOS outputs:
+
+- App bundle: `build/macos-payload/MatchPatch.app`
+- DMG: `dist/installer/MatchPatch-macOS-<arch>-<version>.dmg`
+
+The smoke checks verify the bundle metadata, bundled CLI startup, bundled GUI
+startup in non-interactive smoke mode, offline docs, `build-info.json`, and
+reference DI audio. The DMG smoke mounts the image, checks the app bundle from
+the mounted volume, and then detaches it again.
+
+The macOS scripts and workflows do not claim hardware validation. They only
+prove packaging, startup, and no-device behavior on GitHub-hosted runners.
+
 ## Prerequisites
 
 - Windows, or WSL with a native Windows mirror checkout.
@@ -89,3 +141,5 @@ The installer version is read from `project.version` in `pyproject.toml`.
   restages the Qt runtime files.
 - Antivirus warning: first public builds are unsigned. Only allow installers
   produced locally or by the MatchPatch GitHub Actions release workflow.
+- Gatekeeper warning: current macOS release artifacts are unsigned and may need
+  manual approval on first launch.

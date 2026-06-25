@@ -9,7 +9,9 @@ from matchpatch.custom_adjustments import load_custom_adjustments_file
 from matchpatch.devices import get_device_profile
 from matchpatch.devices.base import DeviceProfile, DiagnosticsContext, PatchFileHandler
 from matchpatch.diagnostics import DiagnosticCheck, effective_config_from_request
-from matchpatch.normalize import collect_windows_hardware_diagnostics
+from matchpatch.normalize import (
+    collect_hardware_diagnostics as collect_platform_hardware_diagnostics,
+)
 from matchpatch.workflow import PROJECT_DIR, NormalizationRequest
 
 ProfileProvider = Callable[[str], DeviceProfile]
@@ -20,7 +22,7 @@ def run_preflight_checks(
     request: NormalizationRequest,
     *,
     get_profile: ProfileProvider = get_device_profile,
-    collect_hardware_diagnostics: HardwareDiagnosticCollector = collect_windows_hardware_diagnostics,
+    collect_hardware_diagnostics: HardwareDiagnosticCollector | None = None,
 ) -> list[DiagnosticCheck]:
     """Validate likely failure points without writing measurement or output files."""
 
@@ -60,7 +62,9 @@ def run_preflight_checks(
     checks.extend(
         _backend_specific_checks(
             request,
-            collect_hardware_diagnostics=collect_hardware_diagnostics,
+            collect_hardware_diagnostics=(
+                collect_hardware_diagnostics or collect_platform_hardware_diagnostics
+            ),
         )
     )
     checks.append(_preset_selection_check(request))

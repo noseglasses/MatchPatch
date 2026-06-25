@@ -501,8 +501,8 @@ gui = [
 ]
 hardware = [
     { name = "mido" },
-    { name = "python-rtmidi", marker = "sys_platform == 'win32'" },
-    { name = "sounddevice", marker = "sys_platform == 'win32'" },
+    { name = "python-rtmidi", marker = "sys_platform == 'darwin' or sys_platform == 'win32'" },
+    { name = "sounddevice", marker = "sys_platform == 'darwin' or sys_platform == 'win32'" },
 ]
 
 [package.dev-dependencies]
@@ -523,9 +523,9 @@ windows = [
     { name = "pyloudnorm" },
     { name = "pytest" },
     { name = "pytest-cov" },
-    { name = "python-rtmidi", marker = "sys_platform == 'win32'" },
+    { name = "python-rtmidi", marker = "sys_platform == 'darwin' or sys_platform == 'win32'" },
     { name = "ruff" },
-    { name = "sounddevice", marker = "sys_platform == 'win32'" },
+    { name = "sounddevice", marker = "sys_platform == 'darwin' or sys_platform == 'win32'" },
     { name = "soundfile" },
     { name = "ty" },
 ]
@@ -547,8 +547,8 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "pyloudnorm", specifier = ">=0.1.1" },
     { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.8" },
-    { name = "python-rtmidi", marker = "sys_platform == 'win32' and extra == 'hardware'", specifier = ">=1.5.8" },
-    { name = "sounddevice", marker = "sys_platform == 'win32' and extra == 'hardware'", specifier = ">=0.5.1" },
+    { name = "python-rtmidi", marker = "(sys_platform == 'darwin' and extra == 'hardware') or (sys_platform == 'win32' and extra == 'hardware')", specifier = ">=1.5.8" },
+    { name = "sounddevice", marker = "(sys_platform == 'darwin' and extra == 'hardware') or (sys_platform == 'win32' and extra == 'hardware')", specifier = ">=0.5.1" },
     { name = "soundfile", specifier = ">=0.13.1" },
 ]
 provides-extras = ["gui", "hardware"]
@@ -571,9 +571,9 @@ windows = [
     { name = "pyloudnorm", specifier = ">=0.1.1" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-cov", specifier = ">=6.0" },
-    { name = "python-rtmidi", marker = "sys_platform == 'win32'", specifier = ">=1.5.8" },
+    { name = "python-rtmidi", marker = "sys_platform == 'darwin' or sys_platform == 'win32'", specifier = ">=1.5.8" },
     { name = "ruff", specifier = ">=0.15.17" },
-    { name = "sounddevice", marker = "sys_platform == 'win32'", specifier = ">=0.5.1" },
+    { name = "sounddevice", marker = "sys_platform == 'darwin' or sys_platform == 'win32'", specifier = ">=0.5.1" },
     { name = "soundfile", specifier = ">=0.13.1" },
     { name = "ty", specifier = ">=0.0.1a21" },
 ]
@@ -988,6 +988,8 @@ version = "1.5.8"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/dd/ee/0f91965dcc471714c69df21e5ca3d94dc81411b7dee2d31ff1184bea07c9/python_rtmidi-1.5.8.tar.gz", hash = "sha256:7f9ade68b068ae09000ecb562ae9521da3a234361ad5449e83fc734544d004fa", size = 368130, upload-time = "2023-11-20T21:55:02.192Z" }
 wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/27/887b0378e0a907489a07bdeb808fa5ed349675245c6ee14d9f6d00304f96/python_rtmidi-1.5.8-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:5443634597eb340cdec0734f76267a827c2d366f00a6f9195141c78828016ac2", size = 158861, upload-time = "2023-11-20T21:54:39.549Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/ec/57cecde253daab896ce53778520cd41eb062641862ebdb0ee6f97511b1d9/python_rtmidi-1.5.8-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:29d9c9d9f82ce679fecad7bb4cb79f3a24574ea84600e377194b4cc1baacec0e", size = 153416, upload-time = "2023-11-20T21:54:40.835Z" },
     { url = "https://files.pythonhosted.org/packages/93/46/6af077d262f521ea2bf1ab60b8aad72f34fe6dd55af739176605369d449c/python_rtmidi-1.5.8-cp312-cp312-win_amd64.whl", hash = "sha256:052c89933cae4fca354012d8ca7248f4f9e1e3f062471409d48415a7f7d7e59e", size = 129755, upload-time = "2023-11-20T21:54:44.935Z" },
 ]
 
@@ -1205,6 +1207,7 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2a/f9/2592608737553638fca98e21e54bfec40bf577bb98a61b2770c912aab25e/sounddevice-0.5.5.tar.gz", hash = "sha256:22487b65198cb5bf2208755105b524f78ad173e5ab6b445bdab1c989f6698df3", size = 143191, upload-time = "2026-01-23T18:36:43.529Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/0a/478e441fd049002cf308520c0d62dd8333e7c6cc8d997f0dda07b9fbcc46/sounddevice-0.5.5-py3-none-any.whl", hash = "sha256:30ff99f6c107f49d25ad16a45cacd8d91c25a1bcdd3e81a206b921a3a6405b1f", size = 32807, upload-time = "2026-01-23T18:36:35.649Z" },
+    { url = "https://files.pythonhosted.org/packages/56/f9/c037c35f6d0b6bc3bc7bfb314f1d6f1f9a341328ef47cd63fc4f850a7b27/sounddevice-0.5.5-py3-none-macosx_10_6_x86_64.macosx_10_6_universal2.whl", hash = "sha256:05eb9fd6c54c38d67741441c19164c0dae8ce80453af2d8c4ad2e7823d15b722", size = 108557, upload-time = "2026-01-23T18:36:37.41Z" },
     { url = "https://files.pythonhosted.org/packages/88/a1/d19dd9889cd4bce2e233c4fac007cd8daaf5b9fe6e6a5d432cf17be0b807/sounddevice-0.5.5-py3-none-win32.whl", hash = "sha256:1234cc9b4c9df97b6cbe748146ae0ec64dd7d6e44739e8e42eaa5b595313a103", size = 317765, upload-time = "2026-01-23T18:36:39.047Z" },
     { url = "https://files.pythonhosted.org/packages/c3/0e/002ed7c4c1c2ab69031f78989d3b789fee3a7fba9e586eb2b81688bf4961/sounddevice-0.5.5-py3-none-win_amd64.whl", hash = "sha256:cfc6b2c49fb7f555591c78cb8ecf48d6a637fd5b6e1db5fec6ed9365d64b3519", size = 365324, upload-time = "2026-01-23T18:36:40.496Z" },
     { url = "https://files.pythonhosted.org/packages/4e/39/a61d4b83a7746b70d23d9173be688c0c6bfc7173772344b7442c2c155497/sounddevice-0.5.5-py3-none-win_arm64.whl", hash = "sha256:3861901ddd8230d2e0e8ae62ac320cdd4c688d81df89da036dcb812f757bb3e6", size = 317115, upload-time = "2026-01-23T18:36:42.235Z" },

@@ -126,8 +126,65 @@ jobs:
           gh release view $tag 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag --title $tag --notes "MatchPatch $tag"
-            if ($LASTEXITCODE -ne 0) {
+          if ($LASTEXITCODE -ne 0) {
               throw "Failed to create GitHub Release for $tag."
             }
           }
           gh release upload $tag $installer --clobber
+
+  macos-installer:
+    name: macOS installer
+    runs-on: macos-15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: false
+          python-version: "3.12"
+
+      - name: Resolve package version
+        id: version
+        shell: bash
+        run: |
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          arch="$(uname -m)"
+          installer="dist/installer/MatchPatch-macOS-${arch}-${version}.dmg"
+          {
+            echo "version=$version"
+            echo "arch=$arch"
+            echo "installer=$installer"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Synchronize environment
+        run: uv sync --locked --no-default-groups --group docs --group installer --extra gui --extra hardware
+
+      - name: Build macOS DMG
+        run: bash scripts/build-macos-dmg.sh
+
+      - name: Smoke test macOS DMG
+        run: bash installer/smoke/smoke_macos_dmg.sh --dmg "${{ steps.version.outputs.installer }}"
+
+      - name: Upload macOS installer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: matchpatch-macos-installer-${{ github.ref_name }}
+          path: ${{ steps.version.outputs.installer }}
+          if-no-files-found: error
+
+      - name: Attach macOS installer to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          installer="${{ steps.version.outputs.installer }}"
+          test -f "$installer"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes "MatchPatch $tag"
+          gh release upload "$tag" "$installer" --clobber

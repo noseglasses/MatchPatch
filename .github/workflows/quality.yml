@@ -74,6 +74,63 @@ jobs:
       - name: pytest
         run: uv run --frozen --no-default-groups --group wsl --extra gui pytest
 
+  macos-hardware:
+    name: macOS hardware validation / Python 3.12
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Synchronize environment
+        run: uv sync --locked --no-default-groups --extra hardware
+
+      - name: Run hardware validation harness
+        run: bash scripts/test-macos-hardware.sh
+
+      - name: Upload macOS validation artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: matchpatch-macos-hardware-validation
+          path: build/macos-hardware
+          if-no-files-found: error
+
+  macos-hardware-self-hosted:
+    name: macOS self-hosted hardware validation / Python 3.12
+    if: vars.MATCHPATCH_MACOS_HARDWARE == 'true'
+    runs-on: [self-hosted, macOS, line6-hardware]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Synchronize environment
+        run: uv sync --locked --no-default-groups --extra hardware
+
+      - name: Run hardware validation harness
+        env:
+          MATCHPATCH_MACOS_HARDWARE: "1"
+        run: bash scripts/test-macos-hardware.sh
+
+      - name: Upload macOS validation artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: matchpatch-macos-hardware-self-hosted
+          path: build/macos-hardware
+          if-no-files-found: error
+
   wsl:
     name: WSL / Python ${{ matrix.python-version }}
     runs-on: windows-latest
@@ -135,4 +192,34 @@ jobs:
         with:
           name: matchpatch-installer-smoke
           path: dist/installer/*.exe
+          if-no-files-found: error
+
+  macos-installer:
+    name: macOS installer smoke / arm64
+    runs-on: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Synchronize environment
+        run: uv sync --locked --no-default-groups --group docs --group installer --extra gui --extra hardware
+
+      - name: Build macOS DMG
+        run: bash scripts/build-macos-dmg.sh
+
+      - name: Smoke test macOS DMG
+        run: bash installer/smoke/smoke_macos_dmg.sh --reuse-artifact
+
+      - name: Upload macOS installer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: matchpatch-macos-installer-smoke
+          path: dist/installer/MatchPatch-macOS-*-*.dmg
           if-no-files-found: error
