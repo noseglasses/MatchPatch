@@ -132,6 +132,20 @@ def test_quality_workflow_includes_macos_installer_smoke_job() -> None:
     assert "matchpatch-installer-smoke" in quality_workflow
 
 
+def test_quality_workflow_includes_macos_pypi_install_smoke_job() -> None:
+    quality_workflow = (PROJECT_ROOT / ".github" / "workflows" / "quality.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "macos-pypi:" in quality_workflow
+    assert "name: macOS PyPI install smoke / Python 3.12" in quality_workflow
+    assert "runs-on: macos-latest" in quality_workflow
+    assert "uv build --no-sources --wheel" in quality_workflow
+    assert 'python -m pip install "${wheel[0]}[gui,hardware]"' in quality_workflow
+    assert "matchpatch-gui --version" in quality_workflow
+    assert "macOS PyPI install smoke OK" in quality_workflow
+
+
 def test_macos_installer_scripts_do_not_require_executable_bits() -> None:
     quality_workflow = (PROJECT_ROOT / ".github" / "workflows" / "quality.yml").read_text(
         encoding="utf-8"
@@ -210,6 +224,26 @@ def test_pypi_metadata_declares_runtime_dependencies() -> None:
     assert any(
         dependency.startswith("sounddevice") for dependency in optional_dependencies["hardware"]
     )
+
+
+def test_pypi_build_metadata_packages_runtime_resources_for_installed_macos_use() -> None:
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomllib.load(pyproject_file)
+
+    wheel_target = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]
+    force_include = wheel_target["force-include"]
+    sdist_include = pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
+    reference_di = "audio/reference-di/DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
+
+    assert wheel_target["packages"] == ["src/matchpatch"]
+    assert force_include[reference_di] == (
+        "matchpatch/_resources/audio/reference-di/DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
+    )
+    assert force_include["docs/assets/matchmatch-icon.png"] == (
+        "matchpatch/_resources/docs/assets/matchmatch-icon.png"
+    )
+    assert f"/{reference_di}" in sdist_include
+    assert "/docs/assets/matchmatch-icon.png" in sdist_include
 
 
 def test_hardware_metadata_includes_darwin_dependency_markers() -> None:

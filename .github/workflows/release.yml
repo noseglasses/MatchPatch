@@ -43,7 +43,18 @@ jobs:
 
       - name: Smoke test wheel
         shell: bash
-        run: uv run --isolated --no-project --with dist/*.whl python -c "import matchpatch"
+        run: |
+          uv run --isolated --no-project --with dist/*.whl python - <<'PY'
+          from pathlib import Path
+
+          import matchpatch
+          from matchpatch.normalize import DEFAULT_REFERENCE_DI
+          from matchpatch.runtime_resources import resource_path
+
+          assert Path(DEFAULT_REFERENCE_DI).is_file(), DEFAULT_REFERENCE_DI
+          assert resource_path("docs", "assets", "matchmatch-icon.png").is_file()
+          print(f"matchpatch {matchpatch.__version__} wheel smoke OK")
+          PY
 
       - name: Smoke test source distribution
         shell: bash

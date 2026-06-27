@@ -82,6 +82,20 @@ is for real processor measurement.
 
 ## Install And Launch
 
+On macOS, install MatchPatch from PyPI with the GUI and hardware extras:
+
+```bash
+python3 -m pip install "matchpatch[gui,hardware]"
+matchpatch-gui
+```
+
+For CLI-only use, install the base package:
+
+```bash
+python3 -m pip install matchpatch
+matchpatch --version
+```
+
 On Windows, download the latest installer from
 [GitHub Releases](https://github.com/noseglasses/MatchPatch/releases/latest),
 run `MatchPatch-Setup-<version>.exe`, then launch MatchPatch from the Start

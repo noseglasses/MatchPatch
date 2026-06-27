@@ -67,6 +67,27 @@ windows = [
 [tool.uv]
 default-groups = []
 
+[tool.hatch.build.targets.sdist]
+include = [
+    "/LICENSE",
+    "/README.md",
+    "/audio/reference-di/DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav",
+    "/docs/assets/matchmatch-icon-512.png",
+    "/docs/assets/matchmatch-icon.png",
+    "/docs/assets/matchmatch-logo.png",
+    "/pyproject.toml",
+    "/src",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/matchpatch"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"audio/reference-di/DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav" = "matchpatch/_resources/audio/reference-di/DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
+"docs/assets/matchmatch-icon-512.png" = "matchpatch/_resources/docs/assets/matchmatch-icon-512.png"
+"docs/assets/matchmatch-icon.png" = "matchpatch/_resources/docs/assets/matchmatch-icon.png"
+"docs/assets/matchmatch-logo.png" = "matchpatch/_resources/docs/assets/matchmatch-logo.png"
+
 [tool.pytest.ini_options]
 addopts = [
     "--cov=matchpatch",

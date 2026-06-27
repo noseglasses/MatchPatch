@@ -34,13 +34,12 @@ from matchpatch.diagnostics import (
 )
 from matchpatch.measurement_optimizer import OptimizationProgress
 from matchpatch.progress import ProgressEvent
+from matchpatch.runtime_resources import reference_di_path
 from matchpatch.workflow import ImportRequest, NormalizationRequest, normalize_presets
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 PROCESS_REAP_TIMEOUT_SECONDS = 1.0
-DEFAULT_REFERENCE_DI = (
-    PROJECT_DIR / "audio" / "reference-di" / "DI_Strandberg_Boden_Fusion_Bridge_Humbucker.wav"
-)
+DEFAULT_REFERENCE_DI = reference_di_path()
 
 
 def _default_windows_python() -> Path:

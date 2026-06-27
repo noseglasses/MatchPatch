@@ -26,6 +26,25 @@ scripts/sync-windows-from-wsl.sh
 The Windows environment is stored in `.venv-windows`. The WSL environment is
 stored under `${XDG_DATA_HOME:-$HOME/.local/share}/matchpatch/.venv-wsl`.
 
+## Published PyPI Package
+
+Install the published package on macOS with the GUI and hardware extras:
+
+```bash
+python3 -m pip install "matchpatch[gui,hardware]"
+matchpatch-gui
+```
+
+For CLI-only workflows:
+
+```bash
+python3 -m pip install matchpatch
+matchpatch --version
+```
+
+PyPI installs use the online documentation links from Help. Platform installers
+may additionally bundle offline help.
+
 ## Test
 
 Use the shared WSL pytest binary:
@@ -313,12 +332,13 @@ These checks verify that the published wheel declares the dependencies needed
 by the installed command-line entry points. They do not replace installer smoke
 tests or real hardware checks.
 
-For the lightweight macOS CI-style import smoke, install the hardware extra in
-the same fresh environment and verify the backend imports directly:
+For the lightweight macOS CI-style import smoke, install the published package
+with the hardware extra in a fresh environment and verify the backend imports
+directly:
 
 ```bash
-uv sync --locked --no-default-groups --extra hardware
-uv run --frozen --no-default-groups --extra hardware python -c "import mido; import mido.backends.rtmidi; import rtmidi; import sounddevice; print('macOS hardware imports OK')"
+python3 -m pip install --no-cache-dir "matchpatch[hardware]==0.8.2"
+python3 -c "import mido; import mido.backends.rtmidi; import rtmidi; import sounddevice; print('macOS hardware imports OK')"
 ```
 
 This checks the macOS hardware dependency metadata without requiring any

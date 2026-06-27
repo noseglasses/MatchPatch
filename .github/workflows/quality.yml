@@ -131,6 +131,53 @@ jobs:
           path: build/macos-hardware
           if-no-files-found: error
 
+  macos-pypi:
+    name: macOS PyPI install smoke / Python 3.12
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Build wheel
+        run: uv build --no-sources --wheel
+
+      - name: Install wheel with macOS extras
+        shell: bash
+        run: |
+          python -m venv .venv-pypi-smoke
+          source .venv-pypi-smoke/bin/activate
+          python -m pip install --upgrade pip
+          wheel=(dist/matchpatch-*.whl)
+          python -m pip install "${wheel[0]}[gui,hardware]"
+
+      - name: Smoke test installed package
+        shell: bash
+        run: |
+          source .venv-pypi-smoke/bin/activate
+          matchpatch --version
+          matchpatch-gui --version
+          python - <<'PY'
+          from pathlib import Path
+
+          import mido
+          import mido.backends.rtmidi
+          import rtmidi
+          import sounddevice
+          from matchpatch.normalize import DEFAULT_REFERENCE_DI
+          from matchpatch.runtime_resources import resource_path
+
+          assert Path(DEFAULT_REFERENCE_DI).is_file(), DEFAULT_REFERENCE_DI
+          assert resource_path("docs", "assets", "matchmatch-icon.png").is_file()
+          print("macOS PyPI install smoke OK")
+          PY
+
   wsl:
     name: WSL / Python ${{ matrix.python-version }}
     runs-on: windows-latest

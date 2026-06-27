@@ -20,9 +20,11 @@ from PySide6.QtWidgets import (
 
 from matchpatch import __version__
 from matchpatch.gui.help import HelpId, resolve_help_url
+from matchpatch.runtime_resources import project_root
+from matchpatch.runtime_resources import resource_path as package_resource_path
 
 PROJECT_URL = "https://github.com/noseglasses/MatchPatch"
-SOURCE_ROOT = Path(__file__).resolve().parents[3]
+SOURCE_ROOT = project_root()
 
 
 def resource_path(*parts: str) -> Path:
@@ -33,7 +35,7 @@ def resource_path(*parts: str) -> Path:
         if meipass:
             candidates.append(Path(meipass) / relative_path)
         candidates.append(Path(sys.executable).resolve().parent / relative_path)
-    candidates.append(SOURCE_ROOT / relative_path)
+    candidates.append(package_resource_path(*parts))
 
     for candidate in candidates:
         if candidate.exists():
