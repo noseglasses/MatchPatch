@@ -2,6 +2,7 @@
 """Prepare and optionally publish a MatchPatch release."""
 
 import argparse
+import fnmatch
 import json
 import re
 import sys
@@ -438,10 +439,13 @@ def verify_public_release(version: str, tag: str, notes_file: str | None) -> Non
         capture=True,
     )
     release = json.loads(release_json)
-    expected_asset = f"MatchPatch-Setup-{version}.exe"
     assets = {asset["name"] for asset in release.get("assets", [])}
-    if expected_asset not in assets:
-        raise ReleaseError(f"GitHub Release is missing installer asset: {expected_asset}")
+    expected_windows_asset = f"MatchPatch-Setup-{version}.exe"
+    if expected_windows_asset not in assets:
+        raise ReleaseError(f"GitHub Release is missing installer asset: {expected_windows_asset}")
+    expected_macos_asset = f"MatchPatch-macOS-*-{version}.dmg"
+    if not any(fnmatch.fnmatchcase(asset, expected_macos_asset) for asset in assets):
+        raise ReleaseError(f"GitHub Release is missing installer asset: {expected_macos_asset}")
     run(
         [
             sys.executable,

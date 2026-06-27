@@ -198,6 +198,42 @@ def test_release_docs_mention_both_windows_and_macos_installers() -> None:
     assert "MatchPatch-macOS-arm64-0.8.1.dmg" in release_doc
     assert "Windows machine and an arm64 macOS machine" in release_doc
     assert "dist/installer/MatchPatch-macOS-arm64-0.8.1.dmg" in release_doc
+    assert "--approve-changelog" in release_doc
+    assert "dist/release-notes/matchpatch-v<version>.md" in release_doc
+
+
+def test_release_script_verifies_both_windows_and_macos_installers(monkeypatch) -> None:
+    release_script = _load_release_script()
+
+    def fake_run(args, **kwargs):
+        if args[:3] == ["gh", "release", "view"]:
+            return json.dumps(
+                {
+                    "assets": [
+                        {"name": "MatchPatch-Setup-0.8.1.exe"},
+                        {"name": "MatchPatch-macOS-arm64-0.8.1.dmg"},
+                    ]
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(release_script, "run", fake_run)
+
+    release_script.verify_public_release("0.8.1", "v0.8.1", None)
+
+
+def test_release_script_rejects_release_without_macos_installer(monkeypatch) -> None:
+    release_script = _load_release_script()
+
+    def fake_run(args, **kwargs):
+        if args[:3] == ["gh", "release", "view"]:
+            return json.dumps({"assets": [{"name": "MatchPatch-Setup-0.8.1.exe"}]})
+        return ""
+
+    monkeypatch.setattr(release_script, "run", fake_run)
+
+    with pytest.raises(release_script.ReleaseError, match=r"MatchPatch-macOS-\*-0\.8\.1\.dmg"):
+        release_script.verify_public_release("0.8.1", "v0.8.1", None)
 
 
 def test_installer_dependency_group_supports_png_icon_conversion() -> None:
@@ -561,6 +597,18 @@ def _load_build_support():
     support_path = PROJECT_ROOT / "installer" / "pyinstaller" / "build_support.py"
     spec = importlib.util.spec_from_file_location(
         "matchpatch_installer_build_support", support_path
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_release_script():
+    spec = importlib.util.spec_from_file_location(
+        "matchpatch_release_script",
+        PROJECT_ROOT / "scripts" / "release.py",
     )
     assert spec is not None
     assert spec.loader is not None
