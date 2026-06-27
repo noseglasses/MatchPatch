@@ -1,104 +1,75 @@
 #!/usr/bin/env python3
 """Prepare and optionally publish a MatchPatch release."""
 
-from __future__ import annotations
-
 import argparse
 import json
-import os
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
-import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+import release_changelog  # noqa: E402,F401
+import release_changelog_flow  # noqa: E402
+from release_support import (  # noqa: E402
+    ReleaseError,
+    build_and_smoke_distributions,
+    build_docs,
+    commit_and_tag,
+    confirm_publish,
+    git_diff_check,
+    info,
+    preflight,
+    print_next_steps,
+    push_release,
+    run,
+    run_installer_smoke,
+    run_quality_checks,
+    sync_wsl,
+    update_lockfile,
+    watch_release_workflow,
+)
+
+ApprovedChangelog = release_changelog_flow.ApprovedChangelog
+build_evidence_commit_ids = release_changelog_flow.build_evidence_commit_ids
+changelog_approval_path = release_changelog_flow.changelog_approval_path
+changelog_paths = release_changelog_flow.changelog_paths
+normalize_generated_changelog = release_changelog_flow.normalize_generated_changelog
+validate_changelog_evidence_references = (
+    release_changelog_flow.validate_changelog_evidence_references
+)
+validate_changelog_filler = release_changelog_flow.validate_changelog_filler
+validate_changelog_length = release_changelog_flow.validate_changelog_length
+validate_changelog_markdown = release_changelog_flow.validate_changelog_markdown
+validate_changelog_shape = release_changelog_flow.validate_changelog_shape
+
 PYPROJECT = ROOT / "pyproject.toml"
-RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
-REPOSITORY = "noseglasses/MatchPatch"
 DEFAULT_BRANCH = "main"
 VERSION_RE = re.compile(r"^\d+(?:\.\d+)+(?:[a-zA-Z0-9_.!+-]+)?$")
 
 
-class ReleaseError(RuntimeError):
-    """A release precondition failed."""
+@dataclass(frozen=True)
+class ReleaseNumStat:
+    """Structured diff stat for one changed file."""
 
-    def __init__(self, message: str, *, next_steps: list[str] | None = None) -> None:
-        super().__init__(message)
-        self.next_steps = next_steps or []
-
-
-def info(message: str) -> None:
-    print(f"\n==> {message}", flush=True)
+    insertions: int | None
+    deletions: int | None
+    path: str
 
 
-def print_next_steps(steps: list[str], *, file: object = sys.stderr) -> None:
-    if not steps:
-        return
-    print("\nNext steps:", file=file)
-    for index, step in enumerate(steps, start=1):
-        print(f"  {index}. {step}", file=file)
+@dataclass(frozen=True)
+class ReleaseCommitEvidence:
+    """Deterministic evidence for one release-range commit."""
 
-
-def run(
-    args: list[str],
-    *,
-    capture: bool = False,
-    check: bool = True,
-    env: dict[str, str] | None = None,
-) -> str:
-    print("+ " + " ".join(args), flush=True)
-    result = subprocess.run(
-        args,
-        cwd=ROOT,
-        env=env,
-        text=True,
-        capture_output=capture,
-        check=False,
-    )
-    if check and result.returncode != 0:
-        if capture:
-            if result.stdout:
-                print(result.stdout, end="")
-            if result.stderr:
-                print(result.stderr, end="", file=sys.stderr)
-        raise ReleaseError(f"Command failed with exit code {result.returncode}: {' '.join(args)}")
-    if capture:
-        return result.stdout.strip()
-    return ""
-
-
-def venv_bin(name: str) -> str:
-    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
-    path = data_home / "matchpatch" / ".venv-wsl" / "bin" / name
-    return str(path)
-
-
-def wsl_uv_env() -> dict[str, str]:
-    env = os.environ.copy()
-    data_home = Path(env.get("XDG_DATA_HOME", Path.home() / ".local/share"))
-    env.setdefault("UV_PROJECT_ENVIRONMENT", str(data_home / "matchpatch" / ".venv-wsl"))
-    return env
-
-
-def require_executable(path: str) -> None:
-    if not Path(path).is_file():
-        raise ReleaseError(f"Required executable not found: {path}")
-
-
-def require_command(name: str) -> None:
-    if shutil.which(name) is None:
-        raise ReleaseError(f"Required command not found on PATH: {name}")
-
-
-def require_script(path: str) -> None:
-    script = ROOT / path
-    if not script.is_file():
-        raise ReleaseError(f"Required script not found: {path}")
-    if not os.access(script, os.X_OK):
-        raise ReleaseError(f"Required script is not executable: {path}")
+    commit: str
+    short_commit: str
+    subject: str
+    body: str | None
+    changed_files: list[str]
+    diff_stat: list[ReleaseNumStat]
 
 
 def ensure_repo_root() -> None:
@@ -140,80 +111,6 @@ def ensure_branch(branch: str, allow_other_branch: bool) -> None:
                 "Use `--allow-current-branch` only if you intentionally release from this branch.",
             ],
         )
-
-
-def preflight_local_tools(
-    skip_sync: bool, skip_pre_push: bool, gui_tests: bool, installer: bool
-) -> None:
-    info("Checking local release prerequisites")
-    for command in ("git", "uv"):
-        require_command(command)
-
-    require_script("scripts/sync-wsl.sh")
-    require_script("scripts/build-docs.sh")
-    if gui_tests:
-        require_script("scripts/test-gui.sh")
-    if installer:
-        require_script("scripts/test-windows-installer-from-wsl.sh")
-
-    if skip_sync:
-        for executable in ("ruff", "ty", "pytest", "sphinx-build"):
-            require_executable(venv_bin(executable))
-        if not skip_pre_push:
-            require_executable(venv_bin("pre-commit"))
-
-
-def github_permissions() -> dict[str, object]:
-    repo_json = run(["gh", "api", f"repos/{REPOSITORY}"], capture=True)
-    repo = json.loads(repo_json)
-    permissions = repo.get("permissions")
-    if not isinstance(permissions, dict):
-        raise ReleaseError("GitHub API response did not include repository permissions.")
-    return permissions
-
-
-def require_github_permissions(branch: str) -> None:
-    info("Checking GitHub authentication and repository permissions")
-    require_command("gh")
-    run(["gh", "auth", "status"])
-    run(["gh", "repo", "view", REPOSITORY, "--json", "nameWithOwner"], capture=True)
-
-    permissions = github_permissions()
-    can_push = any(bool(permissions.get(name)) for name in ("push", "maintain", "admin"))
-    if not can_push:
-        raise ReleaseError(f"GitHub user does not have push permission for {REPOSITORY}.")
-
-    run(["gh", "release", "list", "--repo", REPOSITORY, "--limit", "1"], capture=True)
-    run(["git", "ls-remote", "--exit-code", "origin", f"refs/heads/{branch}"], capture=True)
-    run(["git", "push", "--dry-run", "origin", f"HEAD:refs/heads/{branch}"])
-
-
-def require_release_workflow_prerequisites() -> None:
-    info("Checking release workflow publishing prerequisites")
-    if not RELEASE_WORKFLOW.is_file():
-        raise ReleaseError(f"Release workflow not found: {RELEASE_WORKFLOW.relative_to(ROOT)}")
-
-    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    required_snippets = {
-        'tag trigger for "v*"': '- "v*"',
-        "PyPI environment": "name: pypi",
-        "OIDC id-token write permission": "id-token: write",
-        "package build": "uv build --no-sources",
-        "trusted publishing command": "uv publish",
-        "Windows installer attachment": "gh release upload",
-    }
-    missing = [label for label, snippet in required_snippets.items() if snippet not in text]
-    if missing:
-        raise ReleaseError(
-            "Release workflow is missing required publishing wiring: " + ", ".join(missing)
-        )
-
-
-def preflight(args: argparse.Namespace) -> None:
-    preflight_local_tools(args.skip_sync, args.skip_pre_push, args.gui_tests, args.installer)
-    require_release_workflow_prerequisites()
-    if args.publish:
-        require_github_permissions(args.branch)
 
 
 def sync_branch(branch: str, skip_pull: bool) -> None:
@@ -315,10 +212,161 @@ def remote_tag_exists(tag: str) -> bool:
     )
 
 
-def require_local_tag_ready(version: str, tag: str) -> None:
+def previous_release_tag(target_tag: str, target_commit: str = "HEAD") -> str | None:
+    previous = run(
+        [
+            "git",
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            "--match",
+            "v[0-9]*",
+            "--exclude",
+            target_tag,
+            target_commit,
+        ],
+        capture=True,
+        check=False,
+    )
+    return previous or None
+
+
+def release_commit_range(previous_tag: str | None, target_commit: str) -> str:
+    if previous_tag:
+        return f"{previous_tag}..{target_commit}"
+    return target_commit
+
+
+def commit_hashes_in_range(commit_range: str) -> list[str]:
+    output = run(["git", "rev-list", "--reverse", commit_range], capture=True, check=False)
+    if not output:
+        return []
+    return output.splitlines()
+
+
+def parse_numstat_line(line: str) -> ReleaseNumStat:
+    added, deleted, path = line.split("\t", 2)
+    insertions = None if added == "-" else int(added)
+    deletions = None if deleted == "-" else int(deleted)
+    return ReleaseNumStat(insertions=insertions, deletions=deletions, path=path)
+
+
+def commit_diff_stat(commit: str) -> list[ReleaseNumStat]:
+    output = run(
+        [
+            "git",
+            "show",
+            "--numstat",
+            "--format=",
+            "--no-renames",
+            "--no-ext-diff",
+            "--first-parent",
+            commit,
+        ],
+        capture=True,
+    )
+    if not output:
+        return []
+    return [parse_numstat_line(line) for line in output.splitlines() if line.strip()]
+
+
+def commit_metadata(commit: str) -> tuple[str, str, str | None]:
+    output = run(
+        ["git", "show", "--quiet", "--format=%H%x1f%s%x1f%b", commit],
+        capture=True,
+        strip=False,
+    )
+    parts = output.split("\x1f", 2)
+    if len(parts) != 3:
+        raise ReleaseError(f"Could not parse commit metadata for {commit}")
+    commit_hash, subject, body = parts
+    subject = subject.strip()
+    body = body.strip("\n")
+    return commit_hash, subject, body or None
+
+
+def collect_release_commit_evidence(commit_range: str) -> list[ReleaseCommitEvidence]:
+    evidence: list[ReleaseCommitEvidence] = []
+    for commit in commit_hashes_in_range(commit_range):
+        commit_hash, subject, body = commit_metadata(commit)
+        diff_stat = commit_diff_stat(commit)
+        evidence.append(
+            ReleaseCommitEvidence(
+                commit=commit_hash,
+                short_commit=commit_hash[:12],
+                subject=subject,
+                body=body,
+                changed_files=[stat.path for stat in diff_stat],
+                diff_stat=diff_stat,
+            )
+        )
+    return evidence
+
+
+def build_release_evidence(
+    version: str, tag: str, target_commit: str = "HEAD"
+) -> dict[str, object]:
+    resolved_target_commit = run(["git", "rev-parse", target_commit], capture=True)
+    previous_tag = previous_release_tag(tag, resolved_target_commit)
+    commit_range = release_commit_range(previous_tag, resolved_target_commit)
+    commits = collect_release_commit_evidence(commit_range)
+    return {
+        "version": version,
+        "tag": tag,
+        "previous_tag": previous_tag,
+        "range": commit_range,
+        "target_commit": resolved_target_commit,
+        "commits": [
+            {
+                "commit": commit.commit,
+                "short_commit": commit.short_commit,
+                "subject": commit.subject,
+                "body": commit.body,
+                "changed_files": commit.changed_files,
+                "diff_stat": [asdict(stat) for stat in commit.diff_stat],
+            }
+            for commit in commits
+        ],
+    }
+
+
+def load_release_evidence(version: str, tag: str) -> dict[str, object]:
+    return build_release_evidence(version, tag, target_commit=tag)
+
+
+def approve_changelog(version: str, tag: str, args: argparse.Namespace) -> ApprovedChangelog:
+    return release_changelog_flow.approve_changelog(
+        version,
+        tag,
+        args,
+        evidence_loader=load_release_evidence,
+    )
+
+
+def require_approved_changelog(
+    version: str, tag: str, args: argparse.Namespace
+) -> ApprovedChangelog:
+    return release_changelog_flow.require_approved_changelog(
+        version,
+        tag,
+        args,
+        evidence_loader=load_release_evidence,
+    )
+
+
+def maybe_refresh_changelog_draft(version: str, tag: str, args: argparse.Namespace) -> None:
+    release_changelog_flow.maybe_refresh_changelog_draft(
+        version,
+        tag,
+        args,
+        evidence_loader=load_release_evidence,
+    )
+
+
+def require_local_tag_ready(version: str, tag: str, *, check_remote: bool = True) -> None:
     if not local_tag_exists(tag):
         raise ReleaseError(f"Local release tag does not exist: {tag}")
-    if remote_tag_exists(tag):
+    if check_remote and remote_tag_exists(tag):
         raise ReleaseError(
             f"Remote tag already exists on origin: {tag}",
             next_steps=[
@@ -349,10 +397,10 @@ def require_local_tag_ready(version: str, tag: str) -> None:
         )
 
 
-def local_release_is_prepared(version: str, tag: str) -> bool:
+def local_release_is_prepared(version: str, tag: str, *, check_remote: bool = True) -> bool:
     if not local_tag_exists(tag):
         return False
-    require_local_tag_ready(version, tag)
+    require_local_tag_ready(version, tag, check_remote=check_remote)
     return True
 
 
@@ -368,178 +416,6 @@ def require_version_needs_bump(current_version: str, version: str, tag: str) -> 
             f"If HEAD is not a finished release commit, restore the previous version or choose a new release version before re-running `scripts/release.py {version}`.",
         ],
     )
-
-
-def sync_wsl(skip_sync: bool) -> None:
-    if skip_sync:
-        return
-    info("Synchronizing the WSL development environment")
-    run(["scripts/sync-wsl.sh"])
-
-
-def update_lockfile() -> None:
-    info("Updating dependency lockfile")
-    run(["uv", "lock"], env=wsl_uv_env())
-
-
-def run_quality_checks(skip_pre_push: bool, gui_tests: bool) -> None:
-    info("Running local quality checks")
-    for executable in ("ruff", "ty", "pytest"):
-        require_executable(venv_bin(executable))
-    run([venv_bin("ruff"), "check", "."])
-    run([venv_bin("ruff"), "format", "--check", "."])
-    run([venv_bin("ty"), "check"])
-    run([venv_bin("pytest")])
-    if gui_tests:
-        run(["scripts/test-gui.sh"])
-    if not skip_pre_push:
-        require_executable(venv_bin("pre-commit"))
-        run([venv_bin("pre-commit"), "install", "--install-hooks"])
-        run([venv_bin("pre-commit"), "run", "--all-files", "--hook-stage", "pre-push"])
-
-
-def build_docs() -> None:
-    info("Building strict offline documentation")
-    run(["scripts/build-docs.sh"])
-    if not (ROOT / "docs_html" / "index.html").is_file():
-        raise ReleaseError("Documentation build did not produce docs_html/index.html")
-
-
-def build_and_smoke_distributions(version: str) -> None:
-    info("Building and smoke-testing Python distributions")
-    shutil.rmtree(ROOT / "dist", ignore_errors=True)
-    run(["uv", "build", "--no-sources"])
-
-    wheels = sorted((ROOT / "dist").glob("matchpatch-*.whl"))
-    sdists = sorted((ROOT / "dist").glob("matchpatch-*.tar.gz"))
-    if len(wheels) != 1:
-        raise ReleaseError(f"Expected exactly one wheel in dist/, found {len(wheels)}")
-    if len(sdists) != 1:
-        raise ReleaseError(
-            f"Expected exactly one source distribution in dist/, found {len(sdists)}"
-        )
-
-    wheel = str(wheels[0])
-    sdist = str(sdists[0])
-    run(
-        [
-            "uv",
-            "run",
-            "--isolated",
-            "--no-project",
-            "--with",
-            wheel,
-            "python",
-            "-c",
-            "import matchpatch",
-        ]
-    )
-    run(
-        [
-            "uv",
-            "run",
-            "--isolated",
-            "--no-project",
-            "--with",
-            sdist,
-            "python",
-            "-c",
-            "import matchpatch",
-        ]
-    )
-    output = run(
-        ["uv", "run", "--isolated", "--no-project", "--with", wheel, "matchpatch", "--version"],
-        capture=True,
-    )
-    if version not in output:
-        raise ReleaseError(f"Built CLI version did not contain {version!r}: {output}")
-
-
-def run_installer_smoke() -> None:
-    info("Building and smoke-testing the Windows installer")
-    run(["scripts/test-windows-installer-from-wsl.sh"])
-
-
-def git_diff_check() -> None:
-    info("Checking release diff")
-    run(["git", "diff", "--check"])
-
-
-def release_commit_message(tag: str) -> str:
-    return f"chore(release): {tag}"
-
-
-def validate_commit_message(message: str) -> None:
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as message_file:
-        message_file.write(message)
-        message_path = message_file.name
-    try:
-        run([sys.executable, "scripts/check_commit_msg.py", message_path])
-    finally:
-        Path(message_path).unlink(missing_ok=True)
-
-
-def commit_and_tag(version: str, tag: str) -> None:
-    info("Committing version bump and creating the release tag")
-    message = release_commit_message(tag)
-    validate_commit_message(message)
-    run(["git", "add", "pyproject.toml", "uv.lock"])
-    run(["git", "commit", "-m", message])
-    run(["git", "tag", "-a", tag, "-m", f"MatchPatch {tag}"])
-    run(["git", "show", "--stat", tag])
-
-
-def confirm_publish(yes: bool, tag: str, branch: str) -> None:
-    if yes:
-        return
-    print()
-    answer = input(
-        f"Push branch '{branch}' and tag '{tag}' to origin, triggering the release? [y/N] "
-    )
-    if answer.strip().lower() not in {"y", "yes"}:
-        raise ReleaseError("Publish cancelled.")
-
-
-def push_release(branch: str, tag: str) -> None:
-    info("Pushing the release commit and tag")
-    run(["git", "push", "origin", branch])
-    run(["git", "push", "origin", tag])
-
-
-def find_release_run(tag: str, attempts: int = 12) -> int | None:
-    for _ in range(attempts):
-        output = run(
-            [
-                "gh",
-                "run",
-                "list",
-                "--workflow",
-                "release.yml",
-                "--limit",
-                "20",
-                "--json",
-                "databaseId,headBranch,event,status,conclusion",
-            ],
-            capture=True,
-            check=False,
-        )
-        if output:
-            runs = json.loads(output)
-            for run_data in runs:
-                if run_data.get("headBranch") == tag:
-                    return int(run_data["databaseId"])
-        time.sleep(5)
-    return None
-
-
-def watch_release_workflow(tag: str) -> None:
-    info("Watching the GitHub Actions release workflow")
-    run_id = find_release_run(tag)
-    if run_id is None:
-        print(f"Could not find a release workflow run for {tag}. Check GitHub Actions manually.")
-        return
-    run(["gh", "run", "watch", str(run_id)])
-    run(["gh", "run", "view", str(run_id)])
 
 
 def verify_public_release(version: str, tag: str, notes_file: str | None) -> None:
@@ -610,7 +486,92 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--notes-file", help="Release notes file to apply after the workflow completes."
     )
+    parser.add_argument(
+        "--approve-changelog",
+        action="store_true",
+        help="Approve the current changelog Markdown for the prepared release range.",
+    )
+    parser.add_argument(
+        "--changelog-file",
+        help="Markdown file to write or refresh as the draft changelog during prepare.",
+    )
+    parser.add_argument(
+        "--changelog-evidence-file",
+        help="JSON evidence bundle to write alongside the changelog prompt.",
+    )
+    parser.add_argument(
+        "--changelog-prompt-file",
+        help="Text file containing the bounded prompt used for manual drafting.",
+    )
+    parser.add_argument(
+        "--generate-changelog",
+        action="store_true",
+        help="Use the configured provider to draft the changelog from the evidence bundle.",
+    )
+    parser.add_argument(
+        "--skip-changelog-ai",
+        action="store_true",
+        help="Write the changelog evidence bundle, prompt, and manual draft scaffold without AI.",
+    )
+    parser.add_argument(
+        "--changelog-provider",
+        help="Changelog provider name, for example openai-compatible.",
+    )
+    parser.add_argument(
+        "--changelog-model",
+        help="Model name to use with the configured changelog provider.",
+    )
+    parser.add_argument(
+        "--changelog-base-url",
+        help="Base URL for the configured changelog provider API.",
+    )
+    parser.add_argument(
+        "--changelog-timeout",
+        type=float,
+        help="Timeout in seconds for the changelog provider request.",
+    )
     return parser.parse_args()
+
+
+def handle_approval_only(version: str, tag: str, args: argparse.Namespace) -> bool:
+    if not args.approve_changelog or args.publish:
+        return False
+    require_local_tag_ready(version, tag, check_remote=False)
+    approve_changelog(version, tag, args)
+    print_next_steps(
+        [
+            f"Publish the prepared release with `{Path('scripts/release.py')} {version} --publish`.",
+        ],
+        file=sys.stdout,
+    )
+    return True
+
+
+def prepare_release_if_needed(version: str, tag: str, args: argparse.Namespace) -> bool:
+    prepared_already = local_release_is_prepared(version, tag)
+    if prepared_already:
+        info(f"Found prepared local release {tag}")
+        return True
+
+    ensure_tag_available(version, tag)
+    current_version = read_pyproject_version()
+    require_version_needs_bump(current_version, version, tag)
+    info(f"Updating project version: {current_version} -> {version}")
+    write_pyproject_version(version)
+    if read_pyproject_version() != version:
+        raise ReleaseError("Version update did not stick.")
+
+    update_lockfile()
+    sync_wsl(args.skip_sync)
+    run_quality_checks(args.skip_pre_push, args.gui_tests)
+    build_docs()
+    build_and_smoke_distributions(version)
+    if args.installer:
+        run_installer_smoke()
+    git_diff_check()
+    commit_and_tag(version, tag)
+    maybe_refresh_changelog_draft(version, tag, args)
+    return False
 
 
 def main() -> int:
@@ -623,45 +584,45 @@ def main() -> int:
         ensure_branch(args.branch, args.allow_current_branch)
         require_clean_tree()
         preflight(args)
+        if handle_approval_only(version, tag, args):
+            return 0
+
         sync_branch(args.branch, args.skip_pull)
         require_clean_tree()
+        prepared_already = prepare_release_if_needed(version, tag, args)
 
-        prepared_already = local_release_is_prepared(version, tag)
-        if prepared_already:
-            info(f"Found prepared local release {tag}")
-        else:
-            ensure_tag_available(version, tag)
-            current_version = read_pyproject_version()
-            require_version_needs_bump(current_version, version, tag)
-            info(f"Updating project version: {current_version} -> {version}")
-            write_pyproject_version(version)
-            if read_pyproject_version() != version:
-                raise ReleaseError("Version update did not stick.")
+        if prepared_already and not args.publish and not args.approve_changelog:
+            maybe_refresh_changelog_draft(version, tag, args)
 
-            update_lockfile()
-            sync_wsl(args.skip_sync)
-            run_quality_checks(args.skip_pre_push, args.gui_tests)
-            build_docs()
-            build_and_smoke_distributions(version)
-            if args.installer:
-                run_installer_smoke()
-            git_diff_check()
-            commit_and_tag(version, tag)
+        approved_changelog: ApprovedChangelog | None = None
+        if args.approve_changelog:
+            approved_changelog = approve_changelog(version, tag, args)
 
         if args.publish:
+            approved_changelog = approved_changelog or require_approved_changelog(
+                version, tag, args
+            )
             run(["gh", "auth", "status"])
             confirm_publish(args.yes, tag, args.branch)
             push_release(args.branch, tag)
             watch_release_workflow(tag)
-            verify_public_release(version, tag, args.notes_file)
+            verify_public_release(version, tag, str(approved_changelog.notes_path))
             info(f"Release {tag} published.")
             print(f"Release {tag} is complete.")
+        elif args.approve_changelog:
+            print_next_steps(
+                [
+                    f"Publish the prepared release with `{Path('scripts/release.py')} {version} --publish`.",
+                ],
+                file=sys.stdout,
+            )
         else:
             info(f"Release {tag} is prepared locally.")
             print_next_steps(
                 [
                     f"Review the release commit and tag with `git show --stat {tag}`.",
-                    f"Publish it with `{Path('scripts/release.py')} {version} --publish`.",
+                    f"Edit the changelog draft and approve it with `{Path('scripts/release.py')} {version} --approve-changelog`.",
+                    f"Publish it with `{Path('scripts/release.py')} {version} --publish` after approval.",
                 ],
                 file=sys.stdout,
             )

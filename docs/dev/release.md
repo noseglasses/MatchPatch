@@ -1,8 +1,8 @@
 # Release Checklist
 
 Use `scripts/release.py` to prepare and publish MatchPatch releases. The script
-keeps the release path intentionally small: pass the new version, let it run the
-checks, then decide whether to publish the tag.
+keeps the release path intentionally small: prepare the release, review the
+generated notes, approve them, then publish the tag.
 
 MatchPatch releases are tag-driven. A pushed tag named `v<version>` starts
 `.github/workflows/release.yml`. The workflow verifies that the tag matches
@@ -75,6 +75,20 @@ For a cautious two-step release, prepare everything locally first:
 scripts/release.py 0.8.1
 ```
 
+That prepare step writes or refreshes a changelog draft at
+`dist/release-notes/matchpatch-v<version>.md` by default, along with the
+supporting evidence bundle and prompt beside it. If AI drafting is enabled, the
+script uses the configured provider to generate the Markdown; otherwise it
+writes a manual scaffold. These default generated files live under ignored
+`dist/` output and are not intended to be committed.
+
+Review and edit the generated Markdown, then approve the exact content for the
+prepared release range. Publishing is blocked until this approval gate passes:
+
+```bash
+scripts/release.py 0.8.1 --approve-changelog
+```
+
 If that succeeds, publish the prepared local tag later:
 
 ```bash
@@ -83,15 +97,30 @@ scripts/release.py 0.8.1 --publish
 
 ## Release Notes
 
-Write release notes in a temporary Markdown file before publishing if you do not
-want the placeholder GitHub Release notes created by the workflow.
+Publishing requires an approved changelog. The approval record is stored in a
+matching `.approved.json` sidecar next to the notes file after
+`--approve-changelog` succeeds. The approval step is local-only; it validates the
+prepared tag, notes content, and release evidence without contacting GitHub or an
+AI provider.
+
+If you want to use a manually written Markdown file, point `--notes-file` at it
+before approving and publishing. If you want the prepare step to write the
+draft somewhere else, use `--changelog-file` instead:
 
 ```bash
+scripts/release.py 0.8.1 --notes-file /tmp/matchpatch-0.8.1-notes.md --approve-changelog
 scripts/release.py 0.8.1 --publish --notes-file /tmp/matchpatch-0.8.1-notes.md
+scripts/release.py 0.8.1 --changelog-file /tmp/matchpatch-0.8.1-draft.md
 ```
 
-The script applies that file to the GitHub Release after the release workflow
-finishes.
+The publish step refuses to continue if the approved notes no longer match the
+current Markdown content or release range. After the workflow finishes, the
+script applies the approved notes to the GitHub Release.
+
+For AI drafting, set `MATCHPATCH_CHANGELOG_PROVIDER=openai-compatible` and
+`MATCHPATCH_CHANGELOG_API_KEY`. You can also override
+`MATCHPATCH_CHANGELOG_MODEL`, `MATCHPATCH_CHANGELOG_BASE_URL`, and
+`MATCHPATCH_CHANGELOG_TIMEOUT` if needed.
 
 Suggested sections:
 
